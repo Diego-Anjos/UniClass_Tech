@@ -1,6 +1,5 @@
-import Image from "next/image";
 import Link from "next/link";
-import { GraduationCap } from "lucide-react";
+import { GraduationCap, Shield } from "lucide-react";
 
 export default function LoginPage() {
   return (
@@ -106,6 +105,14 @@ export default function LoginPage() {
           </div>
         </div>
       </div>
+
+      <Link
+        href="/adm/login"
+        className="fixed bottom-6 left-6 flex items-center justify-center w-10 h-10 rounded-full bg-zinc-900 border border-zinc-800 text-zinc-500 hover:text-white hover:bg-zinc-800 transition-all opacity-50 hover:opacity-100"
+        title="Acesso Restrito - ADM"
+      >
+        <Shield className="w-4 h-4" />
+      </Link>
     </main>
   );
 }
