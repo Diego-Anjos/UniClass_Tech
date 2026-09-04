@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import {
   LayoutDashboard,
@@ -20,8 +20,9 @@ import {
   X,
   Sparkles,
 } from "lucide-react";
+import { supabase } from "@/lib/supabase";
 
-type StatusAluno = "Ativo" | "Evadido" | "Trancado";
+type StatusAluno = "Ativo" | "Evadido" | "Trancado" | string;
 type AbaProntuario = "Cadastral" | "Acadêmico" | "Insights de IA";
 
 type Aluno = {
@@ -35,93 +36,96 @@ type Aluno = {
   iniciais: string;
 };
 
-const navItems = [
-  { icon: LayoutDashboard, label: "Visão Geral", href: "/adm/dashboard", active: false },
-  {
-    icon: Users,
-    label: "Gestão de Alunos",
-    href: "/adm/dashboard/alunos",
-    active: true,
-  },
-  { icon: GraduationCap, label: "Gestão de Professores", href: "/adm/dashboard/professores", active: false },
-  { icon: BookOpen, label: "Turmas e Matrículas", href: "/adm/dashboard/turmas", active: false },
-  { icon: Settings, label: "Configurações do Sistema", href: "/adm/dashboard/configuracoes", active: false },
-];
+type FormDataAluno = {
+  nome: string;
+  cpf: string;
+  dataNascimento: string;
+  emailPessoal: string;
+  celular: string;
+  curso: string;
+  turno: string;
+  modalidade: string;
+};
 
-const alunosMock: Aluno[] = [
-  {
-    ra: "20261001",
-    nome: "Gustavo Santos",
-    curso: "Gestão de Tecnologia da Informação",
-    semestre: 4,
-    status: "Ativo",
-    email: "gustavo.santos@uniclass.edu.br",
-    telefone: "(11) 98765-4321",
-    iniciais: "GS",
-  },
-  {
-    ra: "20261002",
-    nome: "Ian Meirelles",
-    curso: "Gestão de Tecnologia da Informação",
-    semestre: 3,
-    status: "Ativo",
-    email: "ian.meirelles@uniclass.edu.br",
-    telefone: "(11) 97654-3210",
-    iniciais: "IM",
-  },
-  {
-    ra: "20251045",
-    nome: "Ana Beatriz Costa",
-    curso: "Análise e Desenvolvimento de Sistemas",
-    semestre: 5,
-    status: "Ativo",
-    email: "ana.costa@uniclass.edu.br",
-    telefone: "(11) 96543-2109",
-    iniciais: "AC",
-  },
-  {
-    ra: "20248012",
-    nome: "Pedro Henrique Alves",
-    curso: "Engenharia de Software",
-    semestre: 6,
-    status: "Trancado",
-    email: "pedro.alves@uniclass.edu.br",
-    telefone: "(11) 95432-1098",
-    iniciais: "PA",
-  },
-  {
-    ra: "20239088",
-    nome: "Mariana Oliveira",
-    curso: "Gestão de Tecnologia da Informação",
-    semestre: 2,
-    status: "Evadido",
-    email: "mariana.oliveira@uniclass.edu.br",
-    telefone: "(11) 94321-0987",
-    iniciais: "MO",
-  },
-  {
-    ra: "20261077",
-    nome: "Felipe Almeida",
-    curso: "Análise e Desenvolvimento de Sistemas",
-    semestre: 1,
-    status: "Ativo",
-    email: "felipe.almeida@uniclass.edu.br",
-    telefone: "(11) 93210-9876",
-    iniciais: "FA",
-  },
-];
+const formInicial: FormDataAluno = {
+  nome: "",
+  cpf: "",
+  dataNascimento: "",
+  emailPessoal: "",
+  celular: "",
+  curso: "",
+  turno: "",
+  modalidade: "",
+};
 
-const statusBadge: Record<StatusAluno, string> = {
+const statusBadge: Record<string, string> = {
   Ativo: "bg-green-950 text-green-400 border-green-900/50",
   Evadido: "bg-red-950 text-red-400 border-red-900/50",
   Trancado: "bg-amber-950 text-amber-400 border-amber-900/50",
 };
 
-const cursosUnicos = Array.from(new Set(alunosMock.map((a) => a.curso))).sort();
 const abas: AbaProntuario[] = ["Cadastral", "Acadêmico", "Insights de IA"];
 
+const cursosOpcoes = [
+  "Análise e Desenvolvimento de Sistemas",
+  "Engenharia de Software",
+  "Ciência da Computação",
+  "Sistemas de Informação",
+  "Banco de Dados",
+  "Redes de Computadores",
+  "Segurança da Informação (Defesa Cibernética)",
+  "Inteligência Artificial",
+  "Jogos Digitais",
+  "Gestão da Tecnologia da Informação",
+  "Internet das Coisas (IoT)",
+  "Computação na Nuvem",
+];
+
+function iniciaisDe(nome: string) {
+  return nome
+    .split(" ")
+    .filter(Boolean)
+    .slice(0, 2)
+    .map((p) => p[0]?.toUpperCase() ?? "")
+    .join("");
+}
+
+const formatCPF = (value: string) =>
+  value
+    .replace(/\D/g, "")
+    .replace(/(\d{3})(\d)/, "$1.$2")
+    .replace(/(\d{3})(\d)/, "$1.$2")
+    .replace(/(\d{3})(\d{1,2})/, "$1-$2")
+    .slice(0, 14);
+
+const formatCelular = (value: string) =>
+  value
+    .replace(/\D/g, "")
+    .replace(/(\d{2})(\d)/, "($1) $2")
+    .replace(/(\d{5})(\d)/, "$1-$2")
+    .slice(0, 15);
+
+function mapAluno(row: Record<string, unknown>): Aluno {
+  const nome = String(row.nome ?? "");
+  const status = String(row.status ?? "Ativo");
+  return {
+    ra: String(row.ra ?? "—"),
+    nome,
+    curso: String(row.curso ?? "—"),
+    semestre: Number(row.semestre ?? 1),
+    status,
+    email: String(row.email ?? row.email_institucional ?? "—"),
+    telefone: String(row.telefone ?? row.celular ?? "—"),
+    iniciais: iniciaisDe(nome) || "—",
+  };
+}
+
 export default function GestaoAlunosPage() {
-  const [alunos] = useState<Aluno[]>(alunosMock);
+  const [alunos, setAlunos] = useState<Aluno[]>([]);
+  const [isLoading, setIsLoading] = useState(true);
+  const [isModalOpen, setIsModalOpen] = useState(false);
+  const [formData, setFormData] = useState<FormDataAluno>(formInicial);
+
   const [busca, setBusca] = useState("");
   const [filtroCurso, setFiltroCurso] = useState("todos");
   const [filtroStatus, setFiltroStatus] = useState("todos");
@@ -129,13 +133,37 @@ export default function GestaoAlunosPage() {
   const [drawerAberto, setDrawerAberto] = useState(false);
   const [abaAtiva, setAbaAtiva] = useState<AbaProntuario>("Cadastral");
 
+  useEffect(() => {
+    async function carregarAlunos() {
+      setIsLoading(true);
+      const { data, error } = await supabase
+        .from("alunos")
+        .select("*")
+        .order("created_at", { ascending: false });
+
+      if (!error && data) {
+        setAlunos(data.map((row) => mapAluno(row as Record<string, unknown>)));
+      } else {
+        setAlunos([]);
+      }
+      setIsLoading(false);
+    }
+
+    carregarAlunos();
+  }, []);
+
+  const cursosUnicos = useMemo(
+    () => Array.from(new Set(alunos.map((a) => a.curso).filter((c) => c && c !== "—"))).sort(),
+    [alunos]
+  );
+
   const alunosFiltrados = useMemo(() => {
     const termo = busca.trim().toLowerCase();
     return alunos.filter((aluno) => {
       const matchBusca =
         !termo ||
         aluno.nome.toLowerCase().includes(termo) ||
-        aluno.ra.includes(termo) ||
+        aluno.ra.toLowerCase().includes(termo) ||
         aluno.curso.toLowerCase().includes(termo);
       const matchCurso = filtroCurso === "todos" || aluno.curso === filtroCurso;
       const matchStatus = filtroStatus === "todos" || aluno.status === filtroStatus;
@@ -153,6 +181,26 @@ export default function GestaoAlunosPage() {
     setDrawerAberto(false);
     window.setTimeout(() => setAlunoSelecionado(null), 300);
   }
+
+  function atualizarCampo<K extends keyof FormDataAluno>(campo: K, valor: FormDataAluno[K]) {
+    setFormData((prev) => ({ ...prev, [campo]: valor }));
+  }
+
+  function fecharModal() {
+    setIsModalOpen(false);
+    setFormData(formInicial);
+  }
+
+  function salvarAluno() {
+    // Insert será implementado depois — por ora só fecha o modal
+    fecharModal();
+  }
+
+  const inputClass =
+    "w-full px-3 py-2.5 rounded-lg bg-black border border-zinc-800 text-sm text-white placeholder:text-zinc-600 outline-none focus:border-zinc-600 transition-colors";
+  const labelClass = "block text-xs text-zinc-500 mb-1.5";
+  const sectionTitleClass =
+    "text-xs font-medium text-zinc-400 uppercase tracking-widest mb-3";
 
   return (
     <div className="flex h-screen bg-black text-white overflow-hidden">
@@ -181,35 +229,41 @@ export default function GestaoAlunosPage() {
         </div>
 
         <nav className="flex flex-col gap-0.5 px-2 py-4 flex-1">
-          {navItems.map(({ icon: Icon, label, href, active }) =>
-            href.startsWith("/adm") ? (
-              <Link
-                key={label}
-                href={href}
-                className={`flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm transition-colors ${
-                  active
-                    ? "bg-zinc-800 text-white font-medium"
-                    : "text-zinc-400 hover:bg-zinc-900 hover:text-white"
-                }`}
-              >
-                <Icon className="w-4 h-4 shrink-0" />
-                {label}
-              </Link>
-            ) : (
-              <a
-                key={label}
-                href={href}
-                className={`flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm transition-colors ${
-                  active
-                    ? "bg-zinc-800 text-white font-medium"
-                    : "text-zinc-400 hover:bg-zinc-900 hover:text-white"
-                }`}
-              >
-                <Icon className="w-4 h-4 shrink-0" />
-                {label}
-              </a>
-            )
-          )}
+          <Link
+            href="/adm/dashboard"
+            className="flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm transition-colors text-zinc-400 hover:text-white"
+          >
+            <LayoutDashboard className="w-4 h-4 shrink-0" />
+            Visão Geral
+          </Link>
+          <Link
+            href="/adm/dashboard/alunos"
+            className="flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm transition-colors bg-zinc-800/50 text-white font-medium"
+          >
+            <Users className="w-4 h-4 shrink-0" />
+            Gestão de Alunos
+          </Link>
+          <Link
+            href="/adm/dashboard/professores"
+            className="flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm transition-colors text-zinc-400 hover:text-white"
+          >
+            <GraduationCap className="w-4 h-4 shrink-0" />
+            Gestão de Professores
+          </Link>
+          <Link
+            href="/adm/dashboard/turmas"
+            className="flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm transition-colors text-zinc-400 hover:text-white"
+          >
+            <BookOpen className="w-4 h-4 shrink-0" />
+            Turmas e Matrículas
+          </Link>
+          <Link
+            href="/adm/dashboard/configuracoes"
+            className="flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm transition-colors text-zinc-400 hover:text-white"
+          >
+            <Settings className="w-4 h-4 shrink-0" />
+            Configurações do Sistema
+          </Link>
         </nav>
 
         <div className="px-2 py-4 border-t border-zinc-800">
@@ -238,6 +292,7 @@ export default function GestaoAlunosPage() {
             </div>
             <button
               type="button"
+              onClick={() => setIsModalOpen(true)}
               className="inline-flex items-center justify-center gap-2 px-4 py-2.5 rounded-lg bg-white text-black text-sm font-medium hover:bg-zinc-200 transition-colors shrink-0"
             >
               <UserPlus className="w-4 h-4" />
@@ -254,7 +309,7 @@ export default function GestaoAlunosPage() {
                   type="text"
                   value={busca}
                   onChange={(e) => setBusca(e.target.value)}
-                  placeholder="Buscar por nome, RA ou curso..."
+                  placeholder="Buscar por nome..."
                   className="w-full pl-10 pr-4 py-2.5 rounded-lg bg-zinc-900 border border-zinc-800 text-sm text-white placeholder:text-zinc-500 outline-none focus:border-zinc-600 transition-colors"
                 />
               </div>
@@ -298,8 +353,9 @@ export default function GestaoAlunosPage() {
             <div className="px-6 py-4 border-b border-zinc-800 flex items-center justify-between">
               <h2 className="text-sm font-semibold text-white">Listagem de Alunos</h2>
               <span className="text-xs text-zinc-500">
-                {alunosFiltrados.length} registro
-                {alunosFiltrados.length !== 1 ? "s" : ""}
+                {isLoading
+                  ? "Carregando..."
+                  : `${alunosFiltrados.length} registro${alunosFiltrados.length !== 1 ? "s" : ""}`}
               </span>
             </div>
 
@@ -325,7 +381,16 @@ export default function GestaoAlunosPage() {
                   </tr>
                 </thead>
                 <tbody>
-                  {alunosFiltrados.length === 0 ? (
+                  {isLoading ? (
+                    <tr>
+                      <td
+                        colSpan={5}
+                        className="px-6 py-16 text-center text-sm text-zinc-500"
+                      >
+                        Carregando alunos...
+                      </td>
+                    </tr>
+                  ) : alunosFiltrados.length === 0 ? (
                     <tr>
                       <td
                         colSpan={5}
@@ -362,7 +427,10 @@ export default function GestaoAlunosPage() {
                         </td>
                         <td className="px-6 py-4">
                           <span
-                            className={`inline-flex items-center px-2.5 py-0.5 rounded-md text-xs font-medium border ${statusBadge[aluno.status]}`}
+                            className={`inline-flex items-center px-2.5 py-0.5 rounded-md text-xs font-medium border ${
+                              statusBadge[aluno.status] ??
+                              "bg-zinc-900 text-zinc-400 border-zinc-800"
+                            }`}
                           >
                             {aluno.status}
                           </span>
@@ -376,7 +444,7 @@ export default function GestaoAlunosPage() {
           </div>
         </div>
 
-        {/* Overlay */}
+        {/* Overlay drawer */}
         <button
           type="button"
           aria-label="Fechar prontuário"
@@ -549,6 +617,218 @@ export default function GestaoAlunosPage() {
             </>
           )}
         </aside>
+
+        {/* Modal Cadastro */}
+        {isModalOpen && (
+          <div className="fixed inset-0 z-[60] flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm">
+            <div
+              role="dialog"
+              aria-modal="true"
+              aria-labelledby="modal-novo-aluno-titulo"
+              className="bg-zinc-950 border border-zinc-800 rounded-lg p-6 w-full max-w-2xl max-h-[90vh] overflow-y-auto shadow-2xl"
+            >
+              <div className="flex items-start justify-between gap-4 mb-6">
+                <div>
+                  <h2
+                    id="modal-novo-aluno-titulo"
+                    className="text-lg font-semibold text-white tracking-tight"
+                  >
+                    Novo Prontuário de Aluno
+                  </h2>
+                  <p className="text-sm text-zinc-500 mt-1">
+                    O RA e o e-mail institucional serão gerados automaticamente pelo
+                    sistema.
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  onClick={fecharModal}
+                  className="p-2 rounded-lg text-zinc-500 hover:text-white hover:bg-zinc-900 transition-colors shrink-0"
+                  aria-label="Fechar modal"
+                >
+                  <X className="w-4 h-4" />
+                </button>
+              </div>
+
+              <form
+                onSubmit={(e) => {
+                  e.preventDefault();
+                  salvarAluno();
+                }}
+                className="space-y-6"
+              >
+                {/* Dados Pessoais */}
+                <section>
+                  <h3 className={sectionTitleClass}>Dados Pessoais</h3>
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                    <div className="sm:col-span-2">
+                      <label className={labelClass} htmlFor="nome">
+                        Nome Completo
+                      </label>
+                      <input
+                        id="nome"
+                        type="text"
+                        value={formData.nome}
+                        onChange={(e) => atualizarCampo("nome", e.target.value)}
+                        className={inputClass}
+                        placeholder="Nome completo do aluno"
+                      />
+                    </div>
+                    <div>
+                      <label className={labelClass} htmlFor="cpf">
+                        CPF
+                      </label>
+                      <input
+                        id="cpf"
+                        type="text"
+                        value={formData.cpf}
+                        maxLength={14}
+                        onChange={(e) =>
+                          setFormData({
+                            ...formData,
+                            cpf: formatCPF(e.target.value),
+                          })
+                        }
+                        className={inputClass}
+                        placeholder="000.000.000-00"
+                      />
+                    </div>
+                    <div>
+                      <label className={labelClass} htmlFor="dataNascimento">
+                        Data de Nascimento
+                      </label>
+                      <input
+                        id="dataNascimento"
+                        type="date"
+                        value={formData.dataNascimento}
+                        onChange={(e) =>
+                          atualizarCampo("dataNascimento", e.target.value)
+                        }
+                        className={`${inputClass} [color-scheme:dark]`}
+                      />
+                    </div>
+                  </div>
+                </section>
+
+                {/* Contato */}
+                <section>
+                  <h3 className={sectionTitleClass}>Contato</h3>
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                    <div>
+                      <label className={labelClass} htmlFor="emailPessoal">
+                        E-mail Pessoal
+                      </label>
+                      <input
+                        id="emailPessoal"
+                        type="email"
+                        value={formData.emailPessoal}
+                        onChange={(e) =>
+                          atualizarCampo("emailPessoal", e.target.value)
+                        }
+                        className={inputClass}
+                        placeholder="email@exemplo.com"
+                      />
+                    </div>
+                    <div>
+                      <label className={labelClass} htmlFor="celular">
+                        Celular
+                      </label>
+                      <input
+                        id="celular"
+                        type="tel"
+                        value={formData.celular}
+                        maxLength={15}
+                        onChange={(e) =>
+                          setFormData({
+                            ...formData,
+                            celular: formatCelular(e.target.value),
+                          })
+                        }
+                        className={inputClass}
+                        placeholder="(00) 00000-0000"
+                      />
+                    </div>
+                  </div>
+                </section>
+
+                {/* Acadêmica */}
+                <section>
+                  <h3 className={sectionTitleClass}>Acadêmica</h3>
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                    <div className="sm:col-span-2">
+                      <label className={labelClass} htmlFor="curso">
+                        Curso
+                      </label>
+                      <select
+                        id="curso"
+                        value={formData.curso}
+                        onChange={(e) => atualizarCampo("curso", e.target.value)}
+                        className={inputClass}
+                      >
+                        <option value="">Selecione o curso</option>
+                        {cursosOpcoes.map((curso) => (
+                          <option key={curso} value={curso}>
+                            {curso}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                    <div>
+                      <label className={labelClass} htmlFor="turno">
+                        Turno
+                      </label>
+                      <select
+                        id="turno"
+                        value={formData.turno}
+                        onChange={(e) => atualizarCampo("turno", e.target.value)}
+                        className={inputClass}
+                      >
+                        <option value="">Selecione o turno</option>
+                        <option value="Matutino">Matutino</option>
+                        <option value="Noturno">Noturno</option>
+                      </select>
+                    </div>
+                    <div>
+                      <label className={labelClass} htmlFor="modalidade">
+                        Modalidade
+                      </label>
+                      <select
+                        id="modalidade"
+                        value={formData.modalidade}
+                        onChange={(e) =>
+                          atualizarCampo("modalidade", e.target.value)
+                        }
+                        className={inputClass}
+                      >
+                        <option value="">Selecione a modalidade</option>
+                        <option value="Presencial">Presencial</option>
+                        <option value="EAD">EAD</option>
+                        <option value="Híbrido">Híbrido</option>
+                      </select>
+                    </div>
+                  </div>
+                </section>
+
+                {/* Rodapé */}
+                <div className="flex flex-col-reverse sm:flex-row sm:justify-end gap-3 pt-2 border-t border-zinc-800">
+                  <button
+                    type="button"
+                    onClick={fecharModal}
+                    className="px-4 py-2.5 rounded-lg border border-zinc-700 text-sm font-medium text-zinc-300 hover:bg-zinc-900 hover:text-white transition-colors"
+                  >
+                    Cancelar
+                  </button>
+                  <button
+                    type="submit"
+                    className="px-4 py-2.5 rounded-lg bg-white text-black text-sm font-medium hover:bg-zinc-200 transition-colors"
+                  >
+                    Salvar e Gerar RA
+                  </button>
+                </div>
+              </form>
+            </div>
+          </div>
+        )}
       </main>
     </div>
   );

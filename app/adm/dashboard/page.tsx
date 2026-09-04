@@ -1,5 +1,3 @@
-"use client";
-
 import Link from "next/link";
 import {
   LayoutDashboard,
@@ -15,6 +13,7 @@ import {
   Briefcase,
   Layers,
 } from "lucide-react";
+import { supabase } from "@/lib/supabase";
 
 const navItems = [
   { icon: LayoutDashboard, label: "Visão Geral",              href: "/adm/dashboard",        active: true  },
@@ -24,72 +23,87 @@ const navItems = [
   { icon: Settings,        label: "Configurações do Sistema", href: "/adm/dashboard/configuracoes", active: false },
 ];
 
-const metricas = [
-  {
-    label: "Total de Alunos",
-    valor: "4.250",
-    extra: "+12% este semestre",
-    extraClass: "text-green-400",
-    icon: Users,
-  },
-  {
-    label: "Corpo Docente",
-    valor: "128",
-    extra: "Professores ativos",
-    extraClass: "text-zinc-400",
-    icon: GraduationCap,
-  },
-  {
-    label: "Turmas Ativas",
-    valor: "84",
-    extra: "Neste semestre",
-    extraClass: "text-zinc-400",
-    icon: BookOpen,
-  },
-  {
-    label: "Saúde do Sistema",
-    valor: "100%",
-    extra: "Online",
-    extraClass: "text-green-400",
-    icon: Activity,
-    badge: true,
-  },
-];
-
 const acoesRapidas = [
   { label: "Cadastrar Novo Aluno", icon: UserPlus },
   { label: "Novo Professor",       icon: Briefcase },
   { label: "Abrir Nova Turma",     icon: Layers },
 ];
 
-const ultimosCadastros = [
-  {
-    usuario: "Felipe Almeida",
-    tipo: "Aluno - ADS",
-    id: "RA 20261099",
-    data: "Hoje, 14:30",
-    status: "Ativo",
-    statusClass: "bg-green-950 text-green-400 border-green-900/50",
-  },
-  {
-    usuario: "Prof. Marcos Silva",
-    tipo: "Docente - Eng. Software",
-    id: "MAT 9012",
-    data: "Hoje, 10:15",
-    status: "Pendente de Senha",
-    statusClass: "bg-amber-950 text-amber-400 border-amber-900/50",
-  },
-  {
-    usuario: "Turma BD-4A",
-    tipo: "Abertura de Turma",
-    id: "—",
-    data: "Ontem",
-    status: "Concluído",
-    statusClass: "bg-green-950 text-green-400 border-green-900/50",
-  },
-];
+function statusClass(status: string | null) {
+  const s = (status ?? "").toLowerCase();
+  if (s.includes("pendente")) {
+    return "bg-amber-950 text-amber-400 border-amber-900/50";
+  }
+  return "bg-green-950 text-green-400 border-green-900/50";
+}
 
-export default function AdmDashboardPage() {
+export default async function AdmDashboard() {
+  let alunosCount = 0;
+  let professoresCount = 0;
+  let turmasCount = 0;
+  let ultimosAlunos: {
+    nome: string | null;
+    ra: string | null;
+    created_at: string | null;
+    status: string | null;
+  }[] = [];
+
+  try {
+    const [resAlunos, resProfessores, resTurmas, resUltimos] = await Promise.all([
+      supabase.from("alunos").select("*", { count: "exact", head: true }),
+      supabase.from("professores").select("*", { count: "exact", head: true }),
+      supabase.from("turmas").select("*", { count: "exact", head: true }),
+      supabase
+        .from("alunos")
+        .select("nome, ra, created_at, status")
+        .order("created_at", { ascending: false })
+        .limit(3),
+    ]);
+
+    if (resAlunos.error) {
+      console.error("Erro no Supabase (Alunos):", resAlunos.error.message);
+    }
+
+    alunosCount = resAlunos.count || 0;
+    professoresCount = resProfessores.count || 0;
+    turmasCount = resTurmas.count || 0;
+    ultimosAlunos = resUltimos.data || [];
+  } catch (error) {
+    console.error("Falha geral de conexão com o Supabase:", error);
+  }
+
+  const metricas = [
+    {
+      label: "Total de Alunos",
+      valor: alunosCount,
+      extra: "+12% este semestre",
+      extraClass: "text-green-400",
+      icon: Users,
+    },
+    {
+      label: "Corpo Docente",
+      valor: professoresCount,
+      extra: "Professores ativos",
+      extraClass: "text-zinc-400",
+      icon: GraduationCap,
+    },
+    {
+      label: "Turmas Ativas",
+      valor: turmasCount,
+      extra: "Neste semestre",
+      extraClass: "text-zinc-400",
+      icon: BookOpen,
+    },
+    {
+      label: "Saúde do Sistema",
+      valor: "100%",
+      extra: "Online",
+      extraClass: "text-green-400",
+      icon: Activity,
+      badge: true,
+    },
+  ];
+
   return (
     <div className="flex h-screen bg-black text-white overflow-hidden">
       {/* ══════════════════════════════
@@ -255,26 +269,43 @@ export default function AdmDashboardPage() {
                   </tr>
                 </thead>
                 <tbody>
-                  {ultimosCadastros.map((row) => (
-                    <tr
-                      key={`${row.usuario}-${row.id}`}
-                      className="border-b border-zinc-800 last:border-b-0 hover:bg-zinc-900/40 transition-colors"
-                    >
-                      <td className="px-6 py-4 text-sm font-medium text-white">
-                        {row.usuario}
-                      </td>
-                      <td className="px-4 py-4 text-sm text-zinc-400">{row.tipo}</td>
-                      <td className="px-4 py-4 text-sm text-zinc-400">{row.id}</td>
-                      <td className="px-4 py-4 text-sm text-zinc-500">{row.data}</td>
-                      <td className="px-6 py-4">
-                        <span
-                          className={`inline-flex items-center px-2.5 py-0.5 rounded-md text-xs font-medium border ${row.statusClass}`}
-                        >
-                          {row.status}
-                        </span>
+                  {!ultimosAlunos || ultimosAlunos.length === 0 ? (
+                    <tr>
+                      <td
+                        colSpan={5}
+                        className="px-6 py-8 text-sm text-zinc-500 text-center"
+                      >
+                        Nenhum registro recente
                       </td>
                     </tr>
-                  ))}
+                  ) : (
+                    ultimosAlunos.map((aluno) => (
+                      <tr
+                        key={aluno.ra ?? aluno.nome}
+                        className="border-b border-zinc-800 last:border-b-0 hover:bg-zinc-900/40 transition-colors"
+                      >
+                        <td className="px-6 py-4 text-sm font-medium text-white">
+                          {aluno.nome}
+                        </td>
+                        <td className="px-4 py-4 text-sm text-zinc-400">Aluno</td>
+                        <td className="px-4 py-4 text-sm text-zinc-400">
+                          {aluno.ra ? `RA ${aluno.ra}` : "—"}
+                        </td>
+                        <td className="px-4 py-4 text-sm text-zinc-500">
+                          {aluno.created_at
+                            ? new Date(aluno.created_at).toLocaleDateString("pt-BR")
+                            : "—"}
+                        </td>
+                        <td className="px-6 py-4">
+                          <span
+                            className={`inline-flex items-center px-2.5 py-0.5 rounded-md text-xs font-medium border ${statusClass(aluno.status)}`}
+                          >
+                            {aluno.status || "Ativo"}
+                          </span>
+                        </td>
+                      </tr>
+                    ))
+                  )}
                 </tbody>
               </table>
             </div>
