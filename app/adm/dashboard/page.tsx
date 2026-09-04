@@ -17,11 +17,11 @@ import {
 } from "lucide-react";
 
 const navItems = [
-  { icon: LayoutDashboard, label: "Visão Geral",              href: "/adm/dashboard", active: true  },
-  { icon: Users,           label: "Gestão de Alunos",         href: "#",              active: false },
-  { icon: GraduationCap,   label: "Gestão de Professores",    href: "#",              active: false },
-  { icon: BookOpen,        label: "Turmas e Matrículas",      href: "#",              active: false },
-  { icon: Settings,        label: "Configurações do Sistema", href: "#",              active: false },
+  { icon: LayoutDashboard, label: "Visão Geral",              href: "/adm/dashboard",        active: true  },
+  { icon: Users,           label: "Gestão de Alunos",         href: "/adm/dashboard/alunos", active: false },
+  { icon: GraduationCap,   label: "Gestão de Professores",    href: "/adm/dashboard/professores", active: false },
+  { icon: BookOpen,        label: "Turmas e Matrículas",      href: "/adm/dashboard/turmas",     active: false },
+  { icon: Settings,        label: "Configurações do Sistema", href: "/adm/dashboard/configuracoes", active: false },
 ];
 
 const metricas = [
