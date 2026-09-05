@@ -9,9 +9,6 @@ import {
   Shield,
   Building2,
   Activity,
-  UserPlus,
-  Briefcase,
-  Layers,
 } from "lucide-react";
 import { supabase } from "@/lib/supabase";
 
@@ -21,12 +18,6 @@ const navItems = [
   { icon: GraduationCap,   label: "Gestão de Professores",    href: "/adm/dashboard/professores", active: false },
   { icon: BookOpen,        label: "Turmas e Matrículas",      href: "/adm/dashboard/turmas",     active: false },
   { icon: Settings,        label: "Configurações do Sistema", href: "/adm/dashboard/configuracoes", active: false },
-];
-
-const acoesRapidas = [
-  { label: "Cadastrar Novo Aluno", icon: UserPlus },
-  { label: "Novo Professor",       icon: Briefcase },
-  { label: "Abrir Nova Turma",     icon: Layers },
 ];
 
 function statusClass(status: string | null) {
@@ -191,7 +182,7 @@ export default async function AdmDashboard() {
               Painel de Controle ADM
             </h1>
             <p className="text-sm text-zinc-400 mt-1">
-              Visão global da infraestrutura acadêmica e ações rápidas.
+              Visão global da infraestrutura acadêmica.
             </p>
           </div>
 
@@ -222,22 +213,6 @@ export default async function AdmDashboard() {
                 </div>
               );
             })}
-          </div>
-
-          {/* Ações Rápidas */}
-          <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 mb-8">
-            {acoesRapidas.map(({ label, icon: Icon }) => (
-              <button
-                key={label}
-                type="button"
-                className="flex items-center gap-3 p-5 rounded-xl bg-zinc-900 border border-zinc-800 hover:bg-zinc-800 transition-colors text-left"
-              >
-                <div className="w-9 h-9 rounded-lg bg-zinc-950 border border-zinc-800 flex items-center justify-center shrink-0">
-                  <Icon className="w-4 h-4 text-zinc-300" />
-                </div>
-                <span className="text-sm font-medium text-white">{label}</span>
-              </button>
-            ))}
           </div>
 
           {/* Tabela Últimos Cadastros */}

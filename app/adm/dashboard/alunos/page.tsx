@@ -37,25 +37,17 @@ type Aluno = {
 };
 
 type FormDataAluno = {
+  ra: string;
   nome: string;
-  cpf: string;
-  dataNascimento: string;
-  emailPessoal: string;
-  celular: string;
   curso: string;
-  turno: string;
-  modalidade: string;
+  semestre: string;
 };
 
 const formInicial: FormDataAluno = {
+  ra: "",
   nome: "",
-  cpf: "",
-  dataNascimento: "",
-  emailPessoal: "",
-  celular: "",
   curso: "",
-  turno: "",
-  modalidade: "",
+  semestre: "",
 };
 
 const statusBadge: Record<string, string> = {
@@ -90,21 +82,6 @@ function iniciaisDe(nome: string) {
     .join("");
 }
 
-const formatCPF = (value: string) =>
-  value
-    .replace(/\D/g, "")
-    .replace(/(\d{3})(\d)/, "$1.$2")
-    .replace(/(\d{3})(\d)/, "$1.$2")
-    .replace(/(\d{3})(\d{1,2})/, "$1-$2")
-    .slice(0, 14);
-
-const formatCelular = (value: string) =>
-  value
-    .replace(/\D/g, "")
-    .replace(/(\d{2})(\d)/, "($1) $2")
-    .replace(/(\d{5})(\d)/, "$1-$2")
-    .slice(0, 15);
-
 function mapAluno(row: Record<string, unknown>): Aluno {
   const nome = String(row.nome ?? "");
   const status = String(row.status ?? "Ativo");
@@ -124,6 +101,8 @@ export default function GestaoAlunosPage() {
   const [alunos, setAlunos] = useState<Aluno[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [isModalOpen, setIsModalOpen] = useState(false);
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [formError, setFormError] = useState<string | null>(null);
   const [formData, setFormData] = useState<FormDataAluno>(formInicial);
 
   const [busca, setBusca] = useState("");
@@ -133,23 +112,24 @@ export default function GestaoAlunosPage() {
   const [drawerAberto, setDrawerAberto] = useState(false);
   const [abaAtiva, setAbaAtiva] = useState<AbaProntuario>("Cadastral");
 
-  useEffect(() => {
-    async function carregarAlunos() {
-      setIsLoading(true);
-      const { data, error } = await supabase
-        .from("alunos")
-        .select("*")
-        .order("created_at", { ascending: false });
+  async function fetchAlunos() {
+    setIsLoading(true);
+    const { data, error } = await supabase
+      .from("alunos")
+      .select("*")
+      .order("created_at", { ascending: false });
 
-      if (!error && data) {
-        setAlunos(data.map((row) => mapAluno(row as Record<string, unknown>)));
-      } else {
-        setAlunos([]);
-      }
-      setIsLoading(false);
+    if (error) {
+      console.error("Erro ao buscar alunos:", error.message);
+      setAlunos([]);
+    } else {
+      setAlunos((data ?? []).map((row) => mapAluno(row as Record<string, unknown>)));
     }
+    setIsLoading(false);
+  }
 
-    carregarAlunos();
+  useEffect(() => {
+    fetchAlunos();
   }, []);
 
   const cursosUnicos = useMemo(
@@ -189,18 +169,44 @@ export default function GestaoAlunosPage() {
   function fecharModal() {
     setIsModalOpen(false);
     setFormData(formInicial);
+    setFormError(null);
   }
 
-  function salvarAluno() {
-    // Insert será implementado depois — por ora só fecha o modal
+  async function salvarAluno() {
+    setFormError(null);
+
+    const ra = formData.ra.trim();
+    const nome = formData.nome.trim();
+    const curso = formData.curso.trim();
+    const semestre = Number(formData.semestre);
+
+    if (!ra || !nome || !curso || !formData.semestre || Number.isNaN(semestre)) {
+      setFormError("Preencha todos os campos obrigatórios.");
+      return;
+    }
+
+    setIsSubmitting(true);
+    const { error } = await supabase.from("alunos").insert({
+      ra,
+      nome,
+      curso,
+      semestre,
+    });
+    setIsSubmitting(false);
+
+    if (error) {
+      console.error("Erro ao cadastrar aluno:", error.message);
+      setFormError(error.message);
+      return;
+    }
+
     fecharModal();
+    await fetchAlunos();
   }
 
   const inputClass =
     "w-full px-3 py-2.5 rounded-lg bg-black border border-zinc-800 text-sm text-white placeholder:text-zinc-600 outline-none focus:border-zinc-600 transition-colors";
   const labelClass = "block text-xs text-zinc-500 mb-1.5";
-  const sectionTitleClass =
-    "text-xs font-medium text-zinc-400 uppercase tracking-widest mb-3";
 
   return (
     <div className="flex h-screen bg-black text-white overflow-hidden">
@@ -625,7 +631,7 @@ export default function GestaoAlunosPage() {
               role="dialog"
               aria-modal="true"
               aria-labelledby="modal-novo-aluno-titulo"
-              className="bg-zinc-950 border border-zinc-800 rounded-lg p-6 w-full max-w-2xl max-h-[90vh] overflow-y-auto shadow-2xl"
+              className="bg-zinc-950 border border-zinc-800 rounded-lg p-6 w-full max-w-lg max-h-[90vh] overflow-y-auto shadow-2xl"
             >
               <div className="flex items-start justify-between gap-4 mb-6">
                 <div>
@@ -633,11 +639,10 @@ export default function GestaoAlunosPage() {
                     id="modal-novo-aluno-titulo"
                     className="text-lg font-semibold text-white tracking-tight"
                   >
-                    Novo Prontuário de Aluno
+                    Cadastrar Novo Aluno
                   </h2>
                   <p className="text-sm text-zinc-500 mt-1">
-                    O RA e o e-mail institucional serão gerados automaticamente pelo
-                    sistema.
+                    O status do aluno será definido automaticamente pelo sistema.
                   </p>
                 </div>
                 <button
@@ -653,176 +658,96 @@ export default function GestaoAlunosPage() {
               <form
                 onSubmit={(e) => {
                   e.preventDefault();
-                  salvarAluno();
+                  void salvarAluno();
                 }}
-                className="space-y-6"
+                className="space-y-4"
               >
-                {/* Dados Pessoais */}
-                <section>
-                  <h3 className={sectionTitleClass}>Dados Pessoais</h3>
-                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                    <div className="sm:col-span-2">
-                      <label className={labelClass} htmlFor="nome">
-                        Nome Completo
-                      </label>
-                      <input
-                        id="nome"
-                        type="text"
-                        value={formData.nome}
-                        onChange={(e) => atualizarCampo("nome", e.target.value)}
-                        className={inputClass}
-                        placeholder="Nome completo do aluno"
-                      />
-                    </div>
-                    <div>
-                      <label className={labelClass} htmlFor="cpf">
-                        CPF
-                      </label>
-                      <input
-                        id="cpf"
-                        type="text"
-                        value={formData.cpf}
-                        maxLength={14}
-                        onChange={(e) =>
-                          setFormData({
-                            ...formData,
-                            cpf: formatCPF(e.target.value),
-                          })
-                        }
-                        className={inputClass}
-                        placeholder="000.000.000-00"
-                      />
-                    </div>
-                    <div>
-                      <label className={labelClass} htmlFor="dataNascimento">
-                        Data de Nascimento
-                      </label>
-                      <input
-                        id="dataNascimento"
-                        type="date"
-                        value={formData.dataNascimento}
-                        onChange={(e) =>
-                          atualizarCampo("dataNascimento", e.target.value)
-                        }
-                        className={`${inputClass} [color-scheme:dark]`}
-                      />
-                    </div>
-                  </div>
-                </section>
+                <div>
+                  <label className={labelClass} htmlFor="ra">
+                    RA
+                  </label>
+                  <input
+                    id="ra"
+                    type="text"
+                    required
+                    value={formData.ra}
+                    onChange={(e) => atualizarCampo("ra", e.target.value)}
+                    className={inputClass}
+                    placeholder="Ex: 20261001"
+                  />
+                </div>
+                <div>
+                  <label className={labelClass} htmlFor="nome">
+                    Nome
+                  </label>
+                  <input
+                    id="nome"
+                    type="text"
+                    required
+                    value={formData.nome}
+                    onChange={(e) => atualizarCampo("nome", e.target.value)}
+                    className={inputClass}
+                    placeholder="Nome completo do aluno"
+                  />
+                </div>
+                <div>
+                  <label className={labelClass} htmlFor="curso">
+                    Curso
+                  </label>
+                  <input
+                    id="curso"
+                    type="text"
+                    required
+                    value={formData.curso}
+                    onChange={(e) => atualizarCampo("curso", e.target.value)}
+                    className={inputClass}
+                    placeholder="Ex: Engenharia de Software"
+                    list="cursos-sugeridos"
+                  />
+                  <datalist id="cursos-sugeridos">
+                    {cursosOpcoes.map((curso) => (
+                      <option key={curso} value={curso} />
+                    ))}
+                  </datalist>
+                </div>
+                <div>
+                  <label className={labelClass} htmlFor="semestre">
+                    Semestre
+                  </label>
+                  <input
+                    id="semestre"
+                    type="number"
+                    required
+                    min={1}
+                    max={12}
+                    value={formData.semestre}
+                    onChange={(e) => atualizarCampo("semestre", e.target.value)}
+                    className={inputClass}
+                    placeholder="Ex: 1"
+                  />
+                </div>
 
-                {/* Contato */}
-                <section>
-                  <h3 className={sectionTitleClass}>Contato</h3>
-                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                    <div>
-                      <label className={labelClass} htmlFor="emailPessoal">
-                        E-mail Pessoal
-                      </label>
-                      <input
-                        id="emailPessoal"
-                        type="email"
-                        value={formData.emailPessoal}
-                        onChange={(e) =>
-                          atualizarCampo("emailPessoal", e.target.value)
-                        }
-                        className={inputClass}
-                        placeholder="email@exemplo.com"
-                      />
-                    </div>
-                    <div>
-                      <label className={labelClass} htmlFor="celular">
-                        Celular
-                      </label>
-                      <input
-                        id="celular"
-                        type="tel"
-                        value={formData.celular}
-                        maxLength={15}
-                        onChange={(e) =>
-                          setFormData({
-                            ...formData,
-                            celular: formatCelular(e.target.value),
-                          })
-                        }
-                        className={inputClass}
-                        placeholder="(00) 00000-0000"
-                      />
-                    </div>
-                  </div>
-                </section>
+                {formError && (
+                  <p className="text-sm text-red-400 bg-red-950/40 border border-red-900/50 rounded-lg px-3 py-2">
+                    {formError}
+                  </p>
+                )}
 
-                {/* Acadêmica */}
-                <section>
-                  <h3 className={sectionTitleClass}>Acadêmica</h3>
-                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                    <div className="sm:col-span-2">
-                      <label className={labelClass} htmlFor="curso">
-                        Curso
-                      </label>
-                      <select
-                        id="curso"
-                        value={formData.curso}
-                        onChange={(e) => atualizarCampo("curso", e.target.value)}
-                        className={inputClass}
-                      >
-                        <option value="">Selecione o curso</option>
-                        {cursosOpcoes.map((curso) => (
-                          <option key={curso} value={curso}>
-                            {curso}
-                          </option>
-                        ))}
-                      </select>
-                    </div>
-                    <div>
-                      <label className={labelClass} htmlFor="turno">
-                        Turno
-                      </label>
-                      <select
-                        id="turno"
-                        value={formData.turno}
-                        onChange={(e) => atualizarCampo("turno", e.target.value)}
-                        className={inputClass}
-                      >
-                        <option value="">Selecione o turno</option>
-                        <option value="Matutino">Matutino</option>
-                        <option value="Noturno">Noturno</option>
-                      </select>
-                    </div>
-                    <div>
-                      <label className={labelClass} htmlFor="modalidade">
-                        Modalidade
-                      </label>
-                      <select
-                        id="modalidade"
-                        value={formData.modalidade}
-                        onChange={(e) =>
-                          atualizarCampo("modalidade", e.target.value)
-                        }
-                        className={inputClass}
-                      >
-                        <option value="">Selecione a modalidade</option>
-                        <option value="Presencial">Presencial</option>
-                        <option value="EAD">EAD</option>
-                        <option value="Híbrido">Híbrido</option>
-                      </select>
-                    </div>
-                  </div>
-                </section>
-
-                {/* Rodapé */}
                 <div className="flex flex-col-reverse sm:flex-row sm:justify-end gap-3 pt-2 border-t border-zinc-800">
                   <button
                     type="button"
                     onClick={fecharModal}
-                    className="px-4 py-2.5 rounded-lg border border-zinc-700 text-sm font-medium text-zinc-300 hover:bg-zinc-900 hover:text-white transition-colors"
+                    disabled={isSubmitting}
+                    className="px-4 py-2.5 rounded-lg border border-zinc-700 text-sm font-medium text-zinc-300 hover:bg-zinc-900 hover:text-white transition-colors disabled:opacity-50"
                   >
                     Cancelar
                   </button>
                   <button
                     type="submit"
-                    className="px-4 py-2.5 rounded-lg bg-white text-black text-sm font-medium hover:bg-zinc-200 transition-colors"
+                    disabled={isSubmitting}
+                    className="px-4 py-2.5 rounded-lg bg-white text-black text-sm font-medium hover:bg-zinc-200 transition-colors disabled:opacity-50"
                   >
-                    Salvar e Gerar RA
+                    {isSubmitting ? "Salvando..." : "Salvar Aluno"}
                   </button>
                 </div>
               </form>
