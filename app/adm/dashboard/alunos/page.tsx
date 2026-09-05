@@ -19,6 +19,9 @@ import {
   Mail,
   X,
   Sparkles,
+  Pencil,
+  Trash2,
+  CheckCircle,
 } from "lucide-react";
 import { supabase } from "@/lib/supabase";
 
@@ -26,6 +29,7 @@ type StatusAluno = "Ativo" | "Evadido" | "Trancado" | string;
 type AbaProntuario = "Cadastral" | "Acadêmico" | "Insights de IA";
 
 type Aluno = {
+  id: string;
   ra: string;
   nome: string;
   curso: string;
@@ -86,6 +90,7 @@ function mapAluno(row: Record<string, unknown>): Aluno {
   const nome = String(row.nome ?? "");
   const status = String(row.status ?? "Ativo");
   return {
+    id: String(row.id ?? ""),
     ra: String(row.ra ?? "—"),
     nome,
     curso: String(row.curso ?? "—"),
@@ -104,6 +109,9 @@ export default function GestaoAlunosPage() {
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [formError, setFormError] = useState<string | null>(null);
   const [formData, setFormData] = useState<FormDataAluno>(formInicial);
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [itemToDelete, setItemToDelete] = useState<string | null>(null);
+  const [successMessage, setSuccessMessage] = useState<string | null>(null);
 
   const [busca, setBusca] = useState("");
   const [filtroCurso, setFiltroCurso] = useState("todos");
@@ -170,6 +178,30 @@ export default function GestaoAlunosPage() {
     setIsModalOpen(false);
     setFormData(formInicial);
     setFormError(null);
+    setEditingId(null);
+  }
+
+  async function confirmDelete() {
+    if (!itemToDelete) return;
+    const { error } = await supabase.from("alunos").delete().eq("id", itemToDelete);
+    if (error) {
+      console.error("Erro ao excluir aluno:", error.message);
+      setItemToDelete(null);
+      return;
+    }
+    setItemToDelete(null);
+    await fetchAlunos();
+  }
+
+  function handleEdit(aluno: Aluno) {
+    setFormData({
+      ra: aluno.ra,
+      nome: aluno.nome,
+      curso: aluno.curso,
+      semestre: String(aluno.semestre),
+    });
+    setEditingId(aluno.id);
+    setIsModalOpen(true);
   }
 
   async function salvarAluno() {
@@ -186,12 +218,9 @@ export default function GestaoAlunosPage() {
     }
 
     setIsSubmitting(true);
-    const { error } = await supabase.from("alunos").insert({
-      ra,
-      nome,
-      curso,
-      semestre,
-    });
+    const { error } = editingId
+      ? await supabase.from("alunos").update({ ra, nome, curso, semestre }).eq("id", editingId)
+      : await supabase.from("alunos").insert({ ra, nome, curso, semestre });
     setIsSubmitting(false);
 
     if (error) {
@@ -200,8 +229,11 @@ export default function GestaoAlunosPage() {
       return;
     }
 
+    const wasEditing = !!editingId;
     fecharModal();
     await fetchAlunos();
+    setSuccessMessage(wasEditing ? "Aluno atualizado com sucesso!" : "Aluno cadastrado com sucesso!");
+    setTimeout(() => setSuccessMessage(null), 3000);
   }
 
   const inputClass =
@@ -384,13 +416,16 @@ export default function GestaoAlunosPage() {
                     <th className="px-6 py-3.5 text-xs font-medium text-zinc-500 uppercase tracking-widest">
                       Status
                     </th>
+                    <th className="px-6 py-3.5 text-xs font-medium text-zinc-500 uppercase tracking-widest text-right">
+                      Ações
+                    </th>
                   </tr>
                 </thead>
                 <tbody>
                   {isLoading ? (
                     <tr>
                       <td
-                        colSpan={5}
+                        colSpan={6}
                         className="px-6 py-16 text-center text-sm text-zinc-500"
                       >
                         Carregando alunos...
@@ -399,7 +434,7 @@ export default function GestaoAlunosPage() {
                   ) : alunosFiltrados.length === 0 ? (
                     <tr>
                       <td
-                        colSpan={5}
+                        colSpan={6}
                         className="px-6 py-12 text-center text-sm text-zinc-500"
                       >
                         Nenhum aluno encontrado com os filtros aplicados.
@@ -440,6 +475,26 @@ export default function GestaoAlunosPage() {
                           >
                             {aluno.status}
                           </span>
+                        </td>
+                        <td className="px-6 py-4">
+                          <div className="flex items-center justify-end gap-2">
+                            <button
+                              type="button"
+                              onClick={(e) => { e.stopPropagation(); handleEdit(aluno); }}
+                              className="p-1.5 rounded-md text-zinc-500 hover:text-blue-500 hover:bg-zinc-800 transition-colors"
+                              aria-label="Editar aluno"
+                            >
+                              <Pencil className="w-3.5 h-3.5" />
+                            </button>
+                            <button
+                              type="button"
+                              onClick={(e) => { e.stopPropagation(); setItemToDelete(aluno.id); }}
+                              className="p-1.5 rounded-md text-zinc-500 hover:text-red-500 hover:bg-zinc-800 transition-colors"
+                              aria-label="Excluir aluno"
+                            >
+                              <Trash2 className="w-3.5 h-3.5" />
+                            </button>
+                          </div>
                         </td>
                       </tr>
                     ))
@@ -639,10 +694,12 @@ export default function GestaoAlunosPage() {
                     id="modal-novo-aluno-titulo"
                     className="text-lg font-semibold text-white tracking-tight"
                   >
-                    Cadastrar Novo Aluno
+                    {editingId ? "Editar Aluno" : "Cadastrar Novo Aluno"}
                   </h2>
                   <p className="text-sm text-zinc-500 mt-1">
-                    O status do aluno será definido automaticamente pelo sistema.
+                    {editingId
+                      ? "Atualize os dados do aluno abaixo."
+                      : "O status do aluno será definido automaticamente pelo sistema."}
                   </p>
                 </div>
                 <button
@@ -747,11 +804,53 @@ export default function GestaoAlunosPage() {
                     disabled={isSubmitting}
                     className="px-4 py-2.5 rounded-lg bg-white text-black text-sm font-medium hover:bg-zinc-200 transition-colors disabled:opacity-50"
                   >
-                    {isSubmitting ? "Salvando..." : "Salvar Aluno"}
+                    {isSubmitting ? "Salvando..." : editingId ? "Atualizar Aluno" : "Salvar Aluno"}
                   </button>
                 </div>
               </form>
             </div>
+          </div>
+        )}
+        {/* Modal Confirmação de Exclusão */}
+        {itemToDelete && (
+          <div className="fixed inset-0 z-[70] flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm">
+            <div className="bg-zinc-900 border border-zinc-800 rounded-xl p-6 w-full max-w-md shadow-2xl">
+              <div className="flex flex-col items-center text-center gap-4">
+                <div className="w-12 h-12 rounded-full bg-red-950/60 border border-red-900/50 flex items-center justify-center">
+                  <AlertTriangle className="w-6 h-6 text-red-500" />
+                </div>
+                <div>
+                  <h3 className="text-lg font-semibold text-white">Confirmar Exclusão</h3>
+                  <p className="text-sm text-zinc-400 mt-1">
+                    Esta ação é irreversível. O aluno será removido permanentemente do sistema.
+                  </p>
+                </div>
+                <div className="flex gap-3 w-full mt-2">
+                  <button
+                    type="button"
+                    onClick={() => setItemToDelete(null)}
+                    className="flex-1 px-4 py-2.5 rounded-lg bg-zinc-800 hover:bg-zinc-700 text-white text-sm font-medium transition-colors"
+                  >
+                    Cancelar
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => void confirmDelete()}
+                    className="flex-1 px-4 py-2.5 rounded-lg bg-red-600 hover:bg-red-700 text-white text-sm font-medium transition-colors"
+                  >
+                    Sim, Excluir
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Toast de Sucesso */}
+        {successMessage && (
+          <div className="fixed bottom-4 right-4 z-[80] flex items-center gap-2 bg-emerald-600 text-white px-4 py-3 rounded-lg shadow-lg">
+            <CheckCircle className="w-4 h-4 shrink-0" />
+            <span className="text-sm font-medium">{successMessage}</span>
           </div>
         )}
       </main>

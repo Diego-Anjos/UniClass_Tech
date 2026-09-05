@@ -1,7 +1,8 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import Link from "next/link";
+import { supabase } from "@/lib/supabase";
 import {
   LayoutDashboard,
   Users,
@@ -23,6 +24,7 @@ import {
   CheckCircle2,
   XCircle,
   Plug,
+  Database,
 } from "lucide-react";
 
 type AbaConfig =
@@ -76,38 +78,23 @@ const abas: { id: AbaConfig; label: string; icon: typeof Building }[] = [
   { id: "Segurança e Logs", label: "Segurança e Logs", icon: ShieldAlert },
 ];
 
-const logsMock = [
-  {
-    dataHora: "03/09/2026 21:14:02",
-    usuario: "Prof. Marcos Silva",
-    acao: "Alteração de nota — N2 de Gustavo Santos (BD-4A) de 5.5 para 7.0",
-    ip: "189.45.122.18",
-  },
-  {
-    dataHora: "03/09/2026 18:42:11",
-    usuario: "Secretaria Acadêmica",
-    acao: "Abertura da turma GTI-1A-N para matrículas",
-    ip: "10.0.0.12",
-  },
-  {
-    dataHora: "03/09/2026 15:08:44",
-    usuario: "Prof. Roberto Lima",
-    acao: "Fechamento do diário de classe — ES-3B-M",
-    ip: "177.92.44.201",
-  },
-  {
-    dataHora: "02/09/2026 22:31:09",
-    usuario: "Sistema (Resend)",
-    acao: "Disparo de alerta de faltas para 5 alunos de Banco de Dados",
-    ip: "—",
-  },
-  {
-    dataHora: "02/09/2026 11:05:33",
-    usuario: "Secretaria Acadêmica",
-    acao: "Cadastro de novo professor — MAT 9105 Fernanda Souza",
-    ip: "10.0.0.12",
-  },
-];
+// Helper: formata ISO timestamp → DD/MM/YYYY HH:mm:ss (fuso local)
+function formatarDataBR(isoString: string): string {
+  const d = new Date(isoString);
+  const pad = (n: number) => String(n).padStart(2, "0");
+  return (
+    `${pad(d.getDate())}/${pad(d.getMonth() + 1)}/${d.getFullYear()} ` +
+    `${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`
+  );
+}
+
+type LogAuditoria = {
+  id: string | number;
+  created_at: string;
+  usuario: string;
+  acao: string;
+  ip: string;
+};
 
 export default function ConfiguracoesSistemaPage() {
   const [abaAtiva, setAbaAtiva] = useState<AbaConfig>("Instituição");
@@ -120,14 +107,98 @@ export default function ConfiguracoesSistemaPage() {
   const [limiteFaltas, setLimiteFaltas] = useState("25");
   const [semestreVigente, setSemestreVigente] = useState("2026.1");
 
+  const [successMessage, setSuccessMessage] = useState<string | null>(null);
+  const [salvando, setSalvando] = useState(false);
+
+  const [logs, setLogs] = useState<LogAuditoria[]>([]);
+  const [carregandoLogs, setCarregandoLogs] = useState(false);
+
+  // Buscar logs de auditoria do Supabase
+  async function fetchLogs() {
+    setCarregandoLogs(true);
+    const { data, error } = await supabase
+      .from("logs_auditoria")
+      .select("*")
+      .order("created_at", { ascending: false });
+
+    if (error) {
+      console.error("Erro ao buscar logs:", error.message);
+    } else {
+      setLogs(data ?? []);
+    }
+    setCarregandoLogs(false);
+  }
+
+  // Carregar configurações e logs do Supabase ao montar a página
+  useEffect(() => {
+    async function carregarConfiguracoes() {
+      const { data, error } = await supabase
+        .from("configuracoes")
+        .select("*")
+        .eq("id", 1)
+        .single();
+
+      if (error) {
+        console.error("Erro ao carregar configurações:", error.message);
+        return;
+      }
+
+      if (data) {
+        if (data.nome_instituicao) setNomeInstituicao(data.nome_instituicao);
+        if (data.cnpj) setCnpj(data.cnpj);
+        if (data.media_aprovacao !== undefined && data.media_aprovacao !== null)
+          setMediaMinima(String(data.media_aprovacao));
+        if (data.limite_faltas !== undefined && data.limite_faltas !== null)
+          setLimiteFaltas(String(data.limite_faltas));
+        if (data.semestre_vigente) setSemestreVigente(data.semestre_vigente);
+      }
+    }
+
+    carregarConfiguracoes();
+    fetchLogs();
+  }, []);
+
+  // Salvar configurações no Supabase
+  async function salvarConfiguracoes(aba: AbaConfig) {
+    setSalvando(true);
+
+    let updatePayload: Record<string, unknown> = {};
+
+    if (aba === "Instituição") {
+      updatePayload = {
+        nome_instituicao: nomeInstituicao,
+        cnpj: cnpj,
+      };
+    } else if (aba === "Regras Acadêmicas") {
+      updatePayload = {
+        media_aprovacao: parseFloat(mediaMinima),
+        limite_faltas: parseInt(limiteFaltas, 10),
+        semestre_vigente: semestreVigente,
+      };
+    }
+
+    const { error } = await supabase
+      .from("configuracoes")
+      .update(updatePayload)
+      .eq("id", 1);
+
+    setSalvando(false);
+
+    if (error) {
+      console.error("Erro ao salvar configurações:", error.message);
+      return;
+    }
+
+    setSuccessMessage(
+      aba === "Instituição"
+        ? "Dados da instituição salvos com sucesso!"
+        : "Regras acadêmicas atualizadas!"
+    );
+    setTimeout(() => setSuccessMessage(null), 3000);
+  }
+
+  // Groq e Resend/Google Calendar ficam separados: Groq tem estado próprio
   const [integracoes, setIntegracoes] = useState<Integracao[]>([
-    {
-      id: "groq",
-      nome: "Groq AI",
-      descricao: "Insights preditivos via Llama 3",
-      status: "Conectado",
-      icon: Sparkles,
-    },
     {
       id: "resend",
       nome: "Resend E-mails",
@@ -145,6 +216,14 @@ export default function ConfiguracoesSistemaPage() {
   ]);
 
   const [testando, setTestando] = useState<string | null>(null);
+
+  const [supabaseStatus, setSupabaseStatus] = useState<
+    "Conectado" | "Desconectado" | "Testando..."
+  >("Conectado");
+
+  const [groqStatus, setGroqStatus] = useState<
+    "Conectado" | "Desconectado" | "Testando..."
+  >("Conectado");
 
   function handleLogoChange(file: File | null) {
     setLogoNome(file ? file.name : null);
@@ -167,8 +246,52 @@ export default function ConfiguracoesSistemaPage() {
     }, 900);
   }
 
+  async function testarConexaoSupabase() {
+    setSupabaseStatus("Testando...");
+    const { error } = await supabase
+      .from("configuracoes")
+      .select("id")
+      .limit(1);
+
+    if (error) {
+      console.error("Falha na conexão com Supabase:", error.message);
+      setSupabaseStatus("Desconectado");
+      setSuccessMessage("Falha na conexão com o Supabase.");
+    } else {
+      setSupabaseStatus("Conectado");
+      setSuccessMessage("Conexão com Supabase estável e respondendo!");
+    }
+    setTimeout(() => setSuccessMessage(null), 3000);
+  }
+
+  async function testarConexaoGroq() {
+    setGroqStatus("Testando...");
+    try {
+      const res = await fetch("/api/groq/test");
+      if (res.ok) {
+        setGroqStatus("Conectado");
+        setSuccessMessage("Conexão com Groq AI estabelecida com sucesso! Llama 3 operacional.");
+      } else {
+        setGroqStatus("Desconectado");
+        setSuccessMessage("Falha na conexão com a Groq AI. Verifique a chave de API.");
+      }
+    } catch (err) {
+      console.error("Erro ao testar Groq:", err);
+      setGroqStatus("Desconectado");
+      setSuccessMessage("Falha na conexão com a Groq AI. Verifique a chave de API.");
+    }
+    setTimeout(() => setSuccessMessage(null), 3000);
+  }
+
   return (
     <div className="flex h-screen bg-black text-white overflow-hidden">
+      {/* Toast de sucesso */}
+      {successMessage && (
+        <div className="fixed bottom-6 right-6 z-50 flex items-center gap-3 px-5 py-3.5 rounded-xl bg-green-950 border border-green-800 text-green-300 text-sm font-medium shadow-xl animate-in fade-in slide-in-from-bottom-4 duration-300">
+          <CheckCircle2 className="w-4 h-4 shrink-0 text-green-400" />
+          {successMessage}
+        </div>
+      )}
       {/* SIDEBAR APP */}
       <aside className="hidden md:flex flex-col w-64 shrink-0 bg-zinc-950 border-r border-zinc-800">
         <div className="flex items-center gap-2.5 px-5 py-5 border-b border-zinc-800">
@@ -345,10 +468,12 @@ export default function ConfiguracoesSistemaPage() {
                   <div className="pt-2">
                     <button
                       type="button"
-                      className="inline-flex items-center gap-2 px-4 py-2.5 rounded-lg bg-white text-black text-sm font-medium hover:bg-zinc-200 transition-colors"
+                      onClick={() => salvarConfiguracoes("Instituição")}
+                      disabled={salvando}
+                      className="inline-flex items-center gap-2 px-4 py-2.5 rounded-lg bg-white text-black text-sm font-medium hover:bg-zinc-200 transition-colors disabled:opacity-60 disabled:cursor-not-allowed"
                     >
                       <Save className="w-4 h-4" />
-                      Salvar Instituição
+                      {salvando ? "Salvando..." : "Salvar Instituição"}
                     </button>
                   </div>
                 </section>
@@ -422,10 +547,12 @@ export default function ConfiguracoesSistemaPage() {
                   <div className="pt-2">
                     <button
                       type="button"
-                      className="inline-flex items-center gap-2 px-4 py-2.5 rounded-lg bg-white text-black text-sm font-medium hover:bg-zinc-200 transition-colors"
+                      onClick={() => salvarConfiguracoes("Regras Acadêmicas")}
+                      disabled={salvando}
+                      className="inline-flex items-center gap-2 px-4 py-2.5 rounded-lg bg-white text-black text-sm font-medium hover:bg-zinc-200 transition-colors disabled:opacity-60 disabled:cursor-not-allowed"
                     >
                       <Save className="w-4 h-4" />
-                      Salvar Alterações
+                      {salvando ? "Salvando..." : "Salvar Alterações"}
                     </button>
                   </div>
                 </section>
@@ -443,6 +570,97 @@ export default function ConfiguracoesSistemaPage() {
                   </div>
 
                   <div className="flex flex-col gap-3">
+                    {/* Card Supabase — status dinâmico via testarConexaoSupabase() */}
+                    <div className="rounded-xl bg-zinc-950 border border-zinc-800 p-5 flex flex-col sm:flex-row sm:items-center gap-4">
+                      <div className="flex items-center gap-4 flex-1 min-w-0">
+                        <div className="w-11 h-11 rounded-lg bg-zinc-900 border border-zinc-800 flex items-center justify-center shrink-0">
+                          <Database className="w-5 h-5 text-zinc-300" />
+                        </div>
+                        <div className="min-w-0">
+                          <div className="flex items-center gap-2.5 flex-wrap">
+                            <p className="text-sm font-medium text-white">Supabase</p>
+                            <span
+                              className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[11px] font-medium border ${
+                                supabaseStatus === "Conectado"
+                                  ? "bg-green-950 text-green-400 border-green-900/50"
+                                  : supabaseStatus === "Desconectado"
+                                  ? "bg-red-950 text-red-400 border-red-900/50"
+                                  : "bg-zinc-800 text-zinc-400 border-zinc-700/50"
+                              }`}
+                            >
+                              {supabaseStatus === "Conectado" ? (
+                                <CheckCircle2 className="w-3 h-3" />
+                              ) : supabaseStatus === "Desconectado" ? (
+                                <XCircle className="w-3 h-3" />
+                              ) : (
+                                <span className="w-3 h-3 rounded-full border-2 border-zinc-400 border-t-transparent animate-spin inline-block" />
+                              )}
+                              {supabaseStatus}
+                            </span>
+                          </div>
+                          <p className="text-xs text-zinc-500 mt-1">
+                            Banco de dados PostgreSQL e Autenticação
+                          </p>
+                        </div>
+                      </div>
+
+                      <button
+                        type="button"
+                        onClick={testarConexaoSupabase}
+                        disabled={supabaseStatus === "Testando..."}
+                        className="inline-flex items-center justify-center gap-2 px-4 py-2 rounded-lg bg-zinc-900 border border-zinc-800 text-sm text-zinc-200 hover:bg-zinc-800 hover:text-white transition-colors shrink-0 disabled:opacity-60"
+                      >
+                        <Plug className="w-4 h-4" />
+                        {supabaseStatus === "Testando..." ? "Testando..." : "Testar Conexão"}
+                      </button>
+                    </div>
+
+                    {/* Card Groq AI — status dinâmico via testarConexaoGroq() */}
+                    <div className="rounded-xl bg-zinc-950 border border-zinc-800 p-5 flex flex-col sm:flex-row sm:items-center gap-4">
+                      <div className="flex items-center gap-4 flex-1 min-w-0">
+                        <div className="w-11 h-11 rounded-lg bg-zinc-900 border border-zinc-800 flex items-center justify-center shrink-0">
+                          <Sparkles className="w-5 h-5 text-zinc-300" />
+                        </div>
+                        <div className="min-w-0">
+                          <div className="flex items-center gap-2.5 flex-wrap">
+                            <p className="text-sm font-medium text-white">Groq AI</p>
+                            <span
+                              className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[11px] font-medium border ${
+                                groqStatus === "Conectado"
+                                  ? "bg-green-950 text-green-400 border-green-900/50"
+                                  : groqStatus === "Desconectado"
+                                  ? "bg-red-950 text-red-400 border-red-900/50"
+                                  : "bg-zinc-800 text-zinc-400 border-zinc-700/50"
+                              }`}
+                            >
+                              {groqStatus === "Conectado" ? (
+                                <CheckCircle2 className="w-3 h-3" />
+                              ) : groqStatus === "Desconectado" ? (
+                                <XCircle className="w-3 h-3" />
+                              ) : (
+                                <span className="w-3 h-3 rounded-full border-2 border-zinc-400 border-t-transparent animate-spin inline-block" />
+                              )}
+                              {groqStatus}
+                            </span>
+                          </div>
+                          <p className="text-xs text-zinc-500 mt-1">
+                            Insights preditivos via Llama 3
+                          </p>
+                        </div>
+                      </div>
+
+                      <button
+                        type="button"
+                        onClick={testarConexaoGroq}
+                        disabled={groqStatus === "Testando..."}
+                        className="inline-flex items-center justify-center gap-2 px-4 py-2 rounded-lg bg-zinc-900 border border-zinc-800 text-sm text-zinc-200 hover:bg-zinc-800 hover:text-white transition-colors shrink-0 disabled:opacity-60"
+                      >
+                        <Plug className="w-4 h-4" />
+                        {groqStatus === "Testando..." ? "Testando..." : "Testar Conexão"}
+                      </button>
+                    </div>
+
+                    {/* Cards de integrações externas (Resend, Google Calendar) */}
                     {integracoes.map((item) => {
                       const Icon = item.icon;
                       const conectado = item.status === "Conectado";
@@ -497,11 +715,16 @@ export default function ConfiguracoesSistemaPage() {
 
               {abaAtiva === "Segurança e Logs" && (
                 <section className="rounded-xl bg-zinc-950 border border-zinc-800 overflow-hidden">
-                  <div className="px-6 py-4 border-b border-zinc-800">
-                    <h2 className="text-sm font-semibold text-white">Logs Recentes</h2>
-                    <p className="text-xs text-zinc-500 mt-1">
-                      Auditoria de ações sensíveis no sistema acadêmico.
-                    </p>
+                  <div className="px-6 py-4 border-b border-zinc-800 flex items-center justify-between gap-4">
+                    <div>
+                      <h2 className="text-sm font-semibold text-white">Logs Recentes</h2>
+                      <p className="text-xs text-zinc-500 mt-1">
+                        Auditoria de ações sensíveis no sistema acadêmico.
+                      </p>
+                    </div>
+                    {carregandoLogs && (
+                      <span className="text-xs text-zinc-500 animate-pulse">Carregando...</span>
+                    )}
                   </div>
 
                   <div className="overflow-x-auto">
@@ -523,25 +746,47 @@ export default function ConfiguracoesSistemaPage() {
                         </tr>
                       </thead>
                       <tbody>
-                        {logsMock.map((log) => (
-                          <tr
-                            key={`${log.dataHora}-${log.acao}`}
-                            className="border-b border-zinc-800 last:border-b-0 hover:bg-zinc-900/40 transition-colors"
-                          >
-                            <td className="px-6 py-4 text-sm text-zinc-400 whitespace-nowrap font-mono">
-                              {log.dataHora}
-                            </td>
-                            <td className="px-4 py-4 text-sm text-zinc-300 whitespace-nowrap">
-                              {log.usuario}
-                            </td>
-                            <td className="px-4 py-4 text-sm text-zinc-400 max-w-[360px]">
-                              {log.acao}
-                            </td>
-                            <td className="px-6 py-4 text-sm text-zinc-500 font-mono">
-                              {log.ip}
+                        {carregandoLogs ? (
+                          // Skeleton rows enquanto carrega
+                          Array.from({ length: 4 }).map((_, i) => (
+                            <tr key={i} className="border-b border-zinc-800">
+                              {Array.from({ length: 4 }).map((__, j) => (
+                                <td key={j} className="px-6 py-4">
+                                  <div className="h-3 rounded bg-zinc-800 animate-pulse w-3/4" />
+                                </td>
+                              ))}
+                            </tr>
+                          ))
+                        ) : logs.length === 0 ? (
+                          <tr>
+                            <td
+                              colSpan={4}
+                              className="px-6 py-10 text-center text-sm text-zinc-600"
+                            >
+                              Nenhum registro de auditoria encontrado.
                             </td>
                           </tr>
-                        ))}
+                        ) : (
+                          logs.map((log) => (
+                            <tr
+                              key={log.id}
+                              className="border-b border-zinc-800 last:border-b-0 hover:bg-zinc-900/40 transition-colors"
+                            >
+                              <td className="px-6 py-4 text-sm text-zinc-400 whitespace-nowrap font-mono">
+                                {formatarDataBR(log.created_at)}
+                              </td>
+                              <td className="px-4 py-4 text-sm text-zinc-300 whitespace-nowrap">
+                                {log.usuario}
+                              </td>
+                              <td className="px-4 py-4 text-sm text-zinc-400 max-w-[360px]">
+                                {log.acao}
+                              </td>
+                              <td className="px-6 py-4 text-sm text-zinc-500 font-mono">
+                                {log.ip ?? "—"}
+                              </td>
+                            </tr>
+                          ))
+                        )}
                       </tbody>
                     </table>
                   </div>

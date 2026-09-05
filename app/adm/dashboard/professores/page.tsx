@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import {
   LayoutDashboard,
@@ -22,18 +22,23 @@ import {
   CheckCircle2,
   Circle,
   Clock,
+  Pencil,
+  Trash2,
+  AlertTriangle,
 } from "lucide-react";
+import { supabase } from "@/lib/supabase";
 
 type StatusProfessor = "Ativo" | "Licença" | "Inativo";
 type Titulacao = "Especialista" | "Mestre" | "Doutor";
 type AbaProntuario = "Alocação" | "Conformidade" | "Insights de IA";
 
 type Professor = {
+  id: string;
   matricula: string;
   nome: string;
   titulacao: Titulacao;
   area: string;
-  cargaHoraria: string;
+  cargaHoraria: number;
   status: StatusProfessor;
   email: string;
   iniciais: string;
@@ -41,14 +46,25 @@ type Professor = {
   diarioFechado: boolean;
 };
 
+type FormDataProfessor = {
+  matricula: string;
+  nome: string;
+  titulacao: Titulacao;
+  area: string;
+  cargaHoraria: string;
+};
+
+const formInicial: FormDataProfessor = {
+  matricula: "",
+  nome: "",
+  titulacao: "Especialista",
+  area: "",
+  cargaHoraria: "",
+};
+
 const navItems = [
   { icon: LayoutDashboard, label: "Visão Geral", href: "/adm/dashboard", active: false },
-  {
-    icon: Users,
-    label: "Gestão de Alunos",
-    href: "/adm/dashboard/alunos",
-    active: false,
-  },
+  { icon: Users, label: "Gestão de Alunos", href: "/adm/dashboard/alunos", active: false },
   {
     icon: GraduationCap,
     label: "Gestão de Professores",
@@ -56,81 +72,11 @@ const navItems = [
     active: true,
   },
   { icon: BookOpen, label: "Turmas e Matrículas", href: "/adm/dashboard/turmas", active: false },
-  { icon: Settings, label: "Configurações do Sistema", href: "/adm/dashboard/configuracoes", active: false },
-];
-
-const professoresMock: Professor[] = [
   {
-    matricula: "9012",
-    nome: "Marcos Silva",
-    titulacao: "Mestre",
-    area: "Banco de Dados",
-    cargaHoraria: "20h/semana",
-    status: "Ativo",
-    email: "marcos.silva@uniclass.edu.br",
-    iniciais: "MS",
-    turmas: ["BD-4A", "BD-4B"],
-    diarioFechado: false,
-  },
-  {
-    matricula: "8840",
-    nome: "Roberto Lima",
-    titulacao: "Doutor",
-    area: "Engenharia de Software",
-    cargaHoraria: "40h/semana",
-    status: "Ativo",
-    email: "roberto.lima@uniclass.edu.br",
-    iniciais: "RL",
-    turmas: ["ES-3A", "ES-5B", "TCC-Orientação"],
-    diarioFechado: true,
-  },
-  {
-    matricula: "7721",
-    nome: "Carla Mendes",
-    titulacao: "Doutor",
-    area: "Algoritmos",
-    cargaHoraria: "20h/semana",
-    status: "Ativo",
-    email: "carla.mendes@uniclass.edu.br",
-    iniciais: "CM",
-    turmas: ["ALG-1A", "ALG-2A"],
-    diarioFechado: false,
-  },
-  {
-    matricula: "6503",
-    nome: "Paulo Henrique Rocha",
-    titulacao: "Especialista",
-    area: "Engenharia de Software",
-    cargaHoraria: "12h/semana",
-    status: "Licença",
-    email: "paulo.rocha@uniclass.edu.br",
-    iniciais: "PR",
-    turmas: ["ES-2C"],
-    diarioFechado: true,
-  },
-  {
-    matricula: "9105",
-    nome: "Fernanda Souza",
-    titulacao: "Mestre",
-    area: "Algoritmos",
-    cargaHoraria: "20h/semana",
-    status: "Ativo",
-    email: "fernanda.souza@uniclass.edu.br",
-    iniciais: "FS",
-    turmas: ["ALG-3B", "Estruturas de Dados"],
-    diarioFechado: true,
-  },
-  {
-    matricula: "5408",
-    nome: "André Barbosa",
-    titulacao: "Especialista",
-    area: "Banco de Dados",
-    cargaHoraria: "8h/semana",
-    status: "Inativo",
-    email: "andre.barbosa@uniclass.edu.br",
-    iniciais: "AB",
-    turmas: [],
-    diarioFechado: true,
+    icon: Settings,
+    label: "Configurações do Sistema",
+    href: "/adm/dashboard/configuracoes",
+    active: false,
   },
 ];
 
@@ -140,20 +86,80 @@ const statusBadge: Record<StatusProfessor, string> = {
   Inativo: "bg-red-950 text-red-400 border-red-900/50",
 };
 
-const areasUnicas = Array.from(new Set(professoresMock.map((p) => p.area))).sort();
 const titulacoes: Titulacao[] = ["Especialista", "Mestre", "Doutor"];
 const abas: AbaProntuario[] = ["Alocação", "Conformidade", "Insights de IA"];
 
+function iniciaisDe(nome: string) {
+  return nome
+    .split(" ")
+    .filter(Boolean)
+    .slice(0, 2)
+    .map((p) => p[0]?.toUpperCase() ?? "")
+    .join("");
+}
+
+function mapProfessor(row: Record<string, unknown>): Professor {
+  const nome = String(row.nome ?? "");
+  return {
+    id: String(row.id ?? ""),
+    matricula: String(row.matricula ?? "—"),
+    nome,
+    titulacao: (String(row.titulacao ?? "Especialista")) as Titulacao,
+    area: String(row.area_atuacao ?? row.area ?? "—"),
+    cargaHoraria: Number(row.carga_horaria_semanal ?? row.carga_horaria ?? 0),
+    status: (String(row.status ?? "Ativo")) as StatusProfessor,
+    email: String(row.email ?? "—"),
+    iniciais: iniciaisDe(nome) || "—",
+    turmas: [],
+    diarioFechado: Boolean(row.diario_fechado ?? false),
+  };
+}
+
 export default function GestaoProfessoresPage() {
-  const [professores] = useState<Professor[]>(professoresMock);
+  const [professores, setProfessores] = useState<Professor[]>([]);
+  const [isLoading, setIsLoading] = useState(true);
+  const [isModalOpen, setIsModalOpen] = useState(false);
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [formError, setFormError] = useState<string | null>(null);
+  const [formData, setFormData] = useState<FormDataProfessor>(formInicial);
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [itemToDelete, setItemToDelete] = useState<string | null>(null);
+  const [successMessage, setSuccessMessage] = useState<string | null>(null);
+
   const [busca, setBusca] = useState("");
   const [filtroArea, setFiltroArea] = useState("todos");
   const [filtroTitulacao, setFiltroTitulacao] = useState("todos");
-  const [professorSelecionado, setProfessorSelecionado] = useState<Professor | null>(
-    null
-  );
+  const [professorSelecionado, setProfessorSelecionado] = useState<Professor | null>(null);
   const [drawerAberto, setDrawerAberto] = useState(false);
   const [abaAtiva, setAbaAtiva] = useState<AbaProntuario>("Alocação");
+
+  async function fetchProfessores() {
+    setIsLoading(true);
+    const { data, error } = await supabase
+      .from("professores")
+      .select("*")
+      .order("created_at", { ascending: false });
+
+    if (error) {
+      console.error("Erro ao buscar professores:", error.message);
+      setProfessores([]);
+    } else {
+      setProfessores((data ?? []).map((row) => mapProfessor(row as Record<string, unknown>)));
+    }
+    setIsLoading(false);
+  }
+
+  useEffect(() => {
+    fetchProfessores();
+  }, []);
+
+  const areasUnicas = useMemo(
+    () =>
+      Array.from(
+        new Set(professores.map((p) => p.area).filter((a) => a && a !== "—"))
+      ).sort(),
+    [professores]
+  );
 
   const professoresFiltrados = useMemo(() => {
     const termo = busca.trim().toLowerCase();
@@ -180,6 +186,93 @@ export default function GestaoProfessoresPage() {
     setDrawerAberto(false);
     window.setTimeout(() => setProfessorSelecionado(null), 300);
   }
+
+  function atualizarCampo<K extends keyof FormDataProfessor>(
+    campo: K,
+    valor: FormDataProfessor[K]
+  ) {
+    setFormData((prev) => ({ ...prev, [campo]: valor }));
+  }
+
+  function fecharModal() {
+    setIsModalOpen(false);
+    setFormData(formInicial);
+    setFormError(null);
+    setEditingId(null);
+  }
+
+  async function confirmDelete() {
+    if (!itemToDelete) return;
+    const { error } = await supabase.from("professores").delete().eq("id", itemToDelete);
+    if (error) {
+      console.error("Erro ao excluir professor:", error.message);
+      setItemToDelete(null);
+      return;
+    }
+    setItemToDelete(null);
+    await fetchProfessores();
+  }
+
+  function handleEdit(prof: Professor) {
+    setFormData({
+      matricula: prof.matricula,
+      nome: prof.nome,
+      titulacao: prof.titulacao,
+      area: prof.area,
+      cargaHoraria: String(prof.cargaHoraria),
+    });
+    setEditingId(prof.id);
+    setIsModalOpen(true);
+  }
+
+  async function salvarProfessor() {
+    setFormError(null);
+
+    const matricula = formData.matricula.trim();
+    const nome = formData.nome.trim();
+    const area = formData.area.trim();
+    const cargaHoraria = Number(formData.cargaHoraria);
+
+    if (
+      !matricula ||
+      !nome ||
+      !area ||
+      !formData.cargaHoraria ||
+      Number.isNaN(cargaHoraria)
+    ) {
+      setFormError("Preencha todos os campos obrigatórios.");
+      return;
+    }
+
+    setIsSubmitting(true);
+    const payload = {
+      matricula,
+      nome,
+      titulacao: formData.titulacao,
+      area_atuacao: area,
+      carga_horaria_semanal: cargaHoraria,
+    };
+    const { error } = editingId
+      ? await supabase.from("professores").update(payload).eq("id", editingId)
+      : await supabase.from("professores").insert(payload);
+    setIsSubmitting(false);
+
+    if (error) {
+      console.error("Erro ao cadastrar professor:", error.message);
+      setFormError(error.message);
+      return;
+    }
+
+    const wasEditing = !!editingId;
+    fecharModal();
+    await fetchProfessores();
+    setSuccessMessage(wasEditing ? "Professor atualizado com sucesso!" : "Professor cadastrado com sucesso!");
+    setTimeout(() => setSuccessMessage(null), 3000);
+  }
+
+  const inputClass =
+    "w-full px-3 py-2.5 rounded-lg bg-black border border-zinc-800 text-sm text-white placeholder:text-zinc-600 outline-none focus:border-zinc-600 transition-colors";
+  const labelClass = "block text-xs text-zinc-500 mb-1.5";
 
   return (
     <div className="flex h-screen bg-black text-white overflow-hidden">
@@ -265,6 +358,7 @@ export default function GestaoProfessoresPage() {
             </div>
             <button
               type="button"
+              onClick={() => setIsModalOpen(true)}
               className="inline-flex items-center justify-center gap-2 px-4 py-2.5 rounded-lg bg-white text-black text-sm font-medium hover:bg-zinc-200 transition-colors shrink-0"
             >
               <UserPlus className="w-4 h-4" />
@@ -327,8 +421,9 @@ export default function GestaoProfessoresPage() {
             <div className="px-6 py-4 border-b border-zinc-800 flex items-center justify-between">
               <h2 className="text-sm font-semibold text-white">Corpo Docente</h2>
               <span className="text-xs text-zinc-500">
-                {professoresFiltrados.length} registro
-                {professoresFiltrados.length !== 1 ? "s" : ""}
+                {isLoading
+                  ? "Carregando..."
+                  : `${professoresFiltrados.length} registro${professoresFiltrados.length !== 1 ? "s" : ""}`}
               </span>
             </div>
 
@@ -354,13 +449,25 @@ export default function GestaoProfessoresPage() {
                     <th className="px-6 py-3.5 text-xs font-medium text-zinc-500 uppercase tracking-widest">
                       Status
                     </th>
+                    <th className="px-6 py-3.5 text-xs font-medium text-zinc-500 uppercase tracking-widest text-right">
+                      Ações
+                    </th>
                   </tr>
                 </thead>
                 <tbody>
-                  {professoresFiltrados.length === 0 ? (
+                  {isLoading ? (
                     <tr>
                       <td
-                        colSpan={6}
+                        colSpan={7}
+                        className="px-6 py-16 text-center text-sm text-zinc-500"
+                      >
+                        Carregando professores...
+                      </td>
+                    </tr>
+                  ) : professoresFiltrados.length === 0 ? (
+                    <tr>
+                      <td
+                        colSpan={7}
                         className="px-6 py-12 text-center text-sm text-zinc-500"
                       >
                         Nenhum professor encontrado com os filtros aplicados.
@@ -369,7 +476,7 @@ export default function GestaoProfessoresPage() {
                   ) : (
                     professoresFiltrados.map((prof) => (
                       <tr
-                        key={prof.matricula}
+                        key={prof.id || prof.matricula}
                         onClick={() => abrirProntuario(prof)}
                         className="border-b border-zinc-800 last:border-b-0 hover:bg-zinc-900/40 transition-colors cursor-pointer"
                       >
@@ -391,14 +498,37 @@ export default function GestaoProfessoresPage() {
                         </td>
                         <td className="px-4 py-4 text-sm text-zinc-400">{prof.area}</td>
                         <td className="px-4 py-4 text-sm text-zinc-400">
-                          {prof.cargaHoraria}
+                          {prof.cargaHoraria}h/semana
                         </td>
                         <td className="px-6 py-4">
                           <span
-                            className={`inline-flex items-center px-2.5 py-0.5 rounded-md text-xs font-medium border ${statusBadge[prof.status]}`}
+                            className={`inline-flex items-center px-2.5 py-0.5 rounded-md text-xs font-medium border ${
+                              statusBadge[prof.status] ??
+                              "bg-zinc-900 text-zinc-400 border-zinc-800"
+                            }`}
                           >
                             {prof.status}
                           </span>
+                        </td>
+                        <td className="px-6 py-4">
+                          <div className="flex items-center justify-end gap-2">
+                            <button
+                              type="button"
+                              onClick={(e) => { e.stopPropagation(); handleEdit(prof); }}
+                              className="p-1.5 rounded-md text-zinc-500 hover:text-blue-500 hover:bg-zinc-800 transition-colors"
+                              aria-label="Editar professor"
+                            >
+                              <Pencil className="w-3.5 h-3.5" />
+                            </button>
+                            <button
+                              type="button"
+                              onClick={(e) => { e.stopPropagation(); setItemToDelete(prof.id); }}
+                              className="p-1.5 rounded-md text-zinc-500 hover:text-red-500 hover:bg-zinc-800 transition-colors"
+                              aria-label="Excluir professor"
+                            >
+                              <Trash2 className="w-3.5 h-3.5" />
+                            </button>
+                          </div>
                         </td>
                       </tr>
                     ))
@@ -483,7 +613,7 @@ export default function GestaoProfessoresPage() {
                       <Campo label="Área de atuação" valor={professorSelecionado.area} />
                       <Campo
                         label="Carga horária"
-                        valor={professorSelecionado.cargaHoraria}
+                        valor={`${professorSelecionado.cargaHoraria}h/semana`}
                       />
                       <Campo label="E-mail institucional" valor={professorSelecionado.email} />
                       <Campo label="Status" valor={professorSelecionado.status} />
@@ -624,6 +754,199 @@ export default function GestaoProfessoresPage() {
             </>
           )}
         </aside>
+
+        {/* Modal Cadastro */}
+        {isModalOpen && (
+          <div className="fixed inset-0 z-[60] flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm">
+            <div
+              role="dialog"
+              aria-modal="true"
+              aria-labelledby="modal-novo-professor-titulo"
+              className="bg-zinc-950 border border-zinc-800 rounded-lg p-6 w-full max-w-lg max-h-[90vh] overflow-y-auto shadow-2xl"
+            >
+              <div className="flex items-start justify-between gap-4 mb-6">
+                <div>
+                  <h2
+                    id="modal-novo-professor-titulo"
+                    className="text-lg font-semibold text-white tracking-tight"
+                  >
+                    {editingId ? "Editar Professor" : "Cadastrar Novo Professor"}
+                  </h2>
+                  <p className="text-sm text-zinc-500 mt-1">
+                    {editingId
+                      ? "Atualize os dados do professor abaixo."
+                      : "O status será definido automaticamente como Ativo pelo sistema."}
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  onClick={fecharModal}
+                  className="p-2 rounded-lg text-zinc-500 hover:text-white hover:bg-zinc-900 transition-colors shrink-0"
+                  aria-label="Fechar modal"
+                >
+                  <X className="w-4 h-4" />
+                </button>
+              </div>
+
+              <form
+                onSubmit={(e) => {
+                  e.preventDefault();
+                  void salvarProfessor();
+                }}
+                className="space-y-4"
+              >
+                <div>
+                  <label className={labelClass} htmlFor="prof-matricula">
+                    Matrícula
+                  </label>
+                  <input
+                    id="prof-matricula"
+                    type="text"
+                    required
+                    value={formData.matricula}
+                    onChange={(e) => atualizarCampo("matricula", e.target.value)}
+                    className={inputClass}
+                    placeholder="Ex: 9012"
+                  />
+                </div>
+
+                <div>
+                  <label className={labelClass} htmlFor="prof-nome">
+                    Nome
+                  </label>
+                  <input
+                    id="prof-nome"
+                    type="text"
+                    required
+                    value={formData.nome}
+                    onChange={(e) => atualizarCampo("nome", e.target.value)}
+                    className={inputClass}
+                    placeholder="Nome completo do professor"
+                  />
+                </div>
+
+                <div>
+                  <label className={labelClass} htmlFor="prof-titulacao">
+                    Titulação
+                  </label>
+                  <select
+                    id="prof-titulacao"
+                    required
+                    value={formData.titulacao}
+                    onChange={(e) =>
+                      atualizarCampo("titulacao", e.target.value as Titulacao)
+                    }
+                    className={inputClass}
+                  >
+                    {titulacoes.map((tit) => (
+                      <option key={tit} value={tit}>
+                        {tit}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
+                <div>
+                  <label className={labelClass} htmlFor="prof-area">
+                    Área de Atuação
+                  </label>
+                  <input
+                    id="prof-area"
+                    type="text"
+                    required
+                    value={formData.area}
+                    onChange={(e) => atualizarCampo("area", e.target.value)}
+                    className={inputClass}
+                    placeholder="Ex: Engenharia de Software"
+                  />
+                </div>
+
+                <div>
+                  <label className={labelClass} htmlFor="prof-carga">
+                    Carga Horária (h/semana)
+                  </label>
+                  <input
+                    id="prof-carga"
+                    type="number"
+                    required
+                    min={1}
+                    max={80}
+                    value={formData.cargaHoraria}
+                    onChange={(e) => atualizarCampo("cargaHoraria", e.target.value)}
+                    className={inputClass}
+                    placeholder="Ex: 20"
+                  />
+                </div>
+
+                {formError && (
+                  <p className="text-sm text-red-400 bg-red-950/40 border border-red-900/50 rounded-lg px-3 py-2">
+                    {formError}
+                  </p>
+                )}
+
+                <div className="flex flex-col-reverse sm:flex-row sm:justify-end gap-3 pt-2 border-t border-zinc-800">
+                  <button
+                    type="button"
+                    onClick={fecharModal}
+                    disabled={isSubmitting}
+                    className="px-4 py-2.5 rounded-lg border border-zinc-700 text-sm font-medium text-zinc-300 hover:bg-zinc-900 hover:text-white transition-colors disabled:opacity-50"
+                  >
+                    Cancelar
+                  </button>
+                  <button
+                    type="submit"
+                    disabled={isSubmitting}
+                    className="px-4 py-2.5 rounded-lg bg-white text-black text-sm font-medium hover:bg-zinc-200 transition-colors disabled:opacity-50"
+                  >
+                    {isSubmitting ? "Salvando..." : editingId ? "Atualizar Professor" : "Salvar Professor"}
+                  </button>
+                </div>
+              </form>
+            </div>
+          </div>
+        )}
+        {/* Modal Confirmação de Exclusão */}
+        {itemToDelete && (
+          <div className="fixed inset-0 z-[70] flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm">
+            <div className="bg-zinc-900 border border-zinc-800 rounded-xl p-6 w-full max-w-md shadow-2xl">
+              <div className="flex flex-col items-center text-center gap-4">
+                <div className="w-12 h-12 rounded-full bg-red-950/60 border border-red-900/50 flex items-center justify-center">
+                  <AlertTriangle className="w-6 h-6 text-red-500" />
+                </div>
+                <div>
+                  <h3 className="text-lg font-semibold text-white">Confirmar Exclusão</h3>
+                  <p className="text-sm text-zinc-400 mt-1">
+                    Esta ação é irreversível. O professor será removido permanentemente do sistema.
+                  </p>
+                </div>
+                <div className="flex gap-3 w-full mt-2">
+                  <button
+                    type="button"
+                    onClick={() => setItemToDelete(null)}
+                    className="flex-1 px-4 py-2.5 rounded-lg bg-zinc-800 hover:bg-zinc-700 text-white text-sm font-medium transition-colors"
+                  >
+                    Cancelar
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => void confirmDelete()}
+                    className="flex-1 px-4 py-2.5 rounded-lg bg-red-600 hover:bg-red-700 text-white text-sm font-medium transition-colors"
+                  >
+                    Sim, Excluir
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Toast de Sucesso */}
+        {successMessage && (
+          <div className="fixed bottom-4 right-4 z-[80] flex items-center gap-2 bg-emerald-600 text-white px-4 py-3 rounded-lg shadow-lg">
+            <CheckCircle2 className="w-4 h-4 shrink-0" />
+            <span className="text-sm font-medium">{successMessage}</span>
+          </div>
+        )}
       </main>
     </div>
   );
