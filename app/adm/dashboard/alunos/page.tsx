@@ -62,21 +62,6 @@ const statusBadge: Record<string, string> = {
 
 const abas: AbaProntuario[] = ["Cadastral", "Acadêmico", "Insights de IA"];
 
-const cursosOpcoes = [
-  "Análise e Desenvolvimento de Sistemas",
-  "Engenharia de Software",
-  "Ciência da Computação",
-  "Sistemas de Informação",
-  "Banco de Dados",
-  "Redes de Computadores",
-  "Segurança da Informação (Defesa Cibernética)",
-  "Inteligência Artificial",
-  "Jogos Digitais",
-  "Gestão da Tecnologia da Informação",
-  "Internet das Coisas (IoT)",
-  "Computação na Nuvem",
-];
-
 function iniciaisDe(nome: string) {
   return nome
     .split(" ")
@@ -113,12 +98,13 @@ export default function GestaoAlunosPage() {
   const [itemToDelete, setItemToDelete] = useState<string | null>(null);
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
 
-  const [busca, setBusca] = useState("");
-  const [filtroCurso, setFiltroCurso] = useState("todos");
-  const [filtroStatus, setFiltroStatus] = useState("todos");
+  const [searchTerm, setSearchTerm] = useState("");
+  const [filterCurso, setFilterCurso] = useState("Todos");
+  const [filterStatus, setFilterStatus] = useState("Todos");
   const [alunoSelecionado, setAlunoSelecionado] = useState<Aluno | null>(null);
   const [drawerAberto, setDrawerAberto] = useState(false);
   const [abaAtiva, setAbaAtiva] = useState<AbaProntuario>("Cadastral");
+  const [cursosAtivos, setCursosAtivos] = useState<string[]>([]);
 
   async function fetchAlunos() {
     setIsLoading(true);
@@ -136,8 +122,33 @@ export default function GestaoAlunosPage() {
     setIsLoading(false);
   }
 
+  async function fetchCursosAtivos() {
+    const { data, error } = await supabase
+      .from("turmas")
+      .select("curso")
+      .eq("status", "Aberta");
+
+    if (error) {
+      console.error("Erro ao buscar cursos ativos:", error.message);
+      setCursosAtivos([]);
+      return;
+    }
+
+    if (data) {
+      const cursosUnicos = Array.from(
+        new Set(
+          data
+            .map((t) => t.curso)
+            .filter((curso): curso is string => Boolean(curso))
+        )
+      ).sort();
+      setCursosAtivos(cursosUnicos);
+    }
+  }
+
   useEffect(() => {
     fetchAlunos();
+    fetchCursosAtivos();
   }, []);
 
   const cursosUnicos = useMemo(
@@ -145,19 +156,35 @@ export default function GestaoAlunosPage() {
     [alunos]
   );
 
+  const cursosNoFormulario = useMemo(() => {
+    if (formData.curso && !cursosAtivos.includes(formData.curso)) {
+      return [...cursosAtivos, formData.curso].sort();
+    }
+    return cursosAtivos;
+  }, [cursosAtivos, formData.curso]);
+
   const alunosFiltrados = useMemo(() => {
-    const termo = busca.trim().toLowerCase();
+    const termo = searchTerm.trim().toLowerCase();
+
     return alunos.filter((aluno) => {
       const matchBusca =
         !termo ||
         aluno.nome.toLowerCase().includes(termo) ||
-        aluno.ra.toLowerCase().includes(termo) ||
-        aluno.curso.toLowerCase().includes(termo);
-      const matchCurso = filtroCurso === "todos" || aluno.curso === filtroCurso;
-      const matchStatus = filtroStatus === "todos" || aluno.status === filtroStatus;
+        aluno.ra.toLowerCase().includes(termo);
+
+      const matchCurso =
+        !filterCurso ||
+        filterCurso === "Todos" ||
+        aluno.curso === filterCurso;
+
+      const matchStatus =
+        !filterStatus ||
+        filterStatus === "Todos" ||
+        aluno.status === filterStatus;
+
       return matchBusca && matchCurso && matchStatus;
     });
-  }, [alunos, busca, filtroCurso, filtroStatus]);
+  }, [alunos, searchTerm, filterCurso, filterStatus]);
 
   function abrirProntuario(aluno: Aluno) {
     setAlunoSelecionado(aluno);
@@ -345,9 +372,9 @@ export default function GestaoAlunosPage() {
                 <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-zinc-500" />
                 <input
                   type="text"
-                  value={busca}
-                  onChange={(e) => setBusca(e.target.value)}
-                  placeholder="Buscar por nome..."
+                  value={searchTerm}
+                  onChange={(e) => setSearchTerm(e.target.value)}
+                  placeholder="Buscar por nome ou RA..."
                   className="w-full pl-10 pr-4 py-2.5 rounded-lg bg-zinc-900 border border-zinc-800 text-sm text-white placeholder:text-zinc-500 outline-none focus:border-zinc-600 transition-colors"
                 />
               </div>
@@ -356,11 +383,11 @@ export default function GestaoAlunosPage() {
                 <div className="relative min-w-[220px]">
                   <Filter className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-zinc-500 pointer-events-none" />
                   <select
-                    value={filtroCurso}
-                    onChange={(e) => setFiltroCurso(e.target.value)}
+                    value={filterCurso}
+                    onChange={(e) => setFilterCurso(e.target.value)}
                     className="w-full appearance-none pl-10 pr-8 py-2.5 rounded-lg bg-zinc-900 border border-zinc-800 text-sm text-white outline-none focus:border-zinc-600 transition-colors"
                   >
-                    <option value="todos">Todos os cursos</option>
+                    <option value="Todos">Todos</option>
                     {cursosUnicos.map((curso) => (
                       <option key={curso} value={curso}>
                         {curso}
@@ -372,11 +399,11 @@ export default function GestaoAlunosPage() {
                 <div className="relative min-w-[160px]">
                   <Filter className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-zinc-500 pointer-events-none" />
                   <select
-                    value={filtroStatus}
-                    onChange={(e) => setFiltroStatus(e.target.value)}
+                    value={filterStatus}
+                    onChange={(e) => setFilterStatus(e.target.value)}
                     className="w-full appearance-none pl-10 pr-8 py-2.5 rounded-lg bg-zinc-900 border border-zinc-800 text-sm text-white outline-none focus:border-zinc-600 transition-colors"
                   >
-                    <option value="todos">Todos os status</option>
+                    <option value="Todos">Todos</option>
                     <option value="Ativo">Ativo</option>
                     <option value="Trancado">Trancado</option>
                     <option value="Evadido">Evadido</option>
@@ -751,21 +778,24 @@ export default function GestaoAlunosPage() {
                   <label className={labelClass} htmlFor="curso">
                     Curso
                   </label>
-                  <input
+                  <select
                     id="curso"
-                    type="text"
                     required
                     value={formData.curso}
                     onChange={(e) => atualizarCampo("curso", e.target.value)}
                     className={inputClass}
-                    placeholder="Ex: Engenharia de Software"
-                    list="cursos-sugeridos"
-                  />
-                  <datalist id="cursos-sugeridos">
-                    {cursosOpcoes.map((curso) => (
-                      <option key={curso} value={curso} />
+                  >
+                    <option value="" disabled>
+                      {cursosAtivos.length === 0
+                        ? "Nenhum curso com turma aberta"
+                        : "Selecione o curso"}
+                    </option>
+                    {cursosNoFormulario.map((curso) => (
+                      <option key={curso} value={curso}>
+                        {curso}
+                      </option>
                     ))}
-                  </datalist>
+                  </select>
                 </div>
                 <div>
                   <label className={labelClass} htmlFor="semestre">

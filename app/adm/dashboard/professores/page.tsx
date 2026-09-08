@@ -36,6 +36,7 @@ type Professor = {
   id: string;
   matricula: string;
   nome: string;
+  cpf: string;
   titulacao: Titulacao;
   area: string;
   cargaHoraria: number;
@@ -104,6 +105,7 @@ function mapProfessor(row: Record<string, unknown>): Professor {
     id: String(row.id ?? ""),
     matricula: String(row.matricula ?? "—"),
     nome,
+    cpf: String(row.cpf ?? ""),
     titulacao: (String(row.titulacao ?? "Especialista")) as Titulacao,
     area: String(row.area_atuacao ?? row.area ?? "—"),
     cargaHoraria: Number(row.carga_horaria_semanal ?? row.carga_horaria ?? 0),
@@ -126,9 +128,9 @@ export default function GestaoProfessoresPage() {
   const [itemToDelete, setItemToDelete] = useState<string | null>(null);
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
 
-  const [busca, setBusca] = useState("");
-  const [filtroArea, setFiltroArea] = useState("todos");
-  const [filtroTitulacao, setFiltroTitulacao] = useState("todos");
+  const [searchTerm, setSearchTerm] = useState("");
+  const [filterTitulacao, setFilterTitulacao] = useState("Todas");
+  const [filterStatus, setFilterStatus] = useState("Todos");
   const [professorSelecionado, setProfessorSelecionado] = useState<Professor | null>(null);
   const [drawerAberto, setDrawerAberto] = useState(false);
   const [abaAtiva, setAbaAtiva] = useState<AbaProntuario>("Alocação");
@@ -153,28 +155,28 @@ export default function GestaoProfessoresPage() {
     fetchProfessores();
   }, []);
 
-  const areasUnicas = useMemo(
-    () =>
-      Array.from(
-        new Set(professores.map((p) => p.area).filter((a) => a && a !== "—"))
-      ).sort(),
-    [professores]
-  );
-
   const professoresFiltrados = useMemo(() => {
-    const termo = busca.trim().toLowerCase();
-    return professores.filter((prof) => {
+    const termo = searchTerm.trim().toLowerCase();
+
+    return professores.filter((professor) => {
       const matchBusca =
         !termo ||
-        prof.nome.toLowerCase().includes(termo) ||
-        prof.matricula.includes(termo) ||
-        prof.area.toLowerCase().includes(termo);
-      const matchArea = filtroArea === "todos" || prof.area === filtroArea;
+        professor.nome.toLowerCase().includes(termo) ||
+        professor.cpf.toLowerCase().includes(termo);
+
       const matchTitulacao =
-        filtroTitulacao === "todos" || prof.titulacao === filtroTitulacao;
-      return matchBusca && matchArea && matchTitulacao;
+        !filterTitulacao ||
+        filterTitulacao === "Todas" ||
+        professor.titulacao === filterTitulacao;
+
+      const matchStatus =
+        !filterStatus ||
+        filterStatus === "Todos" ||
+        professor.status === filterStatus;
+
+      return matchBusca && matchTitulacao && matchStatus;
     });
-  }, [professores, busca, filtroArea, filtroTitulacao]);
+  }, [professores, searchTerm, filterTitulacao, filterStatus]);
 
   function abrirProntuario(professor: Professor) {
     setProfessorSelecionado(professor);
@@ -373,43 +375,41 @@ export default function GestaoProfessoresPage() {
                 <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-zinc-500" />
                 <input
                   type="text"
-                  value={busca}
-                  onChange={(e) => setBusca(e.target.value)}
-                  placeholder="Buscar por nome ou matrícula..."
+                  value={searchTerm}
+                  onChange={(e) => setSearchTerm(e.target.value)}
+                  placeholder="Buscar por nome ou CPF..."
                   className="w-full pl-10 pr-4 py-2.5 rounded-lg bg-zinc-900 border border-zinc-800 text-sm text-white placeholder:text-zinc-500 outline-none focus:border-zinc-600 transition-colors"
                 />
               </div>
 
               <div className="flex flex-col sm:flex-row gap-3 sm:items-center">
-                <div className="relative min-w-[200px]">
-                  <Filter className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-zinc-500 pointer-events-none" />
-                  <select
-                    value={filtroArea}
-                    onChange={(e) => setFiltroArea(e.target.value)}
-                    className="w-full appearance-none pl-10 pr-8 py-2.5 rounded-lg bg-zinc-900 border border-zinc-800 text-sm text-white outline-none focus:border-zinc-600 transition-colors"
-                  >
-                    <option value="todos">Todas as áreas</option>
-                    {areasUnicas.map((area) => (
-                      <option key={area} value={area}>
-                        {area}
-                      </option>
-                    ))}
-                  </select>
-                </div>
-
                 <div className="relative min-w-[180px]">
                   <Filter className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-zinc-500 pointer-events-none" />
                   <select
-                    value={filtroTitulacao}
-                    onChange={(e) => setFiltroTitulacao(e.target.value)}
+                    value={filterTitulacao}
+                    onChange={(e) => setFilterTitulacao(e.target.value)}
                     className="w-full appearance-none pl-10 pr-8 py-2.5 rounded-lg bg-zinc-900 border border-zinc-800 text-sm text-white outline-none focus:border-zinc-600 transition-colors"
                   >
-                    <option value="todos">Todas as titulações</option>
+                    <option value="Todas">Todas</option>
                     {titulacoes.map((tit) => (
                       <option key={tit} value={tit}>
                         {tit}
                       </option>
                     ))}
+                  </select>
+                </div>
+
+                <div className="relative min-w-[160px]">
+                  <Filter className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-zinc-500 pointer-events-none" />
+                  <select
+                    value={filterStatus}
+                    onChange={(e) => setFilterStatus(e.target.value)}
+                    className="w-full appearance-none pl-10 pr-8 py-2.5 rounded-lg bg-zinc-900 border border-zinc-800 text-sm text-white outline-none focus:border-zinc-600 transition-colors"
+                  >
+                    <option value="Todos">Todos</option>
+                    <option value="Ativo">Ativo</option>
+                    <option value="Licença">Licença</option>
+                    <option value="Inativo">Inativo</option>
                   </select>
                 </div>
               </div>

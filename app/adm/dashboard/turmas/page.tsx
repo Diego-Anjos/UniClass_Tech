@@ -140,9 +140,9 @@ export default function TurmasMatriculasPage() {
   const [itemToDelete, setItemToDelete] = useState<string | null>(null);
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
 
-  const [busca, setBusca] = useState("");
-  const [filtroTurno, setFiltroTurno] = useState("todos");
-  const [filtroStatus, setFiltroStatus] = useState("todos");
+  const [searchTerm, setSearchTerm] = useState("");
+  const [filterTurno, setFilterTurno] = useState("Todos");
+  const [filterStatus, setFilterStatus] = useState("Todos");
   const [turmaSelecionada, setTurmaSelecionada] = useState<Turma | null>(null);
   const [drawerAberto, setDrawerAberto] = useState(false);
   const [abaAtiva, setAbaAtiva] = useState<AbaTurma>("Disciplinas & Professores");
@@ -171,17 +171,27 @@ export default function TurmasMatriculasPage() {
   }, []);
 
   const turmasFiltradas = useMemo(() => {
-    const termo = busca.trim().toLowerCase();
+    const termo = searchTerm.trim().toLowerCase();
+
     return turmas.filter((turma) => {
       const matchBusca =
         !termo ||
         turma.codigo.toLowerCase().includes(termo) ||
         turma.curso.toLowerCase().includes(termo);
-      const matchTurno = filtroTurno === "todos" || turma.turno === filtroTurno;
-      const matchStatus = filtroStatus === "todos" || turma.status === filtroStatus;
+
+      const matchTurno =
+        !filterTurno ||
+        filterTurno === "Todos" ||
+        turma.turno === filterTurno;
+
+      const matchStatus =
+        !filterStatus ||
+        filterStatus === "Todos" ||
+        turma.status === filterStatus;
+
       return matchBusca && matchTurno && matchStatus;
     });
-  }, [turmas, busca, filtroTurno, filtroStatus]);
+  }, [turmas, searchTerm, filterTurno, filterStatus]);
 
   async function gerarInsightIA(turma: Turma) {
     setAiInsight(null);
@@ -393,8 +403,8 @@ export default function TurmasMatriculasPage() {
                 <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-zinc-500" />
                 <input
                   type="text"
-                  value={busca}
-                  onChange={(e) => setBusca(e.target.value)}
+                  value={searchTerm}
+                  onChange={(e) => setSearchTerm(e.target.value)}
                   placeholder="Buscar por código da turma ou curso..."
                   className="w-full pl-10 pr-4 py-2.5 rounded-lg bg-zinc-900 border border-zinc-800 text-sm text-white placeholder:text-zinc-500 outline-none focus:border-zinc-600 transition-colors"
                 />
@@ -404,11 +414,11 @@ export default function TurmasMatriculasPage() {
                 <div className="relative min-w-[160px]">
                   <Filter className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-zinc-500 pointer-events-none" />
                   <select
-                    value={filtroTurno}
-                    onChange={(e) => setFiltroTurno(e.target.value)}
+                    value={filterTurno}
+                    onChange={(e) => setFilterTurno(e.target.value)}
                     className="w-full appearance-none pl-10 pr-8 py-2.5 rounded-lg bg-zinc-900 border border-zinc-800 text-sm text-white outline-none focus:border-zinc-600 transition-colors"
                   >
-                    <option value="todos">Todos os turnos</option>
+                    <option value="Todos">Todos</option>
                     <option value="Manhã">Manhã</option>
                     <option value="Noite">Noite</option>
                   </select>
@@ -417,11 +427,11 @@ export default function TurmasMatriculasPage() {
                 <div className="relative min-w-[180px]">
                   <Filter className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-zinc-500 pointer-events-none" />
                   <select
-                    value={filtroStatus}
-                    onChange={(e) => setFiltroStatus(e.target.value)}
+                    value={filterStatus}
+                    onChange={(e) => setFilterStatus(e.target.value)}
                     className="w-full appearance-none pl-10 pr-8 py-2.5 rounded-lg bg-zinc-900 border border-zinc-800 text-sm text-white outline-none focus:border-zinc-600 transition-colors"
                   >
-                    <option value="todos">Todos os status</option>
+                    <option value="Todos">Todos</option>
                     <option value="Aberta">Aberta</option>
                     <option value="Em andamento">Em andamento</option>
                     <option value="Fechada">Fechada</option>
