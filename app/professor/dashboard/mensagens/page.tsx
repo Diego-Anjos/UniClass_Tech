@@ -12,11 +12,10 @@ import {
   GraduationCap,
   Search,
   Send,
-  CheckCircle,
-  AlertTriangle,
 } from "lucide-react";
 import { supabase } from "@/lib/supabase";
 import { ProfessorSettingsControl } from "@/components/professor/config-modal";
+import { ModalFeedback } from "@/components/ModalFeedback";
 
 const navItems = [
   { icon: LayoutDashboard, label: "Visão Geral",    href: "/professor/dashboard",            active: false },
@@ -43,13 +42,6 @@ type MensagemInbox = {
   tempo: string;
   naoLida: boolean;
   historico: MensagemHistorico[];
-};
-
-type ModalFeedback = {
-  aberto: boolean;
-  tipo: "sucesso" | "erro" | "aviso" | "atencao";
-  titulo: string;
-  mensagem: string;
 };
 
 const assuntosTemplate = [
@@ -165,9 +157,14 @@ export default function ProfessorMensagensPage() {
   const [respostaTexto, setRespostaTexto] = useState("");
   const [contextoIa, setContextoIa] = useState("");
   const [isLoadingContexto, setIsLoadingContexto] = useState(false);
-  const [modalFeedback, setModalFeedback] = useState<ModalFeedback>({
+  const [modalFeedback, setModalFeedback] = useState<{
+    aberto: boolean;
+    tipo: "sucesso" | "erro" | "atencao";
+    titulo: string;
+    mensagem: string;
+  }>({
     aberto: false,
-    tipo: "aviso",
+    tipo: "sucesso",
     titulo: "",
     mensagem: "",
   });
@@ -188,7 +185,7 @@ export default function ProfessorMensagensPage() {
   );
 
   function mostrarFeedback(
-    tipo: ModalFeedback["tipo"],
+    tipo: "sucesso" | "erro" | "atencao",
     titulo: string,
     mensagem: string
   ) {
@@ -569,54 +566,13 @@ export default function ProfessorMensagensPage() {
         </div>
       </main>
 
-      {modalFeedback.aberto && (
-        <div className="fixed inset-0 z-[70] flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm">
-          <div
-            role="dialog"
-            aria-modal="true"
-            className="bg-zinc-900 border border-zinc-800 rounded-xl p-6 w-full max-w-md shadow-2xl"
-          >
-            <div className="flex flex-col items-center text-center gap-4">
-              <div
-                className={`w-12 h-12 rounded-full border flex items-center justify-center ${
-                  modalFeedback.tipo === "sucesso"
-                    ? "bg-emerald-950/60 border-emerald-900/50"
-                    : modalFeedback.tipo === "erro"
-                      ? "bg-red-950/60 border-red-900/50"
-                      : "bg-amber-950/60 border-amber-900/50"
-                }`}
-              >
-                {modalFeedback.tipo === "sucesso" ? (
-                  <CheckCircle className="w-6 h-6 text-emerald-400" />
-                ) : (
-                  <AlertTriangle
-                    className={`w-6 h-6 ${
-                      modalFeedback.tipo === "erro"
-                        ? "text-red-500"
-                        : "text-amber-400"
-                    }`}
-                  />
-                )}
-              </div>
-              <div>
-                <h3 className="text-lg font-semibold text-white">
-                  {modalFeedback.titulo}
-                </h3>
-                <p className="text-sm text-zinc-400 mt-1">
-                  {modalFeedback.mensagem}
-                </p>
-              </div>
-              <button
-                type="button"
-                onClick={fecharFeedback}
-                className="w-full px-4 py-2.5 rounded-lg bg-zinc-800 hover:bg-zinc-700 text-white text-sm font-medium transition-colors"
-              >
-                Fechar
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
+      <ModalFeedback
+        aberto={modalFeedback.aberto}
+        onClose={fecharFeedback}
+        tipo={modalFeedback.tipo}
+        titulo={modalFeedback.titulo}
+        mensagem={modalFeedback.mensagem}
+      />
     </div>
   );
 }

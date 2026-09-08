@@ -17,6 +17,7 @@ import {
   Plug,
   Database,
 } from "lucide-react";
+import { ModalFeedback } from "@/components/ModalFeedback";
 
 type AbaConfig =
   | "Instituição"
@@ -70,8 +71,22 @@ export default function ConfiguracoesSistemaPage() {
   const [limiteFaltas, setLimiteFaltas] = useState("25");
   const [semestreVigente, setSemestreVigente] = useState("2026.1");
 
-  const [successMessage, setSuccessMessage] = useState<string | null>(null);
+  const [modalFeedback, setModalFeedback] = useState<{
+    aberto: boolean;
+    tipo: "sucesso" | "erro" | "atencao";
+    titulo: string;
+    mensagem: string;
+  }>({
+    aberto: false,
+    tipo: "sucesso",
+    titulo: "",
+    mensagem: "",
+  });
   const [salvando, setSalvando] = useState(false);
+
+  function fecharFeedback() {
+    setModalFeedback((prev) => ({ ...prev, aberto: false }));
+  }
 
   const [logs, setLogs] = useState<LogAuditoria[]>([]);
   const [carregandoLogs, setCarregandoLogs] = useState(false);
@@ -152,12 +167,15 @@ export default function ConfiguracoesSistemaPage() {
       return;
     }
 
-    setSuccessMessage(
-      aba === "Instituição"
-        ? "Dados da instituição salvos com sucesso!"
-        : "Regras acadêmicas atualizadas!"
-    );
-    setTimeout(() => setSuccessMessage(null), 3000);
+    setModalFeedback({
+      aberto: true,
+      tipo: "sucesso",
+      titulo: "Configurações salvas",
+      mensagem:
+        aba === "Instituição"
+          ? "Dados da instituição salvos com sucesso!"
+          : "Regras acadêmicas atualizadas!",
+    });
   }
 
   // Groq e Resend/Google Calendar ficam separados: Groq tem estado próprio
@@ -219,12 +237,21 @@ export default function ConfiguracoesSistemaPage() {
     if (error) {
       console.error("Falha na conexão com Supabase:", error.message);
       setSupabaseStatus("Desconectado");
-      setSuccessMessage("Falha na conexão com o Supabase.");
+      setModalFeedback({
+        aberto: true,
+        tipo: "erro",
+        titulo: "Falha na conexão",
+        mensagem: "Falha na conexão com o Supabase.",
+      });
     } else {
       setSupabaseStatus("Conectado");
-      setSuccessMessage("Conexão com Supabase estável e respondendo!");
+      setModalFeedback({
+        aberto: true,
+        tipo: "sucesso",
+        titulo: "Conexão estabelecida",
+        mensagem: "Conexão com Supabase estável e respondendo!",
+      });
     }
-    setTimeout(() => setSuccessMessage(null), 3000);
   }
 
   async function testarConexaoGroq() {
@@ -233,28 +260,45 @@ export default function ConfiguracoesSistemaPage() {
       const res = await fetch("/api/groq/test");
       if (res.ok) {
         setGroqStatus("Conectado");
-        setSuccessMessage("Conexão com Groq AI estabelecida com sucesso! Llama 3 operacional.");
+        setModalFeedback({
+          aberto: true,
+          tipo: "sucesso",
+          titulo: "Conexão estabelecida",
+          mensagem:
+            "Conexão com Groq AI estabelecida com sucesso! Llama 3 operacional.",
+        });
       } else {
         setGroqStatus("Desconectado");
-        setSuccessMessage("Falha na conexão com a Groq AI. Verifique a chave de API.");
+        setModalFeedback({
+          aberto: true,
+          tipo: "erro",
+          titulo: "Falha na conexão",
+          mensagem:
+            "Falha na conexão com a Groq AI. Verifique a chave de API.",
+        });
       }
     } catch (err) {
       console.error("Erro ao testar Groq:", err);
       setGroqStatus("Desconectado");
-      setSuccessMessage("Falha na conexão com a Groq AI. Verifique a chave de API.");
+      setModalFeedback({
+        aberto: true,
+        tipo: "erro",
+        titulo: "Falha na conexão",
+        mensagem:
+          "Falha na conexão com a Groq AI. Verifique a chave de API.",
+      });
     }
-    setTimeout(() => setSuccessMessage(null), 3000);
   }
 
   return (
     <>
-      {/* Toast de sucesso */}
-      {successMessage && (
-        <div className="fixed bottom-6 right-6 z-50 flex items-center gap-3 px-5 py-3.5 rounded-xl bg-green-950 border border-green-800 text-green-300 text-sm font-medium shadow-xl animate-in fade-in slide-in-from-bottom-4 duration-300">
-          <CheckCircle2 className="w-4 h-4 shrink-0 text-green-400" />
-          {successMessage}
-        </div>
-      )}
+      <ModalFeedback
+        aberto={modalFeedback.aberto}
+        onClose={fecharFeedback}
+        tipo={modalFeedback.tipo}
+        titulo={modalFeedback.titulo}
+        mensagem={modalFeedback.mensagem}
+      />
 
           {/* Header */}
           <div className="mb-8">

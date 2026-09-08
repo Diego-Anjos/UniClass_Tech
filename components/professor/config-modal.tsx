@@ -6,13 +6,13 @@ import {
   Settings,
   X,
   Loader2,
-  CheckCircle,
   Sparkles,
   Scale,
   Bell,
   User,
   LogOut,
 } from "lucide-react";
+import { ModalFeedback } from "@/components/ModalFeedback";
 
 type AbaAtiva = "ia" | "avaliacoes" | "perfil" | "notificacoes";
 type TomIa = "direto" | "pedagogico" | "motivacional";
@@ -57,7 +57,17 @@ export function ProfessorSettingsControl() {
   const [horarioInicio, setHorarioInicio] = useState("08:00");
   const [horarioFim, setHorarioFim] = useState("18:00");
   const [salvando, setSalvando] = useState(false);
-  const [mostrarSucesso, setMostrarSucesso] = useState(false);
+  const [modalFeedback, setModalFeedback] = useState<{
+    aberto: boolean;
+    tipo: "sucesso" | "erro" | "atencao";
+    titulo: string;
+    mensagem: string;
+  }>({
+    aberto: false,
+    tipo: "sucesso",
+    titulo: "",
+    mensagem: "",
+  });
 
   const somaPesos = pesoN1 + pesoN2;
   const pesosValidos = somaPesos === 10;
@@ -66,6 +76,10 @@ export function ProfessorSettingsControl() {
     if (salvando) return;
     setIsConfigOpen(false);
     setAbaAtiva("ia");
+  }
+
+  function fecharFeedback() {
+    setModalFeedback((prev) => ({ ...prev, aberto: false }));
   }
 
   async function handleSalvar() {
@@ -77,13 +91,14 @@ export function ProfessorSettingsControl() {
     setSalvando(true);
     await new Promise((resolve) => setTimeout(resolve, 800));
     setSalvando(false);
-    setMostrarSucesso(true);
-
-    setTimeout(() => {
-      setMostrarSucesso(false);
-      setIsConfigOpen(false);
-      setAbaAtiva("ia");
-    }, 1600);
+    setIsConfigOpen(false);
+    setAbaAtiva("ia");
+    setModalFeedback({
+      aberto: true,
+      tipo: "sucesso",
+      titulo: "Preferências salvas",
+      mensagem: "Preferências salvas com sucesso!",
+    });
   }
 
   function handleLogout() {
@@ -508,18 +523,16 @@ export function ProfessorSettingsControl() {
               </div>
             </div>
           </div>
-
-          {/* Toast / confirmação */}
-          {mostrarSucesso && (
-            <div className="fixed bottom-6 left-1/2 -translate-x-1/2 z-[60] flex items-center gap-2.5 rounded-xl border border-emerald-900/50 bg-emerald-950/90 px-4 py-3 shadow-2xl backdrop-blur-sm">
-              <CheckCircle className="w-4 h-4 text-emerald-400 shrink-0" />
-              <p className="text-sm font-medium text-emerald-100">
-                Preferências salvas com sucesso!
-              </p>
-            </div>
-          )}
         </div>
       )}
+
+      <ModalFeedback
+        aberto={modalFeedback.aberto}
+        onClose={fecharFeedback}
+        tipo={modalFeedback.tipo}
+        titulo={modalFeedback.titulo}
+        mensagem={modalFeedback.mensagem}
+      />
     </>
   );
 }

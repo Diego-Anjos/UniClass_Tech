@@ -14,10 +14,10 @@ import {
   AlertTriangle,
   Pencil,
   Trash2,
-  CheckCircle,
   Users,
 } from "lucide-react";
 import { supabase } from "@/lib/supabase";
+import { ModalFeedback } from "@/components/ModalFeedback";
 
 type Turno = "Manhã" | "Noite";
 type StatusTurma = "Aberta" | "Em andamento" | "Fechada";
@@ -121,7 +121,17 @@ export default function TurmasMatriculasPage() {
   const [formData, setFormData] = useState<FormDataTurma>(formInicial);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [itemToDelete, setItemToDelete] = useState<string | null>(null);
-  const [successMessage, setSuccessMessage] = useState<string | null>(null);
+  const [modalFeedback, setModalFeedback] = useState<{
+    aberto: boolean;
+    tipo: "sucesso" | "erro" | "atencao";
+    titulo: string;
+    mensagem: string;
+  }>({
+    aberto: false,
+    tipo: "sucesso",
+    titulo: "",
+    mensagem: "",
+  });
 
   const [searchTerm, setSearchTerm] = useState("");
   const [filterTurno, setFilterTurno] = useState("Todos");
@@ -132,6 +142,10 @@ export default function TurmasMatriculasPage() {
 
   const [aiInsight, setAiInsight] = useState<string | null>(null);
   const [isGeneratingInsight, setIsGeneratingInsight] = useState(false);
+
+  function fecharFeedback() {
+    setModalFeedback((prev) => ({ ...prev, aberto: false }));
+  }
 
   async function fetchTurmas() {
     setIsLoading(true);
@@ -279,8 +293,14 @@ export default function TurmasMatriculasPage() {
     const wasEditing = !!editingId;
     fecharModal();
     await fetchTurmas();
-    setSuccessMessage(wasEditing ? "Turma atualizada com sucesso!" : "Turma criada com sucesso!");
-    setTimeout(() => setSuccessMessage(null), 3000);
+    setModalFeedback({
+      aberto: true,
+      tipo: "sucesso",
+      titulo: wasEditing ? "Turma atualizada" : "Turma criada",
+      mensagem: wasEditing
+        ? "Turma atualizada com sucesso!"
+        : "Turma criada com sucesso!",
+    });
   }
 
   const inputClass =
@@ -916,13 +936,13 @@ export default function TurmasMatriculasPage() {
           </div>
         )}
 
-        {/* Toast de Sucesso */}
-        {successMessage && (
-          <div className="fixed bottom-4 right-4 z-[80] flex items-center gap-2 bg-emerald-600 text-white px-4 py-3 rounded-lg shadow-lg">
-            <CheckCircle className="w-4 h-4 shrink-0" />
-            <span className="text-sm font-medium">{successMessage}</span>
-          </div>
-        )}
+        <ModalFeedback
+          aberto={modalFeedback.aberto}
+          onClose={fecharFeedback}
+          tipo={modalFeedback.tipo}
+          titulo={modalFeedback.titulo}
+          mensagem={modalFeedback.mensagem}
+        />
       </div>
     </>
   );

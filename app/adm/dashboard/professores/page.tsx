@@ -19,9 +19,10 @@ import {
   AlertTriangle,
 } from "lucide-react";
 import { supabase } from "@/lib/supabase";
+import { ModalFeedback } from "@/components/ModalFeedback";
 
 type StatusProfessor = "Ativo" | "Licença" | "Inativo";
-type Titulacao = "Especialista" | "Mestre" | "Doutor";
+type Titulacao = "Especialista" | "Mestre(a)" | "Doutor(a)";
 type AbaProntuario = "Alocação" | "Conformidade" | "Insights de IA";
 
 type Professor = {
@@ -47,6 +48,13 @@ type FormDataProfessor = {
   cargaHoraria: string;
 };
 
+type TurmaDisponivel = {
+  id: string;
+  codigo: string;
+  curso: string;
+  turno: string;
+};
+
 const formInicial: FormDataProfessor = {
   matricula: "",
   nome: "",
@@ -61,7 +69,15 @@ const statusBadge: Record<StatusProfessor, string> = {
   Inativo: "bg-red-950 text-red-400 border-red-900/50",
 };
 
-const titulacoes: Titulacao[] = ["Especialista", "Mestre", "Doutor"];
+const titulacoes: Titulacao[] = ["Especialista", "Mestre(a)", "Doutor(a)"];
+
+function normalizarTitulacao(valor: string): Titulacao {
+  const v = valor.trim();
+  if (v === "Mestre" || v === "Mestre(a)" || v === "Mestre / Mestra") return "Mestre(a)";
+  if (v === "Doutor" || v === "Doutor(a)") return "Doutor(a)";
+  if (v === "Especialista") return "Especialista";
+  return "Especialista";
+}
 const abas: AbaProntuario[] = ["Alocação", "Conformidade", "Insights de IA"];
 
 function iniciaisDe(nome: string) {
@@ -80,7 +96,7 @@ function mapProfessor(row: Record<string, unknown>): Professor {
     matricula: String(row.matricula ?? "—"),
     nome,
     cpf: String(row.cpf ?? ""),
-    titulacao: (String(row.titulacao ?? "Especialista")) as Titulacao,
+    titulacao: normalizarTitulacao(String(row.titulacao ?? "Especialista")),
     area: String(row.area_atuacao ?? row.area ?? "—"),
     cargaHoraria: Number(row.carga_horaria_semanal ?? row.carga_horaria ?? 0),
     status: (String(row.status ?? "Ativo")) as StatusProfessor,
@@ -100,7 +116,18 @@ export default function GestaoProfessoresPage() {
   const [formData, setFormData] = useState<FormDataProfessor>(formInicial);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [itemToDelete, setItemToDelete] = useState<string | null>(null);
-  const [successMessage, setSuccessMessage] = useState<string | null>(null);
+  const [turmasDisponiveis, setTurmasDisponiveis] = useState<TurmaDisponivel[]>([]);
+  const [modalFeedback, setModalFeedback] = useState<{
+    aberto: boolean;
+    tipo: "sucesso" | "erro" | "atencao";
+    titulo: string;
+    mensagem: string;
+  }>({
+    aberto: false,
+    tipo: "sucesso",
+    titulo: "",
+    mensagem: "",
+  });
 
   const [searchTerm, setSearchTerm] = useState("");
   const [filterTitulacao, setFilterTitulacao] = useState("Todas");
@@ -125,8 +152,34 @@ export default function GestaoProfessoresPage() {
     setIsLoading(false);
   }
 
+  async function fetchTurmasDisponiveis() {
+    const { data, error } = await supabase
+      .from("turmas")
+      .select("id, codigo, curso, turno");
+
+    if (error) {
+      console.error("Erro ao buscar turmas:", error.message);
+      setTurmasDisponiveis([]);
+      return;
+    }
+
+    if (data && data.length > 0) {
+      setTurmasDisponiveis(
+        data.map((t) => ({
+          id: String(t.id),
+          codigo: String(t.codigo ?? "—"),
+          curso: String(t.curso ?? "—"),
+          turno: String(t.turno ?? "—"),
+        }))
+      );
+    } else {
+      setTurmasDisponiveis([]);
+    }
+  }
+
   useEffect(() => {
-    fetchProfessores();
+    void fetchProfessores();
+    void fetchTurmasDisponiveis();
   }, []);
 
   const professoresFiltrados = useMemo(() => {
@@ -177,6 +230,18 @@ export default function GestaoProfessoresPage() {
     setEditingId(null);
   }
 
+  function abrirFeedback(
+    tipo: "sucesso" | "erro" | "atencao",
+    titulo: string,
+    mensagem: string
+  ) {
+    setModalFeedback({ aberto: true, tipo, titulo, mensagem });
+  }
+
+  function fecharFeedback() {
+    setModalFeedback((prev) => ({ ...prev, aberto: false }));
+  }
+
   async function confirmDelete() {
     if (!itemToDelete) return;
     const { error } = await supabase.from("professores").delete().eq("id", itemToDelete);
@@ -194,10 +259,11 @@ export default function GestaoProfessoresPage() {
       matricula: prof.matricula,
       nome: prof.nome,
       titulacao: prof.titulacao,
-      area: prof.area,
+      area: prof.area === "—" ? "" : prof.area,
       cargaHoraria: String(prof.cargaHoraria),
     });
     setEditingId(prof.id);
+    void fetchTurmasDisponiveis();
     setIsModalOpen(true);
   }
 
@@ -228,6 +294,7 @@ export default function GestaoProfessoresPage() {
       area_atuacao: area,
       carga_horaria_semanal: cargaHoraria,
     };
+
     const { error } = editingId
       ? await supabase.from("professores").update(payload).eq("id", editingId)
       : await supabase.from("professores").insert(payload);
@@ -242,8 +309,13 @@ export default function GestaoProfessoresPage() {
     const wasEditing = !!editingId;
     fecharModal();
     await fetchProfessores();
-    setSuccessMessage(wasEditing ? "Professor atualizado com sucesso!" : "Professor cadastrado com sucesso!");
-    setTimeout(() => setSuccessMessage(null), 3000);
+    abrirFeedback(
+      "sucesso",
+      wasEditing ? "Professor Atualizado" : "Professor Cadastrado",
+      wasEditing
+        ? "Os dados do professor foram atualizados com sucesso."
+        : "O professor foi cadastrado e a turma/curso foi atribuída com sucesso."
+    );
   }
 
   const inputClass =
@@ -265,7 +337,10 @@ export default function GestaoProfessoresPage() {
             </div>
             <button
               type="button"
-              onClick={() => setIsModalOpen(true)}
+              onClick={() => {
+                void fetchTurmasDisponiveis();
+                setIsModalOpen(true);
+              }}
               className="inline-flex items-center justify-center gap-2 px-4 py-2.5 rounded-lg bg-white text-black text-sm font-medium hover:bg-zinc-200 transition-colors shrink-0"
             >
               <UserPlus className="w-4 h-4" />
@@ -752,17 +827,32 @@ export default function GestaoProfessoresPage() {
 
                 <div>
                   <label className={labelClass} htmlFor="prof-area">
-                    Área de Atuação
+                    Área de Atuação (Curso / Turma)
                   </label>
-                  <input
+                  <select
                     id="prof-area"
-                    type="text"
                     required
                     value={formData.area}
                     onChange={(e) => atualizarCampo("area", e.target.value)}
                     className={inputClass}
-                    placeholder="Ex: Engenharia de Software"
-                  />
+                  >
+                    <option value="">Selecione o curso / turma atribuída...</option>
+                    {turmasDisponiveis.length === 0 ? (
+                      <option value="" disabled>
+                        Nenhuma turma cadastrada. Crie uma turma primeiro.
+                      </option>
+                    ) : (
+                      turmasDisponiveis.map((t) => (
+                        <option key={t.id} value={t.curso}>
+                          {t.curso} ({t.codigo} - {t.turno})
+                        </option>
+                      ))
+                    )}
+                    {formData.area &&
+                      !turmasDisponiveis.some((t) => t.curso === formData.area) && (
+                        <option value={formData.area}>{formData.area}</option>
+                      )}
+                  </select>
                 </div>
 
                 <div>
@@ -844,13 +934,13 @@ export default function GestaoProfessoresPage() {
           </div>
         )}
 
-        {/* Toast de Sucesso */}
-        {successMessage && (
-          <div className="fixed bottom-4 right-4 z-[80] flex items-center gap-2 bg-emerald-600 text-white px-4 py-3 rounded-lg shadow-lg">
-            <CheckCircle2 className="w-4 h-4 shrink-0" />
-            <span className="text-sm font-medium">{successMessage}</span>
-          </div>
-        )}
+        <ModalFeedback
+          aberto={modalFeedback.aberto}
+          onClose={fecharFeedback}
+          tipo={modalFeedback.tipo}
+          titulo={modalFeedback.titulo}
+          mensagem={modalFeedback.mensagem}
+        />
       </div>
     </>
   );
