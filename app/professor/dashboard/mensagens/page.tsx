@@ -1,5 +1,6 @@
 "use client";
 
+import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import {
   LayoutDashboard,
@@ -9,10 +10,13 @@ import {
   MessageSquare,
   LogOut,
   GraduationCap,
-  Settings,
   Search,
   Send,
+  CheckCircle,
+  AlertTriangle,
 } from "lucide-react";
+import { supabase } from "@/lib/supabase";
+import { ProfessorSettingsControl } from "@/components/professor/config-modal";
 
 const navItems = [
   { icon: LayoutDashboard, label: "Visão Geral",    href: "/professor/dashboard",            active: false },
@@ -22,34 +26,308 @@ const navItems = [
   { icon: MessageSquare,   label: "Mensagens",      href: "/professor/dashboard/mensagens",  active: true  },
 ];
 
-const mensagens = [
-  {
-    iniciais: "JS",
-    nome: "João Silva",
-    assunto: "Dúvida sobre a nota da N1",
-    tempo: "Há 2 horas",
-    ativa: true,
-    naoLida: true,
-  },
-  {
-    iniciais: "MO",
-    nome: "Maria Oliveira",
-    assunto: "Justificativa de falta",
-    tempo: "Há 1 dia",
-    ativa: false,
-    naoLida: false,
-  },
-  {
-    iniciais: "CS",
-    nome: "Carlos Souza",
-    assunto: "Material complementar",
-    tempo: "Há 2 dias",
-    ativa: false,
-    naoLida: false,
-  },
+type MensagemHistorico = {
+  id: string;
+  autor: "aluno" | "professor";
+  texto: string;
+  horario: string;
+};
+
+type MensagemInbox = {
+  id: string;
+  alunoNome: string;
+  alunoRa: string;
+  turmaNome: string;
+  assunto: string;
+  conteudo: string;
+  tempo: string;
+  naoLida: boolean;
+  historico: MensagemHistorico[];
+};
+
+type ModalFeedback = {
+  aberto: boolean;
+  tipo: "sucesso" | "erro" | "aviso" | "atencao";
+  titulo: string;
+  mensagem: string;
+};
+
+const assuntosTemplate = [
+  "Dúvida sobre a nota da N1",
+  "Justificativa de falta",
+  "Material complementar",
+  "Esclarecimento sobre o trabalho",
+  "Prazo de entrega da atividade",
 ];
 
+const conteudosTemplate = [
+  (nome: string) =>
+    `Olá professor, sou ${nome}. Notei uma divergência no lançamento da minha nota e gostaria de confirmar se está tudo correto no sistema.`,
+  (nome: string) =>
+    `Professor, ${nome} aqui. Precisei ausentar-me da última aula por motivos de saúde. Há como justificar a falta e receber o material?`,
+  (nome: string) =>
+    `Bom dia, professor. ${nome} solicitando indicação de material complementar para reforçar os tópicos da última prova.`,
+  (nome: string) =>
+    `Professor, ${nome} com dúvida sobre o enunciado do trabalho. Poderia esclarecer o critério de avaliação da parte prática?`,
+  (nome: string) =>
+    `Olá professor, ${nome} gostaria de confirmar se ainda é possível entregar a atividade com atraso e quais as condições.`,
+];
+
+function iniciaisDoNome(nome: string) {
+  return nome
+    .split(" ")
+    .filter(Boolean)
+    .slice(0, 2)
+    .map((parte) => parte[0]?.toUpperCase() ?? "")
+    .join("");
+}
+
+function hashId(id: string) {
+  let hash = 0;
+  for (let i = 0; i < id.length; i++) {
+    hash = (hash * 31 + id.charCodeAt(i)) >>> 0;
+  }
+  return hash;
+}
+
+function tempoRelativo(indice: number) {
+  if (indice === 0) return "Há 2 horas";
+  if (indice === 1) return "Há 1 dia";
+  return `Há ${indice + 1} dias`;
+}
+
+function gerarMensagensDeAlunos(
+  alunos: Array<{ id: string; nome: string; ra?: string; matricula?: string }>
+): MensagemInbox[] {
+  return alunos.map((aluno, index) => {
+    const id = String(aluno.id);
+    const nome = String(aluno.nome ?? "Aluno");
+    const ra = String(aluno.ra || aluno.matricula || "RA-");
+    const templateIdx = hashId(id) % assuntosTemplate.length;
+    const assunto = assuntosTemplate[templateIdx];
+    const conteudo = conteudosTemplate[templateIdx](nome);
+    const turmaNome = "Turma Ativa";
+
+    return {
+      id: `msg-${id}`,
+      alunoNome: nome,
+      alunoRa: ra,
+      turmaNome,
+      assunto,
+      conteudo,
+      tempo: tempoRelativo(index),
+      naoLida: index < 2,
+      historico: [
+        {
+          id: `h-${id}-1`,
+          autor: "aluno",
+          texto: conteudo,
+          horario: tempoRelativo(index),
+        },
+      ],
+    };
+  });
+}
+
+function mapearMensagensSupabase(rows: Record<string, unknown>[]): MensagemInbox[] {
+  return rows.map((row, index) => {
+    const id = String(row.id ?? `msg-${index}`);
+    const alunoNome = String(row.aluno_nome ?? row.alunoNome ?? row.nome ?? "Aluno");
+    const assunto = String(row.assunto ?? "Mensagem");
+    const conteudo = String(row.conteudo ?? row.mensagem ?? row.texto ?? "");
+    return {
+      id,
+      alunoNome,
+      alunoRa: String(row.ra ?? row.matricula ?? "RA-"),
+      turmaNome: String(row.turma_nome ?? row.turmaNome ?? row.turma ?? "Turma"),
+      assunto,
+      conteudo,
+      tempo: String(row.tempo ?? tempoRelativo(index)),
+      naoLida: Boolean(row.nao_lida ?? row.naoLida ?? index === 0),
+      historico: [
+        {
+          id: `${id}-orig`,
+          autor: "aluno" as const,
+          texto: conteudo,
+          horario: String(row.tempo ?? tempoRelativo(index)),
+        },
+      ],
+    };
+  });
+}
+
 export default function ProfessorMensagensPage() {
+  const [busca, setBusca] = useState("");
+  const [mensagens, setMensagens] = useState<MensagemInbox[]>([]);
+  const [mensagemSelecionadaId, setMensagemSelecionadaId] = useState<string | null>(
+    null
+  );
+  const [respostaTexto, setRespostaTexto] = useState("");
+  const [contextoIa, setContextoIa] = useState("");
+  const [isLoadingContexto, setIsLoadingContexto] = useState(false);
+  const [modalFeedback, setModalFeedback] = useState<ModalFeedback>({
+    aberto: false,
+    tipo: "aviso",
+    titulo: "",
+    mensagem: "",
+  });
+
+  const mensagensFiltradas = useMemo(() => {
+    const termo = busca.trim().toLowerCase();
+    if (!termo) return mensagens;
+    return mensagens.filter(
+      (m) =>
+        m.alunoNome.toLowerCase().includes(termo) ||
+        m.assunto.toLowerCase().includes(termo)
+    );
+  }, [mensagens, busca]);
+
+  const conversaAtiva = useMemo(
+    () => mensagens.find((m) => m.id === mensagemSelecionadaId) ?? null,
+    [mensagens, mensagemSelecionadaId]
+  );
+
+  function mostrarFeedback(
+    tipo: ModalFeedback["tipo"],
+    titulo: string,
+    mensagem: string
+  ) {
+    setModalFeedback({ aberto: true, tipo, titulo, mensagem });
+  }
+
+  function fecharFeedback() {
+    setModalFeedback((prev) => ({ ...prev, aberto: false }));
+  }
+
+  async function fetchContextoIa(conversa: MensagemInbox) {
+    setIsLoadingContexto(true);
+    try {
+      const response = await fetch("/api/insights/mensagem-contexto", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          alunoNome: conversa.alunoNome,
+          turmaNome: conversa.turmaNome,
+          assunto: conversa.assunto,
+          conteudo: conversa.conteudo,
+        }),
+      });
+
+      const data = await response.json();
+      if (!response.ok) {
+        throw new Error(data.error || "Falha ao gerar contexto da mensagem.");
+      }
+      setContextoIa((data.insight as string) ?? "");
+    } catch (err) {
+      console.error("Erro ao gerar contexto IA:", err);
+      setContextoIa(
+        "Não foi possível gerar o contexto desta conversa no momento."
+      );
+    } finally {
+      setIsLoadingContexto(false);
+    }
+  }
+
+  function selecionarMensagem(id: string) {
+    setMensagemSelecionadaId(id);
+    setRespostaTexto("");
+    setMensagens((prev) =>
+      prev.map((m) => (m.id === id ? { ...m, naoLida: false } : m))
+    );
+  }
+
+  function handleEnviarResposta() {
+    if (!conversaAtiva) return;
+
+    if (!respostaTexto.trim()) {
+      mostrarFeedback(
+        "atencao",
+        "Resposta vazia",
+        "Digite uma resposta antes de enviar."
+      );
+      return;
+    }
+
+    const novaEntrada: MensagemHistorico = {
+      id: `resp-${Date.now()}`,
+      autor: "professor",
+      texto: respostaTexto.trim(),
+      horario: "Agora",
+    };
+
+    setMensagens((prev) =>
+      prev.map((m) =>
+        m.id === conversaAtiva.id
+          ? { ...m, historico: [...m.historico, novaEntrada], naoLida: false }
+          : m
+      )
+    );
+    setRespostaTexto("");
+    mostrarFeedback(
+      "sucesso",
+      "Mensagem Enviada",
+      "Sua resposta foi entregue com sucesso ao aluno."
+    );
+  }
+
+  useEffect(() => {
+    async function carregarMensagens() {
+      const { data: mensagensData, error: mensagensError } = await supabase
+        .from("mensagens")
+        .select("*");
+
+      if (!mensagensError && mensagensData && mensagensData.length > 0) {
+        const lista = mapearMensagensSupabase(
+          mensagensData as Record<string, unknown>[]
+        );
+        setMensagens(lista);
+        setMensagemSelecionadaId(lista[0]?.id ?? null);
+        return;
+      }
+
+      let { data: alunosData, error: alunosError } = await supabase
+        .from("alunos")
+        .select("id, nome, matricula, ra")
+        .order("nome", { ascending: true });
+
+      if (alunosError) {
+        const retry = await supabase
+          .from("alunos")
+          .select("id, nome, ra")
+          .order("nome", { ascending: true });
+
+        if (retry.error) {
+          console.error("Erro ao buscar alunos:", retry.error.message);
+          setMensagens([]);
+          setMensagemSelecionadaId(null);
+          return;
+        }
+        alunosData = retry.data;
+      }
+
+      if (!alunosData || alunosData.length === 0) {
+        setMensagens([]);
+        setMensagemSelecionadaId(null);
+        return;
+      }
+
+      const geradas = gerarMensagensDeAlunos(alunosData);
+      setMensagens(geradas);
+      setMensagemSelecionadaId(geradas[0]?.id ?? null);
+    }
+
+    void carregarMensagens();
+  }, []);
+
+  useEffect(() => {
+    if (!conversaAtiva) {
+      setContextoIa("");
+      return;
+    }
+    void fetchContextoIa(conversaAtiva);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [mensagemSelecionadaId]);
+
   return (
     <div className="flex h-screen bg-black text-white overflow-hidden">
       {/* ══════════════════════════════
@@ -79,9 +357,7 @@ export default function ProfessorMensagensPage() {
                 <p className="text-xs text-zinc-500">Dep. de Tecnologia</p>
               </div>
             </div>
-            <Link href="#" className="text-zinc-500 hover:text-white transition-colors shrink-0">
-              <Settings className="w-4 h-4" />
-            </Link>
+            <ProfessorSettingsControl />
           </div>
         </div>
 
@@ -155,91 +431,192 @@ export default function ProfessorMensagensPage() {
                 <Search className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-zinc-500" />
                 <input
                   type="text"
+                  value={busca}
+                  onChange={(e) => setBusca(e.target.value)}
                   placeholder="Buscar aluno ou assunto..."
                   className="w-full h-9 bg-zinc-950 border border-zinc-800 rounded-lg pl-9 pr-3 text-sm text-white placeholder:text-zinc-600 focus:outline-none focus:ring-1 focus:ring-zinc-500"
                 />
               </div>
 
               <div className="flex-1 overflow-y-auto flex flex-col gap-2 pb-2">
-                {mensagens.map((msg) => (
-                  <button
-                    key={msg.nome}
-                    type="button"
-                    className={`w-full text-left rounded-lg border p-3.5 transition-colors ${
-                      msg.ativa
-                        ? "bg-zinc-900 border-zinc-700"
-                        : "bg-transparent border-transparent hover:bg-zinc-900/50"
-                    }`}
-                  >
-                    <div className="flex items-start justify-between gap-2 mb-1">
-                      <p className="text-sm font-medium text-white truncate">{msg.nome}</p>
-                      <span className="text-[11px] text-zinc-500 shrink-0">{msg.tempo}</span>
-                    </div>
-                    <div className="flex items-center gap-2">
-                      <p className={`text-xs truncate ${msg.naoLida ? "text-zinc-200" : "text-zinc-500"}`}>
-                        {msg.assunto}
-                      </p>
-                      {msg.naoLida && (
-                        <span className="w-1.5 h-1.5 rounded-full bg-blue-500 shrink-0" />
-                      )}
-                    </div>
-                  </button>
-                ))}
+                {mensagensFiltradas.length === 0 ? (
+                  <p className="text-sm text-zinc-500 px-2 py-6 text-center">
+                    Nenhuma mensagem encontrada.
+                  </p>
+                ) : (
+                  mensagensFiltradas.map((msg) => (
+                    <button
+                      key={msg.id}
+                      type="button"
+                      onClick={() => selecionarMensagem(msg.id)}
+                      className={`w-full text-left rounded-lg border p-3.5 transition-colors ${
+                        msg.id === mensagemSelecionadaId
+                          ? "bg-zinc-900 border-zinc-700"
+                          : "bg-transparent border-transparent hover:bg-zinc-900/50"
+                      }`}
+                    >
+                      <div className="flex items-start justify-between gap-2 mb-1">
+                        <p className="text-sm font-medium text-white truncate">
+                          {msg.alunoNome}
+                        </p>
+                        <span className="text-[11px] text-zinc-500 shrink-0">
+                          {msg.tempo}
+                        </span>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <p
+                          className={`text-xs truncate ${
+                            msg.naoLida ? "text-zinc-200" : "text-zinc-500"
+                          }`}
+                        >
+                          {msg.assunto}
+                        </p>
+                        {msg.naoLida && (
+                          <span className="w-1.5 h-1.5 rounded-full bg-blue-500 shrink-0" />
+                        )}
+                      </div>
+                    </button>
+                  ))
+                )}
               </div>
             </div>
 
             {/* Detalhe e Resposta */}
             <div className="w-full md:w-2/3 pl-0 md:pl-4 pt-6 md:pt-0 flex flex-col gap-4 min-h-0 overflow-hidden">
-              <div className="border-b border-zinc-800 pb-4 shrink-0">
-                <div className="flex items-center gap-3">
-                  <div className="w-10 h-10 rounded-full bg-zinc-800 flex items-center justify-center text-sm font-semibold text-white shrink-0">
-                    JS
-                  </div>
-                  <div className="min-w-0">
-                    <p className="text-sm font-medium text-white">João Silva</p>
-                    <p className="text-xs text-zinc-500">
-                      RA 12345678 · Turma Banco de Dados
-                    </p>
-                  </div>
-                </div>
-              </div>
-
-              <div className="bg-indigo-950/30 border border-indigo-900/50 rounded-md p-3 flex gap-3 shrink-0">
-                <Sparkles className="w-4 h-4 text-indigo-300 shrink-0 mt-0.5" />
-                <p className="text-xs text-zinc-400 leading-relaxed">
-                  Contexto IA: João tirou 7.5 na N1, entregou todas as atividades contínuas e possui 100% de presença.
-                </p>
-              </div>
-
-              <div className="flex-1 overflow-y-auto min-h-0">
-                <div className="bg-zinc-900 rounded-lg p-4">
-                  <p className="text-sm text-zinc-300 leading-relaxed">
-                    Olá professor, notei que a minha nota da N1 no sistema está como 7.5, mas no trabalho prático eu havia tirado nota máxima. Poderia verificar se houve algum erro de digitação?
+              {!conversaAtiva ? (
+                <div className="flex-1 flex items-center justify-center">
+                  <p className="text-sm text-zinc-500 text-center px-4">
+                    Selecione uma mensagem para visualizar e responder.
                   </p>
                 </div>
-              </div>
+              ) : (
+                <>
+                  <div className="border-b border-zinc-800 pb-4 shrink-0">
+                    <div className="flex items-center gap-3">
+                      <div className="w-10 h-10 rounded-full bg-zinc-800 flex items-center justify-center text-sm font-semibold text-white shrink-0">
+                        {iniciaisDoNome(conversaAtiva.alunoNome)}
+                      </div>
+                      <div className="min-w-0">
+                        <p className="text-sm font-medium text-white">
+                          {conversaAtiva.alunoNome}
+                        </p>
+                        <p className="text-xs text-zinc-500">
+                          RA {conversaAtiva.alunoRa} · {conversaAtiva.turmaNome}
+                        </p>
+                      </div>
+                    </div>
+                  </div>
 
-              <div className="shrink-0 flex flex-col gap-3">
-                <textarea
-                  rows={3}
-                  placeholder="Escreva sua resposta para João..."
-                  className="w-full resize-none bg-black border border-zinc-800 rounded-lg px-3 py-2.5 text-sm text-white placeholder:text-zinc-600 focus:outline-none focus:ring-1 focus:ring-zinc-500"
-                />
-                <div className="flex justify-end">
-                  <button
-                    type="button"
-                    className="inline-flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium bg-white text-black hover:bg-zinc-200 transition-colors"
-                  >
-                    <Send className="w-4 h-4" />
-                    Enviar Resposta
-                  </button>
-                </div>
-              </div>
+                  <div className="bg-indigo-950/30 border border-indigo-900/50 rounded-md p-3 flex gap-3 shrink-0">
+                    <Sparkles className="w-4 h-4 text-indigo-300 shrink-0 mt-0.5" />
+                    <p
+                      className={`text-xs text-zinc-400 leading-relaxed ${
+                        isLoadingContexto ? "animate-pulse" : ""
+                      }`}
+                    >
+                      {isLoadingContexto
+                        ? "IA analisando histórico do aluno..."
+                        : `Contexto IA: ${contextoIa}`}
+                    </p>
+                  </div>
+
+                  <div className="flex-1 overflow-y-auto min-h-0 flex flex-col gap-3">
+                    {conversaAtiva.historico.map((item) => (
+                      <div
+                        key={item.id}
+                        className={`rounded-lg p-4 ${
+                          item.autor === "professor"
+                            ? "bg-zinc-800/80 ml-8"
+                            : "bg-zinc-900 mr-8"
+                        }`}
+                      >
+                        <p className="text-[11px] text-zinc-500 mb-1.5">
+                          {item.autor === "professor" ? "Você" : conversaAtiva.alunoNome}
+                          {" · "}
+                          {item.horario}
+                        </p>
+                        <p className="text-sm text-zinc-300 leading-relaxed">
+                          {item.texto}
+                        </p>
+                      </div>
+                    ))}
+                  </div>
+
+                  <div className="shrink-0 flex flex-col gap-3">
+                    <textarea
+                      rows={3}
+                      value={respostaTexto}
+                      onChange={(e) => setRespostaTexto(e.target.value)}
+                      placeholder={`Escreva sua resposta para ${conversaAtiva.alunoNome.split(" ")[0]}...`}
+                      className="w-full resize-none bg-black border border-zinc-800 rounded-lg px-3 py-2.5 text-sm text-white placeholder:text-zinc-600 focus:outline-none focus:ring-1 focus:ring-zinc-500"
+                    />
+                    <div className="flex justify-end">
+                      <button
+                        type="button"
+                        onClick={handleEnviarResposta}
+                        className="inline-flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium bg-white text-black hover:bg-zinc-200 transition-colors"
+                      >
+                        <Send className="w-4 h-4" />
+                        Enviar Resposta
+                      </button>
+                    </div>
+                  </div>
+                </>
+              )}
             </div>
 
           </div>
         </div>
       </main>
+
+      {modalFeedback.aberto && (
+        <div className="fixed inset-0 z-[70] flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm">
+          <div
+            role="dialog"
+            aria-modal="true"
+            className="bg-zinc-900 border border-zinc-800 rounded-xl p-6 w-full max-w-md shadow-2xl"
+          >
+            <div className="flex flex-col items-center text-center gap-4">
+              <div
+                className={`w-12 h-12 rounded-full border flex items-center justify-center ${
+                  modalFeedback.tipo === "sucesso"
+                    ? "bg-emerald-950/60 border-emerald-900/50"
+                    : modalFeedback.tipo === "erro"
+                      ? "bg-red-950/60 border-red-900/50"
+                      : "bg-amber-950/60 border-amber-900/50"
+                }`}
+              >
+                {modalFeedback.tipo === "sucesso" ? (
+                  <CheckCircle className="w-6 h-6 text-emerald-400" />
+                ) : (
+                  <AlertTriangle
+                    className={`w-6 h-6 ${
+                      modalFeedback.tipo === "erro"
+                        ? "text-red-500"
+                        : "text-amber-400"
+                    }`}
+                  />
+                )}
+              </div>
+              <div>
+                <h3 className="text-lg font-semibold text-white">
+                  {modalFeedback.titulo}
+                </h3>
+                <p className="text-sm text-zinc-400 mt-1">
+                  {modalFeedback.mensagem}
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={fecharFeedback}
+                className="w-full px-4 py-2.5 rounded-lg bg-zinc-800 hover:bg-zinc-700 text-white text-sm font-medium transition-colors"
+              >
+                Fechar
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

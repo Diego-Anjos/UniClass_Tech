@@ -1,56 +1,55 @@
-import Groq from "groq-sdk";
 import { NextRequest, NextResponse } from "next/server";
+import Groq from "groq-sdk";
+
+const groq = new Groq({
+  apiKey: process.env.GROQ_API_KEY,
+});
 
 export async function POST(req: NextRequest) {
-  // Guard: chave de API deve existir como variável de servidor (nunca NEXT_PUBLIC_)
-  if (!process.env.GROQ_API_KEY) {
-    console.error("[/api/insights] GROQ_API_KEY não definida no ambiente.");
-    return NextResponse.json(
-      { error: "Configuração de servidor incompleta: chave da Groq ausente." },
-      { status: 503 }
-    );
-  }
-
   try {
-    const { curso, capacidade, ocupacao } = await req.json();
+    const { context, turmasAtivas } = await req.json();
 
-    if (!curso || capacidade === undefined || ocupacao === undefined) {
-      return NextResponse.json(
-        { error: "Campos obrigatórios ausentes: curso, capacidade, ocupacao." },
-        { status: 400 }
-      );
+    const mensagens = [
+      {
+        role: "system",
+        content: "Você é um assistente acadêmico virtual da plataforma UniClassTech. Você fornece dicas úteis, curtas e profissionais para professores. Seja direto e não use formatação markdown especial, apenas texto limpo."
+      },
+      {
+        role: "user",
+        content: `Gere uma análise motivacional ou dica de gestão em exatas DUAS frases curtas para o ${context}, considerando que ele possui ${turmasAtivas} turma(s) ativa(s) no momento.`
+      }
+    ];
+
+    let completion;
+
+    try {
+      // Tentativa 1: Modelo Primário
+      completion = await groq.chat.completions.create({
+        messages: mensagens,
+        model: "openai/gpt-oss-20b",
+        temperature: 0.7,
+        max_tokens: 150,
+      });
+    } catch (erroPrimario: any) {
+      console.warn("Falha no modelo primário (openai/gpt-oss-20b):", erroPrimario.message || erroPrimario);
+      
+      // Tentativa 2: Modelo de Redundância
+      completion = await groq.chat.completions.create({
+        messages: mensagens,
+        model: "llama-3.1-8b-instant",
+        temperature: 0.7,
+        max_tokens: 150,
+      });
     }
 
-    const groq = new Groq({ apiKey: process.env.GROQ_API_KEY });
-
-    const completion = await groq.chat.completions.create({
-      model: "llama3-8b-8192",
-      messages: [
-        {
-          role: "system",
-          content:
-            "Você é um assistente de gestão acadêmica. Analise os dados da turma. " +
-            "Seja direto, profissional e gere no máximo 2 frases em português sugerindo " +
-            "uma ação (ex: abrir mais vagas, fundir turmas ou focar em retenção). " +
-            "Não use saudações.",
-        },
-        {
-          role: "user",
-          content: `Curso: ${curso}, Ocupação: ${ocupacao} de ${capacidade} vagas.`,
-        },
-      ],
-      temperature: 0.6,
-      max_tokens: 150,
-    });
-
-    const insight =
-      completion.choices?.[0]?.message?.content?.trim() ??
-      "Não foi possível gerar uma análise no momento.";
-
+    const insight = completion?.choices[0]?.message?.content || "Sua rotina acadêmica está organizada. Tenha um ótimo dia de aulas!";
+    
     return NextResponse.json({ insight });
-  } catch (err: unknown) {
-    const message = err instanceof Error ? err.message : "Erro interno do servidor.";
-    console.error("[/api/insights] Erro:", message);
-    return NextResponse.json({ error: message }, { status: 500 });
+  } catch (error) {
+    console.error("Erro crítico na API do Groq (ambos os modelos falharam):", error);
+    return NextResponse.json(
+      { error: "Falha ao gerar o insight da IA." },
+      { status: 500 }
+    );
   }
 }

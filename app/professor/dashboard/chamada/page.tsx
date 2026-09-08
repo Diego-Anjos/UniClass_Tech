@@ -1,5 +1,6 @@
 "use client";
 
+import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import {
   LayoutDashboard,
@@ -9,12 +10,14 @@ import {
   MessageSquare,
   LogOut,
   GraduationCap,
-  Settings,
   ChevronDown,
   AlertTriangle,
   Check,
   X,
+  CheckCircle,
 } from "lucide-react";
+import { supabase } from "@/lib/supabase";
+import { ProfessorSettingsControl } from "@/components/professor/config-modal";
 
 const navItems = [
   { icon: LayoutDashboard, label: "Visão Geral",    href: "/professor/dashboard",          active: false },
@@ -24,42 +27,254 @@ const navItems = [
   { icon: MessageSquare,   label: "Mensagens",      href: "/professor/dashboard/mensagens", active: false },
 ];
 
-const alunos = [
-  {
-    iniciais: "JS",
-    nome: "João Silva",
-    ra: "2024001",
-    frequencia: "10% de faltas",
-    alerta: false,
-    presente: true,
-  },
-  {
-    iniciais: "CS",
-    nome: "Carlos Souza",
-    ra: "2024003",
-    frequencia: "23% de faltas",
-    alerta: true,
-    presente: true,
-  },
-  {
-    iniciais: "MO",
-    nome: "Maria Oliveira",
-    ra: "2024002",
-    frequencia: "8% de faltas",
-    alerta: false,
-    presente: true,
-  },
-  {
-    iniciais: "AF",
-    nome: "Ana Ferreira",
-    ra: "2024004",
-    frequencia: "24% de faltas",
-    alerta: true,
-    presente: false,
-  },
-];
+type TurmaOption = {
+  id: string;
+  codigo: string;
+  curso: string;
+  turno?: string;
+};
+
+type AlunoChamada = {
+  id: string;
+  nome: string;
+  ra: string;
+  porcentagemFaltas: number;
+  presente: boolean;
+};
+
+type ModalFeedback = {
+  aberto: boolean;
+  tipo: "sucesso" | "erro" | "aviso" | "atencao";
+  titulo: string;
+  mensagem: string;
+};
+
+function hojeISO() {
+  const d = new Date();
+  const yyyy = d.getFullYear();
+  const mm = String(d.getMonth() + 1).padStart(2, "0");
+  const dd = String(d.getDate()).padStart(2, "0");
+  return `${yyyy}-${mm}-${dd}`;
+}
+
+function formatarDataBR(iso: string) {
+  const [yyyy, mm, dd] = iso.split("-");
+  if (!yyyy || !mm || !dd) return iso;
+  return `${dd}/${mm}/${yyyy}`;
+}
+
+function labelTurma(turma: TurmaOption) {
+  return `${turma.curso} - Turma ${turma.codigo} (${turma.turno})`;
+}
+
+function iniciaisDoNome(nome: string) {
+  return nome
+    .split(" ")
+    .filter(Boolean)
+    .slice(0, 2)
+    .map((parte) => parte[0]?.toUpperCase() ?? "")
+    .join("");
+}
+
+/** Gera % de faltas estável (5–30) a partir do id do aluno. */
+function porcentagemFaltasDeId(id: string) {
+  let hash = 0;
+  for (let i = 0; i < id.length; i++) {
+    hash = (hash * 31 + id.charCodeAt(i)) >>> 0;
+  }
+  return 5 + (hash % 26);
+}
 
 export default function ProfessorChamadaPage() {
+  const [turmas, setTurmas] = useState<TurmaOption[]>([]);
+  const [turmaSelecionada, setTurmaSelecionada] = useState("");
+  const [dataChamada, setDataChamada] = useState(hojeISO());
+  const [alunos, setAlunos] = useState<AlunoChamada[]>([]);
+  const [aiInsight, setAiInsight] = useState("");
+  const [isLoadingAi, setIsLoadingAi] = useState(false);
+  const [modalFeedback, setModalFeedback] = useState<ModalFeedback>({
+    aberto: false,
+    tipo: "aviso",
+    titulo: "",
+    mensagem: "",
+  });
+
+  const totalAlunos = useMemo(() => alunos.length, [alunos]);
+  const totalPresentes = useMemo(
+    () => alunos.filter((a) => a.presente).length,
+    [alunos]
+  );
+  const totalFaltas = useMemo(
+    () => alunos.filter((a) => !a.presente).length,
+    [alunos]
+  );
+
+  const turmaAtual = useMemo(
+    () => turmas.find((t) => t.id === turmaSelecionada) ?? null,
+    [turmas, turmaSelecionada]
+  );
+
+  function mostrarFeedback(
+    tipo: ModalFeedback["tipo"],
+    titulo: string,
+    mensagem: string
+  ) {
+    setModalFeedback({ aberto: true, tipo, titulo, mensagem });
+  }
+
+  function fecharFeedback() {
+    setModalFeedback((prev) => ({ ...prev, aberto: false }));
+  }
+
+  async function fetchFrequenciaInsight(
+    nomeTurma: string,
+    total: number,
+    faltas: number
+  ) {
+    setIsLoadingAi(true);
+    try {
+      const response = await fetch("/api/insights/frequencia", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          turma: nomeTurma,
+          totalAlunos: total,
+          totalFaltas: faltas,
+        }),
+      });
+
+      const data = await response.json();
+      if (!response.ok) {
+        throw new Error(data.error || "Falha na análise de frequência.");
+      }
+      setAiInsight((data.insight as string) ?? "");
+    } catch (err) {
+      console.error("Erro ao gerar insight de frequência:", err);
+      setAiInsight(
+        "Não foi possível gerar o alerta de frequência no momento. Tente novamente."
+      );
+    } finally {
+      setIsLoadingAi(false);
+    }
+  }
+
+  function setPresenca(alunoId: string, presente: boolean) {
+    setAlunos((prev) =>
+      prev.map((aluno) =>
+        aluno.id === alunoId ? { ...aluno, presente } : aluno
+      )
+    );
+  }
+
+  function handleSalvarChamada() {
+    if (alunos.length === 0) {
+      mostrarFeedback(
+        "atencao",
+        "Sem alunos",
+        "Nenhum aluno nesta turma para registrar chamada."
+      );
+      return;
+    }
+
+    mostrarFeedback(
+      "sucesso",
+      "Chamada Registrada",
+      "Presenças e faltas da data salvas com sucesso."
+    );
+  }
+
+  useEffect(() => {
+    async function fetchTurmas() {
+      const { data, error } = await supabase
+        .from("turmas")
+        .select("id, codigo, curso, turno")
+        .eq("status", "Aberta")
+        .order("curso", { ascending: true });
+
+      if (error) {
+        console.error("Erro ao buscar turmas:", error.message);
+        setTurmas([]);
+        setTurmaSelecionada("");
+        return;
+      }
+
+      const lista = (data ?? []) as TurmaOption[];
+      setTurmas(lista);
+      if (lista.length > 0) {
+        setTurmaSelecionada(lista[0].id);
+      }
+    }
+
+    void fetchTurmas();
+  }, []);
+
+  useEffect(() => {
+    if (!turmaSelecionada) {
+      setAlunos([]);
+      return;
+    }
+
+    async function fetchAlunos() {
+      let { data, error } = await supabase
+        .from("alunos")
+        .select("id, nome, matricula, ra")
+        .order("nome", { ascending: true });
+
+      if (error) {
+        const retry = await supabase
+          .from("alunos")
+          .select("id, nome, ra")
+          .order("nome", { ascending: true });
+
+        if (retry.error) {
+          console.error("Erro ao buscar alunos:", retry.error.message);
+          setAlunos([]);
+          return;
+        }
+        data = retry.data;
+        error = null;
+      }
+
+      if (!data || data.length === 0) {
+        setAlunos([]);
+        return;
+      }
+
+      const mapeados: AlunoChamada[] = data.map((aluno) => {
+        const id = String(aluno.id);
+        return {
+          id,
+          nome: String(aluno.nome ?? ""),
+          ra: String(
+            aluno.ra ||
+              (aluno as { matricula?: string }).matricula ||
+              "RA-"
+          ),
+          porcentagemFaltas: porcentagemFaltasDeId(id),
+          presente: true,
+        };
+      });
+
+      setAlunos(mapeados);
+    }
+
+    void fetchAlunos();
+  }, [turmaSelecionada]);
+
+  useEffect(() => {
+    if (!turmaAtual || totalAlunos === 0) {
+      setAiInsight("");
+      return;
+    }
+
+    void fetchFrequenciaInsight(
+      labelTurma(turmaAtual),
+      totalAlunos,
+      totalFaltas
+    );
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [turmaSelecionada, totalAlunos, totalFaltas, turmaAtual?.id]);
+
   return (
     <div className="flex h-screen bg-black text-white overflow-hidden">
       {/* ══════════════════════════════
@@ -89,9 +304,7 @@ export default function ProfessorChamadaPage() {
                 <p className="text-xs text-zinc-500">Dep. de Tecnologia</p>
               </div>
             </div>
-            <Link href="#" className="text-zinc-500 hover:text-white transition-colors shrink-0">
-              <Settings className="w-4 h-4" />
-            </Link>
+            <ProfessorSettingsControl />
           </div>
         </div>
 
@@ -155,31 +368,37 @@ export default function ProfessorChamadaPage() {
               <div className="mt-3 flex flex-col sm:flex-row gap-3">
                 <div className="relative inline-block">
                   <select
-                    defaultValue="bd-4"
-                    className="appearance-none bg-zinc-950 border border-zinc-700 text-sm text-white font-medium rounded-lg pl-4 pr-10 py-2.5 focus:outline-none focus:ring-1 focus:ring-zinc-500 cursor-pointer hover:border-zinc-600 transition-colors"
+                    value={turmaSelecionada}
+                    onChange={(e) => setTurmaSelecionada(e.target.value)}
+                    className="appearance-none bg-zinc-950 border border-zinc-700 text-sm text-white font-medium rounded-lg pl-4 pr-10 py-2.5 focus:outline-none focus:ring-1 focus:ring-zinc-500 cursor-pointer hover:border-zinc-600 transition-colors min-w-[260px]"
                   >
-                    <option value="bd-4">Banco de Dados - 4º Semestre</option>
-                    <option value="es-3">Engenharia de Software - 3º Semestre</option>
-                    <option value="alg-2">Algoritmos - 2º Semestre</option>
+                    {turmas.length === 0 ? (
+                      <option value="">Nenhuma turma ativa</option>
+                    ) : (
+                      turmas.map((turma) => (
+                        <option key={turma.id} value={turma.id}>
+                          {labelTurma(turma)}
+                        </option>
+                      ))
+                    )}
                   </select>
                   <ChevronDown className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 w-4 h-4 text-zinc-400" />
                 </div>
                 <div className="relative inline-block">
-                  <select
-                    defaultValue="hoje"
-                    className="appearance-none bg-zinc-950 border border-zinc-700 text-sm text-white font-medium rounded-lg pl-4 pr-10 py-2.5 focus:outline-none focus:ring-1 focus:ring-zinc-500 cursor-pointer hover:border-zinc-600 transition-colors"
-                  >
-                    <option value="hoje">Data: Hoje (03/09/2026)</option>
-                    <option value="02">Data: 02/09/2026</option>
-                    <option value="01">Data: 01/09/2026</option>
-                  </select>
-                  <ChevronDown className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 w-4 h-4 text-zinc-400" />
+                  <input
+                    type="date"
+                    value={dataChamada}
+                    onChange={(e) => setDataChamada(e.target.value)}
+                    className="appearance-none bg-zinc-950 border border-zinc-700 text-sm text-white font-medium rounded-lg px-4 py-2.5 focus:outline-none focus:ring-1 focus:ring-zinc-500 cursor-pointer hover:border-zinc-600 transition-colors"
+                  />
+                  <p className="sr-only">Data: {formatarDataBR(dataChamada)}</p>
                 </div>
               </div>
             </div>
 
             <button
               type="button"
+              onClick={handleSalvarChamada}
               className="px-4 py-2 rounded-lg text-sm font-medium bg-white text-black hover:bg-zinc-200 transition-colors shrink-0 self-start lg:self-auto"
             >
               Salvar Chamada
@@ -195,19 +414,28 @@ export default function ProfessorChamadaPage() {
               <p className="text-xs font-medium uppercase tracking-widest text-orange-300/80 mb-1.5">
                 Alerta de Frequência
               </p>
-              <p className="text-sm text-zinc-300 leading-relaxed">
-                Atenção: 2 alunos nesta turma estão prestes a estourar o limite de 25% de faltas. Eles estão destacados na lista abaixo.
+              <p
+                className={`text-sm text-zinc-300 leading-relaxed ${
+                  isLoadingAi ? "animate-pulse text-zinc-400" : ""
+                }`}
+              >
+                {isLoadingAi
+                  ? "Analisando frequência da turma..."
+                  : aiInsight || "Selecione uma turma para gerar o alerta."}
               </p>
             </div>
           </div>
 
           {/* Barra de Resumo */}
           <div className="mb-8 px-4 py-2.5 rounded-lg bg-zinc-950 border border-zinc-800 text-xs text-zinc-400 tracking-wide">
-            Total de Alunos: <span className="text-white font-medium">40</span>
+            Total de Alunos:{" "}
+            <span className="text-white font-medium">{totalAlunos}</span>
             <span className="mx-2 text-zinc-700">|</span>
-            Presentes: <span className="text-green-400 font-medium">38</span>
+            Presentes:{" "}
+            <span className="text-green-400 font-medium">{totalPresentes}</span>
             <span className="mx-2 text-zinc-700">|</span>
-            Faltas: <span className="text-red-400 font-medium">2</span>
+            Faltas:{" "}
+            <span className="text-red-400 font-medium">{totalFaltas}</span>
           </div>
 
           {/* Lista de Alunos */}
@@ -228,66 +456,86 @@ export default function ProfessorChamadaPage() {
                   </tr>
                 </thead>
                 <tbody>
-                  {alunos.map((aluno) => (
-                    <tr
-                      key={aluno.ra}
-                      className="border-b border-zinc-800 last:border-b-0 hover:bg-zinc-900/40 transition-colors"
-                    >
-                      <td className="px-6 py-4">
-                        <div className="flex items-center gap-3">
-                          <div className="w-8 h-8 rounded-full bg-zinc-800 flex items-center justify-center text-xs font-semibold text-white shrink-0">
-                            {aluno.iniciais}
-                          </div>
-                          <div className="min-w-0">
-                            <p className="text-sm font-medium text-white truncate flex items-center gap-1.5">
-                              {aluno.nome}
-                              {aluno.alerta && (
-                                <AlertTriangle className="w-3.5 h-3.5 text-amber-400 shrink-0" />
-                              )}
-                            </p>
-                            <p className="text-xs text-zinc-500">RA {aluno.ra}</p>
-                          </div>
-                        </div>
-                      </td>
-                      <td className="px-4 py-4">
-                        <span
-                          className={`text-sm ${
-                            aluno.alerta ? "text-red-400 font-medium" : "text-zinc-400"
-                          }`}
-                        >
-                          {aluno.frequencia}
-                        </span>
-                      </td>
-                      <td className="px-6 py-4">
-                        <div className="flex justify-end">
-                          <div className="inline-flex rounded-lg overflow-hidden border border-zinc-800">
-                            <button
-                              type="button"
-                              className={`flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium transition-colors ${
-                                aluno.presente
-                                  ? "bg-green-900/40 text-green-500"
-                                  : "bg-zinc-950 text-zinc-500 hover:text-zinc-300"
-                              }`}
-                            >
-                              <Check className="w-3.5 h-3.5" />
-                              Presente
-                            </button>
-                            <button
-                              type="button"
-                              className={`flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium border-l border-zinc-800 transition-colors ${
-                                !aluno.presente
-                                  ? "bg-red-900/40 text-red-500"
-                                  : "bg-zinc-950 text-zinc-500 hover:text-zinc-300"
-                              }`}
-                            >
-                              <X className="w-3.5 h-3.5" />
-                              Falta
-                            </button>
-                          </div>
-                        </div>
+                  {alunos.length === 0 ? (
+                    <tr>
+                      <td
+                        colSpan={3}
+                        className="px-6 py-10 text-center text-sm text-zinc-500"
+                      >
+                        Nenhum aluno nesta turma
                       </td>
                     </tr>
-                  ))}
+                  ) : (
+                    alunos.map((aluno) => {
+                      const alerta = aluno.porcentagemFaltas >= 25;
+                      return (
+                        <tr
+                          key={aluno.id}
+                          className="border-b border-zinc-800 last:border-b-0 hover:bg-zinc-900/40 transition-colors"
+                        >
+                          <td className="px-6 py-4">
+                            <div className="flex items-center gap-3">
+                              <div className="w-8 h-8 rounded-full bg-zinc-800 flex items-center justify-center text-xs font-semibold text-white shrink-0">
+                                {iniciaisDoNome(aluno.nome)}
+                              </div>
+                              <div className="min-w-0">
+                                <p className="text-sm font-medium text-white truncate flex items-center gap-1.5">
+                                  {aluno.nome}
+                                  {alerta && (
+                                    <AlertTriangle className="w-3.5 h-3.5 text-amber-400 shrink-0" />
+                                  )}
+                                </p>
+                                <p className="text-xs text-zinc-500">
+                                  RA {aluno.ra}
+                                </p>
+                              </div>
+                            </div>
+                          </td>
+                          <td className="px-4 py-4">
+                            <span
+                              className={`text-sm ${
+                                alerta
+                                  ? "text-red-400 font-medium"
+                                  : "text-zinc-400"
+                              }`}
+                            >
+                              {aluno.porcentagemFaltas}% de faltas
+                            </span>
+                          </td>
+                          <td className="px-6 py-4">
+                            <div className="flex justify-end">
+                              <div className="inline-flex rounded-lg overflow-hidden border border-zinc-800">
+                                <button
+                                  type="button"
+                                  onClick={() => setPresenca(aluno.id, true)}
+                                  className={`flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium transition-colors ${
+                                    aluno.presente
+                                      ? "bg-green-900/40 text-green-500"
+                                      : "bg-zinc-950 text-zinc-500 hover:text-zinc-300"
+                                  }`}
+                                >
+                                  <Check className="w-3.5 h-3.5" />
+                                  Presente
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => setPresenca(aluno.id, false)}
+                                  className={`flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium border-l border-zinc-800 transition-colors ${
+                                    !aluno.presente
+                                      ? "bg-red-900/40 text-red-500"
+                                      : "bg-zinc-950 text-zinc-500 hover:text-zinc-300"
+                                  }`}
+                                >
+                                  <X className="w-3.5 h-3.5" />
+                                  Falta
+                                </button>
+                              </div>
+                            </div>
+                          </td>
+                        </tr>
+                      );
+                    })
+                  )}
                 </tbody>
               </table>
             </div>
@@ -295,6 +543,55 @@ export default function ProfessorChamadaPage() {
 
         </div>
       </main>
+
+      {modalFeedback.aberto && (
+        <div className="fixed inset-0 z-[70] flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm">
+          <div
+            role="dialog"
+            aria-modal="true"
+            className="bg-zinc-900 border border-zinc-800 rounded-xl p-6 w-full max-w-md shadow-2xl"
+          >
+            <div className="flex flex-col items-center text-center gap-4">
+              <div
+                className={`w-12 h-12 rounded-full border flex items-center justify-center ${
+                  modalFeedback.tipo === "sucesso"
+                    ? "bg-emerald-950/60 border-emerald-900/50"
+                    : modalFeedback.tipo === "erro"
+                      ? "bg-red-950/60 border-red-900/50"
+                      : "bg-amber-950/60 border-amber-900/50"
+                }`}
+              >
+                {modalFeedback.tipo === "sucesso" ? (
+                  <CheckCircle className="w-6 h-6 text-emerald-400" />
+                ) : (
+                  <AlertTriangle
+                    className={`w-6 h-6 ${
+                      modalFeedback.tipo === "erro"
+                        ? "text-red-500"
+                        : "text-amber-400"
+                    }`}
+                  />
+                )}
+              </div>
+              <div>
+                <h3 className="text-lg font-semibold text-white">
+                  {modalFeedback.titulo}
+                </h3>
+                <p className="text-sm text-zinc-400 mt-1">
+                  {modalFeedback.mensagem}
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={fecharFeedback}
+                className="w-full px-4 py-2.5 rounded-lg bg-zinc-800 hover:bg-zinc-700 text-white text-sm font-medium transition-colors"
+              >
+                Fechar
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

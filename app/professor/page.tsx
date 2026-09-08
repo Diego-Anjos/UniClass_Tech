@@ -1,5 +1,5 @@
 import Link from "next/link";
-import { Shield } from "lucide-react";
+import { GraduationCap, Shield } from "lucide-react";
 
 export default function LoginProfessorPage() {
   return (
@@ -7,11 +7,14 @@ export default function LoginProfessorPage() {
       {/* LADO ESQUERDO: Formulário Clean Dark Mode */}
       <div className="flex flex-col justify-center px-8 sm:px-16 lg:px-24 py-12 bg-black">
         <div className="w-full max-w-sm mx-auto">
-          <div className="flex items-center justify-center gap-2 mb-8">
-            <div className="w-8 h-8 bg-white text-black font-bold flex items-center justify-center rounded-md">
-              UC
+          <div className="flex items-center justify-center mb-8">
+            <div className="w-11 h-11 rounded-xl bg-[#13161f] border border-gray-800 flex items-center justify-center text-white shadow-lg">
+              <GraduationCap className="w-5 h-5" />
             </div>
-            <span className="text-xl font-bold tracking-tight">UniClassTech</span>
+            <span className="text-xl font-bold tracking-tight ml-2.5">UniClassTech</span>
+            <span className="text-xs bg-purple-500/10 text-purple-400 border border-purple-500/20 px-2 py-0.5 rounded-full ml-2">
+              Docente
+            </span>
           </div>
 
           <div className="text-center mb-8">
