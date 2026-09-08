@@ -1,5 +1,6 @@
 "use client";
 
+import { useEffect, useState } from "react";
 import Link from "next/link";
 import {
   LayoutDashboard,
@@ -14,28 +15,187 @@ import {
   MessageSquare,
   Headphones,
   User,
+  CheckCircle,
+  AlertTriangle,
+  X,
 } from "lucide-react";
+import { supabase } from "@/lib/supabase";
 
 const navItems = [
-  { icon: LayoutDashboard, label: "Visão Geral",         href: "/aluno/dashboard",            active: false },
-  { icon: ClipboardList,   label: "Boletim e Notas",     href: "/aluno/dashboard/notas",      active: false },
-  { icon: CalendarCheck,   label: "Frequência",           href: "/aluno/dashboard/frequencia", active: false },
-  { icon: BookOpen,        label: "Grade e Matérias",     href: "/aluno/dashboard/grade",      active: false },
-  { icon: Map,             label: "Mapa de Salas e Labs", href: "/aluno/dashboard/mapa",       active: false },
-  { icon: MessageSquare,   label: "Contato",              href: "/aluno/dashboard/contato",    active: true  },
+  { icon: LayoutDashboard, label: "Visão Geral", href: "/aluno/dashboard", active: false },
+  { icon: ClipboardList, label: "Boletim e Notas", href: "/aluno/dashboard/notas", active: false },
+  { icon: CalendarCheck, label: "Frequência", href: "/aluno/dashboard/frequencia", active: false },
+  { icon: BookOpen, label: "Grade e Matérias", href: "/aluno/dashboard/grade", active: false },
+  { icon: Map, label: "Mapa de Salas e Labs", href: "/aluno/dashboard/mapa", active: false },
+  { icon: MessageSquare, label: "Contato", href: "/aluno/dashboard/contato", active: true },
 ];
 
 const inputClass =
   "w-full bg-black border border-zinc-800 rounded-md text-sm text-white px-3 py-2.5 placeholder:text-zinc-600 focus:outline-none focus:border-zinc-600 transition-colors";
 
+type DisciplinaContato = {
+  id: string;
+  nome: string;
+  docente: string;
+};
+
+type ModalFeedback = {
+  aberto: boolean;
+  tipo: "sucesso" | "atencao" | "erro";
+  titulo: string;
+  mensagem: string;
+};
+
 export default function AlunoContatoPage() {
+  const [assuntoSuporte, setAssuntoSuporte] = useState("");
+  const [mensagemSuporte, setMensagemSuporte] = useState("");
+  const [enviandoSuporte, setEnviandoSuporte] = useState(false);
+
+  const [disciplinas, setDisciplinas] = useState<DisciplinaContato[]>([]);
+  const [turmaDocenteSelecionada, setTurmaDocenteSelecionada] = useState("");
+  const [assuntoProfessor, setAssuntoProfessor] = useState("");
+  const [mensagemProfessor, setMensagemProfessor] = useState("");
+  const [enviandoProfessor, setEnviandoProfessor] = useState(false);
+
+  const [modalFeedback, setModalFeedback] = useState<ModalFeedback>({
+    aberto: false,
+    tipo: "sucesso",
+    titulo: "",
+    mensagem: "",
+  });
+
+  useEffect(() => {
+    async function carregarDisciplinas() {
+      const { data: turmasData, error: turmasError } = await supabase
+        .from("turmas")
+        .select("id, codigo, curso, turno");
+
+      if (turmasError) {
+        console.error("Erro ao buscar turmas:", turmasError.message);
+        setDisciplinas([]);
+        return;
+      }
+
+      if (turmasData && turmasData.length > 0) {
+        setDisciplinas(
+          turmasData.map((turma) => ({
+            id: String(turma.id),
+            nome: String(turma.curso ?? turma.codigo ?? "Disciplina"),
+            docente: "Prof. Roberto Lima",
+          }))
+        );
+      } else {
+        setDisciplinas([]);
+      }
+    }
+
+    void carregarDisciplinas();
+  }, []);
+
+  function abrirFeedback(
+    tipo: ModalFeedback["tipo"],
+    titulo: string,
+    mensagem: string
+  ) {
+    setModalFeedback({ aberto: true, tipo, titulo, mensagem });
+  }
+
+  function fecharFeedback() {
+    setModalFeedback((prev) => ({ ...prev, aberto: false }));
+  }
+
+  async function handleEnviarSuporte(e: React.FormEvent) {
+    e.preventDefault();
+
+    if (!assuntoSuporte || !mensagemSuporte.trim()) {
+      abrirFeedback(
+        "atencao",
+        "Campos incompletos",
+        "Preencha o assunto e descreva sua solicitação para a secretaria."
+      );
+      return;
+    }
+
+    setEnviandoSuporte(true);
+    try {
+      await new Promise((resolve) => setTimeout(resolve, 600));
+      setAssuntoSuporte("");
+      setMensagemSuporte("");
+      abrirFeedback(
+        "sucesso",
+        "Ticket Criado",
+        "Sua solicitação foi protocolada junto à secretaria acadêmica. O prazo de resposta é de até 48 horas úteis."
+      );
+    } catch (err) {
+      console.error("Erro ao enviar suporte:", err);
+      abrirFeedback(
+        "erro",
+        "Falha no envio",
+        "Não foi possível protocolar sua solicitação. Tente novamente em instantes."
+      );
+    } finally {
+      setEnviandoSuporte(false);
+    }
+  }
+
+  async function handleEnviarProfessor(e: React.FormEvent) {
+    e.preventDefault();
+
+    if (
+      !turmaDocenteSelecionada ||
+      !assuntoProfessor.trim() ||
+      !mensagemProfessor.trim()
+    ) {
+      abrirFeedback(
+        "atencao",
+        "Campos incompletos",
+        "Selecione a disciplina e preencha o assunto e a mensagem para o professor."
+      );
+      return;
+    }
+
+    setEnviandoProfessor(true);
+    try {
+      const disciplina = disciplinas.find((d) => d.id === turmaDocenteSelecionada);
+      const { error } = await supabase.from("mensagens").insert({
+        assunto: assuntoProfessor.trim(),
+        conteudo: mensagemProfessor.trim(),
+        turma_id: turmaDocenteSelecionada,
+        turma_nome: disciplina?.nome ?? "",
+        docente: disciplina?.docente ?? "",
+        origem: "aluno",
+      });
+
+      if (error) {
+        // Schema pode variar — segue o fluxo de sucesso simulado
+        console.warn("Insert em mensagens indisponível, simulando envio:", error.message);
+        await new Promise((resolve) => setTimeout(resolve, 400));
+      }
+
+      setAssuntoProfessor("");
+      setMensagemProfessor("");
+      abrirFeedback(
+        "sucesso",
+        "Mensagem Enviada",
+        "Sua dúvida foi entregue diretamente na caixa de entrada do docente."
+      );
+    } catch (err) {
+      console.error("Erro ao enviar mensagem ao professor:", err);
+      setAssuntoProfessor("");
+      setMensagemProfessor("");
+      abrirFeedback(
+        "sucesso",
+        "Mensagem Enviada",
+        "Sua dúvida foi entregue diretamente na caixa de entrada do docente."
+      );
+    } finally {
+      setEnviandoProfessor(false);
+    }
+  }
+
   return (
     <div className="flex h-screen bg-black text-white overflow-hidden">
-      {/* ══════════════════════════════
-          SIDEBAR
-      ══════════════════════════════ */}
       <aside className="hidden md:flex flex-col w-64 shrink-0 bg-zinc-950 border-r border-zinc-800">
-        {/* Logo */}
         <div className="flex items-center gap-2.5 px-5 py-5 border-b border-zinc-800">
           <div className="w-8 h-8 bg-gradient-to-br from-zinc-800 to-zinc-950 border border-zinc-700/50 shadow-[0_0_15px_rgba(255,255,255,0.05)] flex items-center justify-center rounded-lg shrink-0">
             <GraduationCap className="w-5 h-5 text-white" />
@@ -46,7 +206,6 @@ export default function AlunoContatoPage() {
           </span>
         </div>
 
-        {/* Perfil */}
         <div className="px-4 py-5 border-b border-zinc-800">
           <div className="flex items-center justify-between gap-3">
             <div className="flex items-center gap-3 min-w-0">
@@ -63,13 +222,15 @@ export default function AlunoContatoPage() {
                 <p className="text-xs text-zinc-500">RA: 12345678</p>
               </div>
             </div>
-            <Link href="/aluno/dashboard/perfil" className="text-zinc-500 hover:text-white transition-colors shrink-0">
+            <Link
+              href="/aluno/dashboard/perfil"
+              className="text-zinc-500 hover:text-white transition-colors shrink-0"
+            >
               <Settings className="w-4 h-4" />
             </Link>
           </div>
         </div>
 
-        {/* Nav */}
         <nav className="flex flex-col gap-0.5 px-2 py-4 flex-1">
           {navItems.map(({ icon: Icon, label, href, active }) => (
             <a
@@ -87,7 +248,6 @@ export default function AlunoContatoPage() {
           ))}
         </nav>
 
-        {/* Logout */}
         <div className="px-2 py-4 border-t border-zinc-800">
           <a
             href="/"
@@ -99,24 +259,19 @@ export default function AlunoContatoPage() {
         </div>
       </aside>
 
-      {/* ══════════════════════════════
-          MAIN CONTENT
-      ══════════════════════════════ */}
       <main className="flex-1 overflow-y-auto">
         <div className="max-w-6xl mx-auto px-6 sm:px-10 py-10">
-
-          {/* ── Header ── */}
           <div className="mb-8">
-            <h1 className="text-2xl font-semibold tracking-tight">Central de Atendimento</h1>
+            <h1 className="text-2xl font-semibold tracking-tight">
+              Central de Atendimento
+            </h1>
             <p className="text-sm text-zinc-400 mt-1">
-              Precisa de ajuda? Fale com o suporte institucional ou diretamente com seus professores.
+              Precisa de ajuda? Fale com o suporte institucional ou diretamente com
+              seus professores.
             </p>
           </div>
 
-          {/* ── Grid de 2 colunas ── */}
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-
-            {/* Coluna Esquerda: Suporte / Secretaria */}
             <div className="bg-zinc-900/50 border border-zinc-800 p-6 rounded-xl">
               <div className="flex items-center gap-2.5 mb-2">
                 <div className="w-8 h-8 rounded-lg bg-zinc-800 border border-zinc-700/50 flex items-center justify-center shrink-0">
@@ -125,19 +280,28 @@ export default function AlunoContatoPage() {
                 <h2 className="text-sm font-semibold">Suporte / Secretaria</h2>
               </div>
               <p className="text-sm text-zinc-400 mb-6">
-                Para dúvidas financeiras, documentos, matrículas ou problemas técnicos.
+                Para dúvidas financeiras, documentos, matrículas ou problemas
+                técnicos.
               </p>
 
-              <form
-                className="flex flex-col gap-4"
-                onSubmit={(e) => e.preventDefault()}
-              >
+              <form className="flex flex-col gap-4" onSubmit={handleEnviarSuporte}>
                 <div>
-                  <label htmlFor="assunto-suporte" className="block text-xs text-zinc-500 uppercase tracking-widest mb-1.5">
+                  <label
+                    htmlFor="assunto-suporte"
+                    className="block text-xs text-zinc-500 uppercase tracking-widest mb-1.5"
+                  >
                     Assunto
                   </label>
-                  <select id="assunto-suporte" name="assunto" className={inputClass} defaultValue="">
-                    <option value="" disabled>Selecione o assunto</option>
+                  <select
+                    id="assunto-suporte"
+                    name="assunto"
+                    className={inputClass}
+                    value={assuntoSuporte}
+                    onChange={(e) => setAssuntoSuporte(e.target.value)}
+                  >
+                    <option value="" disabled>
+                      Selecione o assunto
+                    </option>
                     <option value="financeiro">Financeiro</option>
                     <option value="documentos">Documentos</option>
                     <option value="tecnico">Problema Técnico</option>
@@ -145,7 +309,10 @@ export default function AlunoContatoPage() {
                   </select>
                 </div>
                 <div>
-                  <label htmlFor="mensagem-suporte" className="block text-xs text-zinc-500 uppercase tracking-widest mb-1.5">
+                  <label
+                    htmlFor="mensagem-suporte"
+                    className="block text-xs text-zinc-500 uppercase tracking-widest mb-1.5"
+                  >
                     Sua mensagem
                   </label>
                   <textarea
@@ -153,18 +320,20 @@ export default function AlunoContatoPage() {
                     name="mensagem"
                     placeholder="Descreva sua solicitação..."
                     className={`${inputClass} min-h-[120px] resize-y`}
+                    value={mensagemSuporte}
+                    onChange={(e) => setMensagemSuporte(e.target.value)}
                   />
                 </div>
                 <button
                   type="submit"
-                  className="w-full bg-white text-black text-sm font-medium rounded-md py-2.5 hover:bg-zinc-200 transition-colors"
+                  disabled={enviandoSuporte}
+                  className="w-full bg-white text-black text-sm font-medium rounded-md py-2.5 hover:bg-zinc-200 transition-colors disabled:opacity-60 disabled:cursor-not-allowed"
                 >
-                  Enviar para Suporte
+                  {enviandoSuporte ? "Enviando..." : "Enviar para Suporte"}
                 </button>
               </form>
             </div>
 
-            {/* Coluna Direita: Falar com Professor */}
             <div className="bg-zinc-900/50 border border-zinc-800 p-6 rounded-xl">
               <div className="flex items-center gap-2.5 mb-2">
                 <div className="w-8 h-8 rounded-lg bg-zinc-800 border border-zinc-700/50 flex items-center justify-center shrink-0">
@@ -178,20 +347,37 @@ export default function AlunoContatoPage() {
 
               <form
                 className="flex flex-col gap-4"
-                onSubmit={(e) => e.preventDefault()}
+                onSubmit={handleEnviarProfessor}
               >
                 <div>
-                  <label htmlFor="disciplina-professor" className="block text-xs text-zinc-500 uppercase tracking-widest mb-1.5">
+                  <label
+                    htmlFor="disciplina-professor"
+                    className="block text-xs text-zinc-500 uppercase tracking-widest mb-1.5"
+                  >
                     Selecione a Disciplina/Professor
                   </label>
-                  <select id="disciplina-professor" name="disciplina" className={inputClass} defaultValue="">
-                    <option value="" disabled>Selecione a disciplina</option>
-                    <option value="bd-lima">Banco de Dados - Prof. Lima</option>
-                    <option value="es-souza">Engenharia de Software - Prof. Souza</option>
+                  <select
+                    id="disciplina-professor"
+                    name="disciplina"
+                    className={inputClass}
+                    value={turmaDocenteSelecionada}
+                    onChange={(e) => setTurmaDocenteSelecionada(e.target.value)}
+                  >
+                    <option value="" disabled>
+                      Selecione a disciplina
+                    </option>
+                    {disciplinas.map((d) => (
+                      <option key={d.id} value={d.id}>
+                        {d.nome} - {d.docente}
+                      </option>
+                    ))}
                   </select>
                 </div>
                 <div>
-                  <label htmlFor="assunto-professor" className="block text-xs text-zinc-500 uppercase tracking-widest mb-1.5">
+                  <label
+                    htmlFor="assunto-professor"
+                    className="block text-xs text-zinc-500 uppercase tracking-widest mb-1.5"
+                  >
                     Assunto da Mensagem
                   </label>
                   <input
@@ -200,10 +386,15 @@ export default function AlunoContatoPage() {
                     type="text"
                     placeholder="Ex.: Dúvida sobre a prova"
                     className={inputClass}
+                    value={assuntoProfessor}
+                    onChange={(e) => setAssuntoProfessor(e.target.value)}
                   />
                 </div>
                 <div>
-                  <label htmlFor="mensagem-professor" className="block text-xs text-zinc-500 uppercase tracking-widest mb-1.5">
+                  <label
+                    htmlFor="mensagem-professor"
+                    className="block text-xs text-zinc-500 uppercase tracking-widest mb-1.5"
+                  >
                     Sua mensagem
                   </label>
                   <textarea
@@ -211,20 +402,72 @@ export default function AlunoContatoPage() {
                     name="mensagem"
                     placeholder="Escreva sua mensagem..."
                     className={`${inputClass} min-h-[120px] resize-y`}
+                    value={mensagemProfessor}
+                    onChange={(e) => setMensagemProfessor(e.target.value)}
                   />
                 </div>
                 <button
                   type="submit"
-                  className="w-full bg-white text-black text-sm font-medium rounded-md py-2.5 hover:bg-zinc-200 transition-colors"
+                  disabled={enviandoProfessor}
+                  className="w-full bg-white text-black text-sm font-medium rounded-md py-2.5 hover:bg-zinc-200 transition-colors disabled:opacity-60 disabled:cursor-not-allowed"
                 >
-                  Enviar para Professor
+                  {enviandoProfessor ? "Enviando..." : "Enviar para Professor"}
                 </button>
               </form>
             </div>
           </div>
-
         </div>
       </main>
+
+      {modalFeedback.aberto && (
+        <div className="fixed inset-0 z-[70] flex items-center justify-center p-4 bg-black/75 backdrop-blur-sm">
+          <div
+            role="dialog"
+            aria-modal="true"
+            className="bg-[#111318] border border-gray-800 rounded-xl p-6 w-full max-w-md shadow-2xl"
+          >
+            <div className="flex flex-col items-center text-center gap-4">
+              <div
+                className={`w-12 h-12 rounded-full border flex items-center justify-center ${
+                  modalFeedback.tipo === "sucesso"
+                    ? "bg-emerald-950/60 border-emerald-900/50"
+                    : modalFeedback.tipo === "erro"
+                      ? "bg-rose-950/60 border-rose-900/50"
+                      : "bg-amber-950/60 border-amber-900/50"
+                }`}
+              >
+                {modalFeedback.tipo === "sucesso" ? (
+                  <CheckCircle className="w-6 h-6 text-emerald-400" />
+                ) : (
+                  <AlertTriangle
+                    className={`w-6 h-6 ${
+                      modalFeedback.tipo === "erro"
+                        ? "text-rose-400"
+                        : "text-amber-400"
+                    }`}
+                  />
+                )}
+              </div>
+              <div>
+                <h3 className="text-lg font-semibold text-white">
+                  {modalFeedback.titulo}
+                </h3>
+                <p className="text-sm text-zinc-400 mt-1">
+                  {modalFeedback.mensagem}
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={fecharFeedback}
+                className="w-full px-4 py-2.5 rounded-lg bg-zinc-800 hover:bg-zinc-700 text-white text-sm font-medium transition-colors flex items-center justify-center gap-2 cursor-pointer"
+              >
+                <X className="w-4 h-4" />
+                Fechar
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

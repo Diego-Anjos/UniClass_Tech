@@ -1,16 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import Link from "next/link";
 import {
-  LayoutDashboard,
-  Users,
-  GraduationCap,
-  BookOpen,
-  Settings,
-  LogOut,
-  Shield,
-  Building2,
   Search,
   Filter,
   User,
@@ -268,83 +259,8 @@ export default function GestaoAlunosPage() {
   const labelClass = "block text-xs text-zinc-500 mb-1.5";
 
   return (
-    <div className="flex h-screen bg-black text-white overflow-hidden">
-      {/* SIDEBAR */}
-      <aside className="hidden md:flex flex-col w-64 shrink-0 bg-zinc-950 border-r border-zinc-800">
-        <div className="flex items-center gap-2.5 px-5 py-5 border-b border-zinc-800">
-          <div className="w-8 h-8 bg-gradient-to-br from-zinc-800 to-zinc-950 border border-zinc-700/50 shadow-[0_0_15px_rgba(255,255,255,0.05)] flex items-center justify-center rounded-lg shrink-0">
-            <Shield className="w-5 h-5 text-white" />
-          </div>
-          <span className="text-sm tracking-tight">
-            <span className="text-white font-bold">UniClass</span>
-            <span className="text-zinc-400 font-light">Tech</span>
-          </span>
-        </div>
-
-        <div className="px-4 py-5 border-b border-zinc-800">
-          <div className="flex items-center gap-3 min-w-0">
-            <div className="w-10 h-10 rounded-full bg-zinc-800 flex items-center justify-center shrink-0">
-              <Building2 className="w-5 h-5 text-zinc-300" />
-            </div>
-            <div className="min-w-0">
-              <p className="text-sm font-medium truncate">Secretaria Acadêmica</p>
-              <p className="text-xs text-zinc-500">Acesso Root</p>
-            </div>
-          </div>
-        </div>
-
-        <nav className="flex flex-col gap-0.5 px-2 py-4 flex-1">
-          <Link
-            href="/adm/dashboard"
-            className="flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm transition-colors text-zinc-400 hover:text-white"
-          >
-            <LayoutDashboard className="w-4 h-4 shrink-0" />
-            Visão Geral
-          </Link>
-          <Link
-            href="/adm/dashboard/alunos"
-            className="flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm transition-colors bg-zinc-800/50 text-white font-medium"
-          >
-            <Users className="w-4 h-4 shrink-0" />
-            Gestão de Alunos
-          </Link>
-          <Link
-            href="/adm/dashboard/professores"
-            className="flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm transition-colors text-zinc-400 hover:text-white"
-          >
-            <GraduationCap className="w-4 h-4 shrink-0" />
-            Gestão de Professores
-          </Link>
-          <Link
-            href="/adm/dashboard/turmas"
-            className="flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm transition-colors text-zinc-400 hover:text-white"
-          >
-            <BookOpen className="w-4 h-4 shrink-0" />
-            Turmas e Matrículas
-          </Link>
-          <Link
-            href="/adm/dashboard/configuracoes"
-            className="flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm transition-colors text-zinc-400 hover:text-white"
-          >
-            <Settings className="w-4 h-4 shrink-0" />
-            Configurações do Sistema
-          </Link>
-        </nav>
-
-        <div className="px-2 py-4 border-t border-zinc-800">
-          <a
-            href="/adm/login"
-            className="flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm text-zinc-500 hover:bg-zinc-900 hover:text-white transition-colors"
-          >
-            <LogOut className="w-4 h-4 shrink-0" />
-            Sair
-          </a>
-        </div>
-      </aside>
-
-      {/* MAIN */}
-      <main className="flex-1 overflow-y-auto bg-black relative">
-        <div className="max-w-6xl mx-auto p-8">
+    <>
+      <div className="relative min-h-[calc(100vh-8rem)]">
           {/* Header */}
           <div className="mb-8 flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
             <div>
@@ -530,7 +446,6 @@ export default function GestaoAlunosPage() {
               </table>
             </div>
           </div>
-        </div>
 
         {/* Overlay drawer */}
         <button
@@ -883,8 +798,8 @@ export default function GestaoAlunosPage() {
             <span className="text-sm font-medium">{successMessage}</span>
           </div>
         )}
-      </main>
-    </div>
+      </div>
+    </>
   );
 }
 
