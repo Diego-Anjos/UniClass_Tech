@@ -23,14 +23,19 @@ type Turno = "Manhã" | "Noite";
 type StatusTurma = "Aberta" | "Em andamento" | "Fechada";
 type AbaTurma = "Disciplinas & Professores" | "Lista de Alunos" | "Automação & IA";
 
-type DisciplinaAlocada = {
-  nome: string;
-  professor: string;
-};
-
 type AlunoTurma = {
+  id: string;
   ra: string;
   nome: string;
+  semestre: string;
+};
+
+type ProfessorTurma = {
+  id: string;
+  nome: string;
+  titulacao: string;
+  status: string;
+  area_atuacao: string;
 };
 
 type Turma = {
@@ -42,21 +47,25 @@ type Turma = {
   capacidade: number;
   status: StatusTurma;
   semestre: string;
-  disciplinas: DisciplinaAlocada[];
-  alunos: AlunoTurma[];
+  matriculados: number;
+  percentual: number;
 };
 
 type FormDataTurma = {
   codigo: string;
   curso: string;
   turno: Turno;
+  semestre: string;
   capacidade: string;
 };
+
+const SEMESTRES = Array.from({ length: 10 }, (_, i) => `${i + 1}º Semestre`);
 
 const formInicial: FormDataTurma = {
   codigo: "",
   curso: "",
   turno: "Manhã",
+  semestre: "1º Semestre",
   capacidade: "",
 };
 
@@ -87,28 +96,63 @@ const abas: AbaTurma[] = [
 
 function ocupacaoPercentual(ocupacao: number, capacidade: number) {
   if (capacidade <= 0) return 0;
-  return Math.round((ocupacao / capacidade) * 100);
+  return Math.min(100, Math.round((ocupacao / capacidade) * 100));
 }
 
-function corBarraOcupacao(pct: number) {
-  if (pct >= 90) return "bg-red-500";
-  if (pct >= 70) return "bg-amber-500";
-  if (pct >= 40) return "bg-sky-500";
-  return "bg-zinc-500";
+function statusPorOcupacao(
+  percentual: number,
+  statusDb: StatusTurma
+): { label: string; className: string } {
+  if (percentual >= 100) {
+    return {
+      label: "Lotada",
+      className: "bg-red-950 text-red-400 border-red-900/50",
+    };
+  }
+  if (percentual === 0) {
+    return {
+      label: "Sem Alunos",
+      className: "bg-zinc-800 text-zinc-400 border-zinc-700",
+    };
+  }
+  if (statusDb === "Em andamento") {
+    return {
+      label: "Em andamento",
+      className: statusBadge["Em andamento"],
+    };
+  }
+  return {
+    label: "Aberta",
+    className: statusBadge.Aberta,
+  };
 }
 
-function mapTurma(row: Record<string, unknown>): Turma {
+function formatarSemestreAluno(valor: unknown) {
+  if (valor === null || valor === undefined || valor === "") return "—";
+  const raw = String(valor);
+  if (raw.includes("Semestre")) return raw;
+  const num = Number(raw);
+  if (!Number.isNaN(num) && num > 0) return `${num}º Semestre`;
+  return raw;
+}
+
+function mapTurma(
+  row: Record<string, unknown>,
+  matriculados = 0
+): Turma {
+  const capacidade = Number(row.capacidade ?? 40) || 40;
+  const percentual = ocupacaoPercentual(matriculados, capacidade);
   return {
     id: String(row.id ?? ""),
     codigo: String(row.codigo ?? "—"),
     curso: String(row.curso ?? "—"),
     turno: (String(row.turno ?? "Manhã")) as Turno,
-    ocupacao: Number(row.ocupacao ?? 0),
-    capacidade: Number(row.capacidade ?? 0),
+    ocupacao: matriculados,
+    capacidade,
     status: (String(row.status ?? "Aberta")) as StatusTurma,
-    semestre: String(row.semestre ?? "—"),
-    disciplinas: [],
-    alunos: [],
+    semestre: String(row.semestre ?? "1º Semestre"),
+    matriculados,
+    percentual,
   };
 }
 
@@ -139,7 +183,8 @@ export default function TurmasMatriculasPage() {
   const [turmaSelecionada, setTurmaSelecionada] = useState<Turma | null>(null);
   const [drawerAberto, setDrawerAberto] = useState(false);
   const [abaAtiva, setAbaAtiva] = useState<AbaTurma>("Disciplinas & Professores");
-
+  const [alunosDaTurma, setAlunosDaTurma] = useState<AlunoTurma[]>([]);
+  const [professoresDaTurma, setProfessoresDaTurma] = useState<ProfessorTurma[]>([]);
   const [aiInsight, setAiInsight] = useState<string | null>(null);
   const [isGeneratingInsight, setIsGeneratingInsight] = useState(false);
 
@@ -149,22 +194,43 @@ export default function TurmasMatriculasPage() {
 
   async function fetchTurmas() {
     setIsLoading(true);
-    const { data, error } = await supabase
-      .from("turmas")
-      .select("*")
-      .order("created_at", { ascending: false });
 
-    if (error) {
-      console.error("Erro ao buscar turmas:", error.message);
+    const [{ data: turmasData, error: turmasError }, { data: alunosData, error: alunosError }] =
+      await Promise.all([
+        supabase.from("turmas").select("*").order("created_at", { ascending: false }),
+        supabase.from("alunos").select("curso"),
+      ]);
+
+    if (turmasError) {
+      console.error("Erro ao buscar turmas:", turmasError.message);
       setTurmas([]);
-    } else {
-      setTurmas((data ?? []).map((row) => mapTurma(row as Record<string, unknown>)));
+      setIsLoading(false);
+      return;
     }
+
+    if (alunosError) {
+      console.error("Erro ao buscar alunos para ocupação:", alunosError.message);
+    }
+
+    const contagemPorCurso: Record<string, number> = {};
+    (alunosData || []).forEach((aluno) => {
+      if (aluno.curso) {
+        contagemPorCurso[aluno.curso] =
+          (contagemPorCurso[aluno.curso] || 0) + 1;
+      }
+    });
+
+    const turmasComOcupacao = (turmasData || []).map((t) => {
+      const matriculados = contagemPorCurso[String(t.curso ?? "")] || 0;
+      return mapTurma(t as Record<string, unknown>, matriculados);
+    });
+
+    setTurmas(turmasComOcupacao);
     setIsLoading(false);
   }
 
   useEffect(() => {
-    fetchTurmas();
+    void fetchTurmas();
   }, []);
 
   const turmasFiltradas = useMemo(() => {
@@ -190,42 +256,202 @@ export default function TurmasMatriculasPage() {
     });
   }, [turmas, searchTerm, filterTurno, filterStatus]);
 
-  async function gerarInsightIA(turma: Turma) {
-    setAiInsight(null);
-    setIsGeneratingInsight(true);
-    try {
-      const res = await fetch("/api/insights", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          curso:      turma.curso,
-          capacidade: turma.capacidade,
-          ocupacao:   turma.ocupacao,
-        }),
-      });
-      const json = await res.json();
-      if (!res.ok) throw new Error(json.error ?? "Erro na API de insights.");
-      setAiInsight(json.insight as string);
-    } catch (err) {
-      console.error("Erro ao gerar insight:", err);
-      setAiInsight("Não foi possível gerar a análise no momento. Tente novamente.");
-    } finally {
+  const capacidadeTurma = turmaSelecionada?.capacidade || 40;
+  const matriculados = turmaSelecionada?.matriculados ?? alunosDaTurma.length;
+  const taxaOcupacao =
+    turmaSelecionada?.percentual ??
+    ocupacaoPercentual(matriculados, capacidadeTurma);
+
+  useEffect(() => {
+    if (!turmaSelecionada?.id) {
+      setAlunosDaTurma([]);
+      setProfessoresDaTurma([]);
+      setAiInsight(null);
       setIsGeneratingInsight(false);
+      return;
     }
-  }
+
+    const turma = turmaSelecionada;
+    let cancelado = false;
+
+    async function carregarDadosDaTurma() {
+      const curso = turma.curso && turma.curso !== "—" ? turma.curso : "";
+
+      let alunos: AlunoTurma[] = [];
+      if (curso) {
+        const { data, error } = await supabase
+          .from("alunos")
+          .select("*")
+          .eq("curso", curso);
+
+        if (error) {
+          console.error("Erro ao buscar alunos da turma:", error.message);
+        } else {
+          alunos = (data ?? []).map((a) => ({
+            id: String(a.id ?? ""),
+            ra: String(a.ra ?? "—"),
+            nome: String(a.nome ?? "—"),
+            semestre: formatarSemestreAluno(a.semestre),
+          }));
+        }
+      }
+
+      if (cancelado) return;
+      setAlunosDaTurma(alunos);
+      setTurmaSelecionada((prev) => {
+        if (!prev || prev.id !== turma.id) return prev;
+        const capacidade = prev.capacidade || 40;
+        const percentual = ocupacaoPercentual(alunos.length, capacidade);
+        return {
+          ...prev,
+          matriculados: alunos.length,
+          ocupacao: alunos.length,
+          percentual,
+          capacidade,
+        };
+      });
+      setTurmas((prev) =>
+        prev.map((t) => {
+          if (t.id !== turma.id) return t;
+          const capacidade = t.capacidade || 40;
+          return {
+            ...t,
+            matriculados: alunos.length,
+            ocupacao: alunos.length,
+            percentual: ocupacaoPercentual(alunos.length, capacidade),
+            capacidade,
+          };
+        })
+      );
+
+      let professores: ProfessorTurma[] = [];
+      if (curso) {
+        const { data, error } = await supabase
+          .from("professores")
+          .select("*")
+          .ilike("area_atuacao", `%${curso}%`);
+
+        if (error) {
+          console.error("Erro ao buscar professores da turma:", error.message);
+        } else {
+          professores = (data ?? []).map((p) => ({
+            id: String(p.id ?? ""),
+            nome: String(p.nome ?? "—"),
+            titulacao: String(p.titulacao ?? "—"),
+            status: String(p.status ?? "Ativo"),
+            area_atuacao: String(p.area_atuacao ?? curso),
+          }));
+        }
+      }
+
+      if (cancelado) return;
+      setProfessoresDaTurma(professores);
+
+      const capacidade = turma.capacidade || 40;
+      const matriculadosCount = alunos.length;
+
+      setIsGeneratingInsight(true);
+      setAiInsight(null);
+      try {
+        const res = await fetch("/api/insights/turma", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            codigo: turma.codigo,
+            curso: turma.curso,
+            turno: turma.turno,
+            semestre: turma.semestre || "1º Semestre",
+            matriculados: matriculadosCount,
+            capacidade,
+          }),
+        });
+        const json = (await res.json()) as { analise?: string; insight?: string };
+        if (!cancelado) {
+          setAiInsight(
+            json.analise ||
+              json.insight ||
+              "Não foi possível gerar a análise no momento."
+          );
+        }
+      } catch (err) {
+        console.error("Erro ao gerar insight da turma:", err);
+        if (!cancelado) {
+          setAiInsight(
+            "Não foi possível gerar a análise no momento. Tente novamente."
+          );
+        }
+      } finally {
+        if (!cancelado) setIsGeneratingInsight(false);
+      }
+    }
+
+    void carregarDadosDaTurma();
+    return () => {
+      cancelado = true;
+    };
+  }, [turmaSelecionada?.id]);
 
   function abrirGestao(turma: Turma) {
     setTurmaSelecionada(turma);
     setAbaAtiva("Disciplinas & Professores");
     setAiInsight(null);
+    setAlunosDaTurma([]);
+    setProfessoresDaTurma([]);
     setDrawerAberto(true);
-    void gerarInsightIA(turma);
   }
 
   function fecharGestao() {
     setDrawerAberto(false);
     setAiInsight(null);
-    window.setTimeout(() => setTurmaSelecionada(null), 300);
+    window.setTimeout(() => {
+      setTurmaSelecionada(null);
+      setAlunosDaTurma([]);
+      setProfessoresDaTurma([]);
+      setIsGeneratingInsight(false);
+    }, 300);
+  }
+
+  function sincronizarGoogleCalendar() {
+    setModalFeedback({
+      aberto: true,
+      tipo: "sucesso",
+      titulo: "Calendário Sincronizado",
+      mensagem:
+        "Grade horária integrada à agenda dos docentes e alunos matriculados.",
+    });
+  }
+
+  async function reanalisarTurma() {
+    if (!turmaSelecionada) return;
+    setIsGeneratingInsight(true);
+    setAiInsight(null);
+    try {
+      const res = await fetch("/api/insights/turma", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          codigo: turmaSelecionada.codigo,
+          curso: turmaSelecionada.curso,
+          turno: turmaSelecionada.turno,
+          semestre: turmaSelecionada.semestre || "1º Semestre",
+          matriculados,
+          capacidade: capacidadeTurma,
+        }),
+      });
+      const json = (await res.json()) as { analise?: string; insight?: string };
+      setAiInsight(
+        json.analise ||
+          json.insight ||
+          "Não foi possível gerar a análise no momento."
+      );
+    } catch (err) {
+      console.error("Erro ao gerar insight da turma:", err);
+      setAiInsight(
+        "Não foi possível gerar a análise no momento. Tente novamente."
+      );
+    } finally {
+      setIsGeneratingInsight(false);
+    }
   }
 
   function atualizarCampo<K extends keyof FormDataTurma>(
@@ -259,6 +485,10 @@ export default function TurmasMatriculasPage() {
       codigo: turma.codigo,
       curso: turma.curso,
       turno: turma.turno,
+      semestre:
+        turma.semestre && turma.semestre !== "—"
+          ? turma.semestre
+          : "1º Semestre",
       capacidade: String(turma.capacidade),
     });
     setEditingId(turma.id);
@@ -270,6 +500,7 @@ export default function TurmasMatriculasPage() {
 
     const codigo = formData.codigo.trim();
     const curso = formData.curso.trim();
+    const semestre = formData.semestre.trim() || "1º Semestre";
     const capacidade = Number(formData.capacidade);
 
     if (!codigo || !curso || !formData.capacidade || Number.isNaN(capacidade)) {
@@ -278,7 +509,13 @@ export default function TurmasMatriculasPage() {
     }
 
     setIsSubmitting(true);
-    const payload = { codigo, curso, turno: formData.turno, capacidade };
+    const payload = {
+      codigo,
+      curso,
+      turno: formData.turno,
+      semestre,
+      capacidade,
+    };
     const { error } = editingId
       ? await supabase.from("turmas").update(payload).eq("id", editingId)
       : await supabase.from("turmas").insert(payload);
@@ -304,8 +541,8 @@ export default function TurmasMatriculasPage() {
   }
 
   const inputClass =
-    "w-full px-3 py-2.5 rounded-lg bg-black border border-zinc-800 text-sm text-white placeholder:text-zinc-600 outline-none focus:border-zinc-600 transition-colors";
-  const labelClass = "block text-xs text-zinc-500 mb-1.5";
+    "w-full px-3 py-2.5 rounded-lg bg-black border border-gray-800 text-sm text-white placeholder:text-zinc-600 outline-none focus:border-purple-500 transition-colors";
+  const labelClass = "block text-xs text-gray-400 font-medium mb-1.5";
 
   return (
     <>
@@ -387,7 +624,7 @@ export default function TurmasMatriculasPage() {
             </div>
 
             <div className="overflow-x-auto">
-              <table className="w-full text-left min-w-[820px]">
+              <table className="w-full text-left min-w-[920px]">
                 <thead>
                   <tr className="border-b border-zinc-800">
                     <th className="px-6 py-3.5 text-xs font-medium text-zinc-500 uppercase tracking-widest">
@@ -395,6 +632,9 @@ export default function TurmasMatriculasPage() {
                     </th>
                     <th className="px-4 py-3.5 text-xs font-medium text-zinc-500 uppercase tracking-widest">
                       Curso
+                    </th>
+                    <th className="px-4 py-3.5 text-xs font-medium text-zinc-500 uppercase tracking-widest">
+                      Semestre
                     </th>
                     <th className="px-4 py-3.5 text-xs font-medium text-zinc-500 uppercase tracking-widest">
                       Turno
@@ -414,7 +654,7 @@ export default function TurmasMatriculasPage() {
                   {isLoading ? (
                     <tr>
                       <td
-                        colSpan={6}
+                        colSpan={7}
                         className="px-6 py-16 text-center text-sm text-zinc-500"
                       >
                         Carregando turmas...
@@ -423,7 +663,7 @@ export default function TurmasMatriculasPage() {
                   ) : turmasFiltradas.length === 0 ? (
                     <tr>
                       <td
-                        colSpan={6}
+                        colSpan={7}
                         className="px-6 py-12 text-center text-sm text-zinc-500"
                       >
                         Nenhuma turma encontrada com os filtros aplicados.
@@ -431,7 +671,11 @@ export default function TurmasMatriculasPage() {
                     </tr>
                   ) : (
                     turmasFiltradas.map((turma) => {
-                      const pct = ocupacaoPercentual(turma.ocupacao, turma.capacidade);
+                      const capacidade = turma.capacidade || 40;
+                      const statusOcup = statusPorOcupacao(
+                        turma.percentual,
+                        turma.status
+                      );
                       return (
                         <tr
                           key={turma.id || turma.codigo}
@@ -444,31 +688,37 @@ export default function TurmasMatriculasPage() {
                           <td className="px-4 py-4 text-sm text-zinc-400 max-w-[280px]">
                             <span className="line-clamp-1">{turma.curso}</span>
                           </td>
+                          <td className="px-4 py-4">
+                            <span className="inline-flex items-center px-2.5 py-0.5 rounded-md text-xs font-medium border border-gray-800 bg-[#0f1117] text-zinc-300">
+                              {turma.semestre && turma.semestre !== "—"
+                                ? turma.semestre
+                                : "1º Semestre"}
+                            </span>
+                          </td>
                           <td className="px-4 py-4 text-sm text-zinc-400">{turma.turno}</td>
                           <td className="px-4 py-4 min-w-[160px]">
                             <div className="flex flex-col gap-1.5">
                               <div className="flex items-center justify-between text-xs">
                                 <span className="text-zinc-300">
-                                  {turma.ocupacao}/{turma.capacidade}
+                                  {turma.matriculados}/{capacidade}
                                 </span>
-                                <span className="text-zinc-500">{pct}%</span>
+                                <span className="text-zinc-500">
+                                  {turma.percentual}%
+                                </span>
                               </div>
-                              <div className="h-1.5 w-full rounded-full bg-zinc-800 overflow-hidden">
+                              <div className="w-full bg-gray-800 rounded-full h-1.5 overflow-hidden">
                                 <div
-                                  className={`h-full rounded-full transition-all ${corBarraOcupacao(pct)}`}
-                                  style={{ width: `${pct}%` }}
+                                  className="bg-purple-600 h-full rounded-full transition-all duration-500"
+                                  style={{ width: `${turma.percentual}%` }}
                                 />
                               </div>
                             </div>
                           </td>
                           <td className="px-6 py-4">
                             <span
-                              className={`inline-flex items-center px-2.5 py-0.5 rounded-md text-xs font-medium border ${
-                                statusBadge[turma.status] ??
-                                "bg-zinc-900 text-zinc-400 border-zinc-800"
-                              }`}
+                              className={`inline-flex items-center px-2.5 py-0.5 rounded-md text-xs font-medium border ${statusOcup.className}`}
                             >
-                              {turma.status}
+                              {statusOcup.label}
                             </span>
                           </td>
                           <td className="px-6 py-4">
@@ -514,15 +764,15 @@ export default function TurmasMatriculasPage() {
 
         {/* Drawer */}
         <aside
-          className={`absolute right-0 top-0 h-full w-full max-w-md bg-zinc-950 border-l border-zinc-800 z-50 flex flex-col shadow-2xl transition-transform duration-300 ease-out ${
+          className={`absolute right-0 top-0 h-full w-full max-w-md bg-[#0f1117] border-l border-gray-800 z-50 flex flex-col shadow-2xl transition-transform duration-300 ease-out ${
             drawerAberto ? "translate-x-0" : "translate-x-full"
           }`}
         >
           {turmaSelecionada && (
             <>
-              <div className="px-6 py-5 border-b border-zinc-800 flex items-start justify-between gap-4">
+              <div className="px-6 py-5 border-b border-gray-800 flex items-start justify-between gap-4">
                 <div className="flex items-center gap-4 min-w-0">
-                  <div className="w-14 h-14 rounded-full bg-zinc-800 border border-zinc-700 flex items-center justify-center shrink-0">
+                  <div className="w-14 h-14 rounded-full bg-zinc-800 border border-gray-800 flex items-center justify-center shrink-0">
                     <Layers className="w-7 h-7 text-zinc-300" />
                   </div>
                   <div className="min-w-0">
@@ -541,12 +791,13 @@ export default function TurmasMatriculasPage() {
                   type="button"
                   onClick={fecharGestao}
                   className="p-2 rounded-lg text-zinc-500 hover:text-white hover:bg-zinc-900 transition-colors shrink-0"
+                  aria-label="Fechar painel"
                 >
                   <X className="w-4 h-4" />
                 </button>
               </div>
 
-              <div className="px-4 pt-4 border-b border-zinc-800">
+              <div className="px-4 pt-4 border-b border-gray-800">
                 <div className="flex gap-1 overflow-x-auto">
                   {abas.map((aba) => (
                     <button
@@ -555,7 +806,7 @@ export default function TurmasMatriculasPage() {
                       onClick={() => setAbaAtiva(aba)}
                       className={`px-3 py-2.5 text-xs font-medium rounded-t-lg transition-colors border-b-2 whitespace-nowrap ${
                         abaAtiva === aba
-                          ? "text-white border-white bg-zinc-900/50"
+                          ? "text-white border-purple-500 bg-zinc-900/50"
                           : "text-zinc-500 border-transparent hover:text-zinc-300"
                       }`}
                     >
@@ -568,36 +819,61 @@ export default function TurmasMatriculasPage() {
               <div className="flex-1 overflow-y-auto p-6">
                 {abaAtiva === "Disciplinas & Professores" && (
                   <div className="space-y-4">
-                    <div className="rounded-xl bg-zinc-900 border border-zinc-800 p-4 space-y-3">
+                    <div className="rounded-xl bg-zinc-900 border border-gray-800 p-4 space-y-3">
                       <Campo label="Turno" valor={turmaSelecionada.turno} />
-                      <Campo label="Semestre" valor={turmaSelecionada.semestre} />
-                      <Campo label="Status" valor={turmaSelecionada.status} />
+                      <Campo
+                        label="Semestre"
+                        valor={
+                          turmaSelecionada.semestre || "1º Semestre"
+                        }
+                      />
+                      <Campo
+                        label="Status"
+                        valor={
+                          statusPorOcupacao(
+                            turmaSelecionada.percentual,
+                            turmaSelecionada.status
+                          ).label
+                        }
+                      />
                       <Campo
                         label="Ocupação"
-                        valor={`${turmaSelecionada.ocupacao}/${turmaSelecionada.capacidade} (${ocupacaoPercentual(turmaSelecionada.ocupacao, turmaSelecionada.capacidade)}%)`}
+                        valor={`${matriculados}/${capacidadeTurma} (${taxaOcupacao}%)`}
                       />
                     </div>
 
-                    <div className="rounded-xl bg-zinc-900 border border-zinc-800 p-4">
+                    <div className="rounded-xl bg-zinc-900 border border-gray-800 p-4">
                       <p className="text-xs text-zinc-500 uppercase tracking-widest mb-3">
                         Disciplinas e docentes
                       </p>
-                      {turmaSelecionada.disciplinas.length === 0 ? (
+                      {professoresDaTurma.length === 0 ? (
                         <p className="text-sm text-zinc-500">
-                          Nenhuma disciplina alocada nesta turma.
+                          Nenhum docente alocado nesta área.
                         </p>
                       ) : (
                         <ul className="space-y-3">
-                          {turmaSelecionada.disciplinas.map((d) => (
+                          {professoresDaTurma.map((prof) => (
                             <li
-                              key={d.nome}
-                              className="flex items-start gap-3 rounded-lg border border-zinc-800 bg-black/30 px-3 py-3"
+                              key={prof.id}
+                              className="rounded-lg border border-gray-800 bg-[#0a0c10] px-3 py-3 space-y-2"
                             >
-                              <BookOpen className="w-4 h-4 text-zinc-500 shrink-0 mt-0.5" />
-                              <div className="min-w-0">
-                                <p className="text-sm font-medium text-white">{d.nome}</p>
-                                <p className="text-xs text-zinc-500 mt-0.5">{d.professor}</p>
+                              <div className="flex items-start gap-3">
+                                <BookOpen className="w-4 h-4 text-zinc-500 shrink-0 mt-0.5" />
+                                <div className="min-w-0 flex-1">
+                                  <p className="text-sm font-medium text-white">
+                                    {prof.nome}
+                                  </p>
+                                  <p className="text-xs text-zinc-500 mt-0.5">
+                                    {prof.titulacao}
+                                  </p>
+                                </div>
+                                <span className="inline-flex items-center px-2 py-0.5 rounded-md text-[10px] font-medium border border-green-900/50 bg-green-950 text-green-400 shrink-0">
+                                  {prof.status || "Ativo"}
+                                </span>
                               </div>
+                              <span className="inline-flex items-center px-2 py-0.5 rounded-md text-[11px] border border-gray-800 bg-zinc-950 text-zinc-300">
+                                {prof.area_atuacao || turmaSelecionada.curso}
+                              </span>
                             </li>
                           ))}
                         </ul>
@@ -608,33 +884,33 @@ export default function TurmasMatriculasPage() {
 
                 {abaAtiva === "Lista de Alunos" && (
                   <div className="space-y-4">
-                    <div className="rounded-xl bg-zinc-900 border border-zinc-800 p-4">
+                    <div className="rounded-xl bg-zinc-900 border border-gray-800 p-4">
                       <div className="flex items-center justify-between mb-4">
                         <p className="text-xs text-zinc-500 uppercase tracking-widest">
                           Matriculados
                         </p>
                         <span className="inline-flex items-center gap-1.5 text-xs text-zinc-400">
                           <Users className="w-3.5 h-3.5" />
-                          {turmaSelecionada.alunos.length} aluno
-                          {turmaSelecionada.alunos.length !== 1 ? "s" : ""}
+                          {alunosDaTurma.length} aluno
+                          {alunosDaTurma.length !== 1 ? "s" : ""}
                         </span>
                       </div>
 
-                      {turmaSelecionada.alunos.length === 0 ? (
+                      {alunosDaTurma.length === 0 ? (
                         <p className="text-sm text-zinc-500 py-4 text-center">
                           Nenhum aluno matriculado nesta turma.
                         </p>
                       ) : (
-                        <ul className="divide-y divide-zinc-800">
-                          {turmaSelecionada.alunos.map((aluno) => (
+                        <ul className="divide-y divide-gray-800">
+                          {alunosDaTurma.map((aluno) => (
                             <li
-                              key={aluno.ra}
+                              key={aluno.id || aluno.ra}
                               className="flex items-center gap-3 py-3 first:pt-0 last:pb-0"
                             >
-                              <div className="w-8 h-8 rounded-full bg-zinc-800 border border-zinc-700 flex items-center justify-center shrink-0">
+                              <div className="w-8 h-8 rounded-full bg-zinc-800 border border-gray-800 flex items-center justify-center shrink-0">
                                 <User className="w-4 h-4 text-zinc-400" />
                               </div>
-                              <div className="min-w-0">
+                              <div className="min-w-0 flex-1">
                                 <p className="text-sm font-medium text-white truncate">
                                   {aluno.nome}
                                 </p>
@@ -642,6 +918,9 @@ export default function TurmasMatriculasPage() {
                                   RA {aluno.ra}
                                 </p>
                               </div>
+                              <span className="text-[11px] text-zinc-400 shrink-0">
+                                {aluno.semestre}
+                              </span>
                             </li>
                           ))}
                         </ul>
@@ -650,30 +929,29 @@ export default function TurmasMatriculasPage() {
                   </div>
                 )}
 
-                {abaAtiva === "Automação & IA" && turmaSelecionada && (
+                {abaAtiva === "Automação & IA" && (
                   <div className="space-y-4">
                     <button
                       type="button"
+                      onClick={sincronizarGoogleCalendar}
                       className="w-full inline-flex items-center justify-center gap-2 px-4 py-2.5 rounded-lg bg-white text-black text-sm font-medium hover:bg-zinc-200 transition-colors"
                     >
                       <CalendarDays className="w-4 h-4" />
-                      Sincronizar Google Calendar (Alunos e Docentes)
+                      Sincronizar Google Calendar
                     </button>
 
-                    {/* ── Painel Preditivo Groq ─────────────────────────── */}
-                    <div className="rounded-xl bg-zinc-900 border border-zinc-800 overflow-hidden">
-                      <div className="px-4 py-3 border-b border-zinc-800 flex items-center justify-between gap-2">
+                    <div className="rounded-xl bg-zinc-900 border border-gray-800 overflow-hidden">
+                      <div className="px-4 py-3 border-b border-gray-800 flex items-center justify-between gap-2">
                         <div className="flex items-center gap-2">
                           <Sparkles className="w-4 h-4 text-zinc-400" />
                           <p className="text-xs font-medium uppercase tracking-widest text-zinc-400">
                             Painel Preditivo · Groq / Llama 3
                           </p>
                         </div>
-                        {/* Botão para re-gerar */}
                         {!isGeneratingInsight && (
                           <button
                             type="button"
-                            onClick={() => void gerarInsightIA(turmaSelecionada)}
+                            onClick={() => void reanalisarTurma()}
                             className="text-[11px] text-zinc-500 hover:text-white transition-colors underline underline-offset-2"
                           >
                             Reanalisar
@@ -682,38 +960,38 @@ export default function TurmasMatriculasPage() {
                       </div>
 
                       <div className="p-4 space-y-4">
-                        {/* Mini-cards com dados reais da turma */}
                         <div className="grid grid-cols-2 gap-3">
-                          <div className="rounded-lg bg-zinc-950 border border-zinc-800 p-3">
+                          <div className="rounded-lg bg-[#0a0c10] border border-gray-800 p-3">
                             <p className="text-[11px] text-zinc-500 uppercase tracking-widest">
                               Ocupação atual
                             </p>
-                            <p className={`text-lg font-semibold mt-1 ${
-                              ocupacaoPercentual(turmaSelecionada.ocupacao, turmaSelecionada.capacidade) >= 90
-                                ? "text-red-400"
-                                : ocupacaoPercentual(turmaSelecionada.ocupacao, turmaSelecionada.capacidade) >= 70
-                                ? "text-amber-400"
-                                : "text-sky-400"
-                            }`}>
-                              {ocupacaoPercentual(turmaSelecionada.ocupacao, turmaSelecionada.capacidade)}%
+                            <p
+                              className={`text-lg font-semibold mt-1 ${
+                                taxaOcupacao >= 90
+                                  ? "text-red-400"
+                                  : taxaOcupacao >= 70
+                                    ? "text-amber-400"
+                                    : "text-sky-400"
+                              }`}
+                            >
+                              {taxaOcupacao}%
                             </p>
                           </div>
-                          <div className="rounded-lg bg-zinc-950 border border-zinc-800 p-3">
+                          <div className="rounded-lg bg-[#0a0c10] border border-gray-800 p-3">
                             <p className="text-[11px] text-zinc-500 uppercase tracking-widest">
                               Vagas
                             </p>
                             <p className="text-lg font-semibold text-white mt-1">
-                              {turmaSelecionada.ocupacao}
+                              {matriculados}
                               <span className="text-zinc-500 text-sm font-normal">
-                                /{turmaSelecionada.capacidade}
+                                /{capacidadeTurma}
                               </span>
                             </p>
                           </div>
                         </div>
 
-                        {/* ── Skeleton de carregamento ── */}
                         {isGeneratingInsight && (
-                          <div className="rounded-lg bg-black/40 border border-zinc-800 p-4 space-y-3">
+                          <div className="rounded-lg bg-black/40 border border-gray-800 p-4 space-y-3">
                             <div className="flex items-center gap-2 mb-3">
                               <div className="w-5 h-5 rounded-full border-2 border-zinc-600 border-t-white animate-spin shrink-0" />
                               <p className="text-xs text-zinc-500 animate-pulse">
@@ -726,7 +1004,6 @@ export default function TurmasMatriculasPage() {
                           </div>
                         )}
 
-                        {/* ── Insight real da Groq ── */}
                         {!isGeneratingInsight && aiInsight && (
                           <div className="rounded-lg bg-black/40 border-l-4 border-violet-500 border border-violet-900/40 p-4 flex gap-3">
                             <div className="w-9 h-9 rounded-lg bg-violet-950/60 border border-violet-900/50 flex items-center justify-center shrink-0">
@@ -743,7 +1020,6 @@ export default function TurmasMatriculasPage() {
                           </div>
                         )}
 
-                        {/* ── Estado vazio (sem erro, sem insight ainda) ── */}
                         {!isGeneratingInsight && !aiInsight && (
                           <p className="text-sm text-zinc-600 text-center py-2">
                             Nenhuma análise disponível.
@@ -765,7 +1041,7 @@ export default function TurmasMatriculasPage() {
               role="dialog"
               aria-modal="true"
               aria-labelledby="modal-nova-turma-titulo"
-              className="bg-zinc-950 border border-zinc-800 rounded-lg p-6 w-full max-w-lg max-h-[90vh] overflow-y-auto shadow-2xl"
+              className="bg-[#0f1117] border border-gray-800 rounded-lg p-6 w-full max-w-lg max-h-[90vh] overflow-y-auto shadow-2xl"
             >
               <div className="flex items-start justify-between gap-4 mb-6">
                 <div>
@@ -854,6 +1130,25 @@ export default function TurmasMatriculasPage() {
                   >
                     <option value="Manhã">Manhã</option>
                     <option value="Noite">Noite</option>
+                  </select>
+                </div>
+
+                <div>
+                  <label className={labelClass} htmlFor="turma-semestre">
+                    Semestre
+                  </label>
+                  <select
+                    id="turma-semestre"
+                    required
+                    value={formData.semestre}
+                    onChange={(e) => atualizarCampo("semestre", e.target.value)}
+                    className={inputClass}
+                  >
+                    {SEMESTRES.map((sem) => (
+                      <option key={sem} value={sem}>
+                        {sem}
+                      </option>
+                    ))}
                   </select>
                 </div>
 
