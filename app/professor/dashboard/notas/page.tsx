@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import {
   LayoutDashboard,
@@ -12,6 +12,9 @@ import {
   GraduationCap,
   ChevronDown,
   Search,
+  AlertTriangle,
+  Check,
+  Loader2,
 } from "lucide-react";
 import { supabase } from "@/lib/supabase";
 import { ProfessorSettingsControl } from "@/components/professor/config-modal";
@@ -31,31 +34,84 @@ const navItems = [
   { icon: MessageSquare,   label: "Mensagens",      href: "/professor/dashboard/mensagens", active: false },
 ];
 
+type AlunoLinha = {
+  id: string;
+  nome: string;
+  ra: string;
+};
+
+type Criterios = {
+  ativ1: number;
+  ativ2: number;
+  ativ3: number;
+  ativ4: number;
+  prova: number;
+};
+
 type TurmaOption = {
   id: string;
   codigo: string;
   curso: string;
   turno?: string;
   status?: string;
+  criterios_notas?: Criterios | null;
 };
 
-type AlunoNota = {
-  id: string;
-  nome: string;
-  ra: string;
-  n1: string;
-  n2: string;
-  media: number | null;
-  status: string;
+type NotasParciais = {
+  a1: string;
+  a2: string;
+  a3: string;
+  a4: string;
+  prova: string;
 };
 
-type StatusNota = "Aprovado" | "Reprovado" | "Recuperação" | "Pendente";
+type CampoNota = keyof NotasParciais;
+
+type StatusSalvamentoCampo = "salvando" | "sucesso" | "erro";
+
+type StatusNota = "Aprovado" | "Exame Final" | "Reprovado" | "Pendente";
+
+const CRITERIO_PARA_CAMPO: Record<keyof Criterios, CampoNota> = {
+  ativ1: "a1",
+  ativ2: "a2",
+  ativ3: "a3",
+  ativ4: "a4",
+  prova: "prova",
+};
+
+const CRITERIOS_PADRAO: Criterios = {
+  ativ1: 1,
+  ativ2: 1,
+  ativ3: 1,
+  ativ4: 1,
+  prova: 6,
+};
+
+const NOTAS_VAZIAS: NotasParciais = {
+  a1: "",
+  a2: "",
+  a3: "",
+  a4: "",
+  prova: "",
+};
+
+const CAMPOS_NOTA: {
+  key: CampoNota;
+  criterioKey: keyof Criterios;
+  label: string;
+}[] = [
+  { key: "a1", criterioKey: "ativ1", label: "Ativ. 1" },
+  { key: "a2", criterioKey: "ativ2", label: "Ativ. 2" },
+  { key: "a3", criterioKey: "ativ3", label: "Ativ. 3" },
+  { key: "a4", criterioKey: "ativ4", label: "Ativ. 4" },
+  { key: "prova", criterioKey: "prova", label: "Prova" },
+];
 
 const statusStyles: Record<StatusNota, string> = {
-  Aprovado: "bg-green-950 text-green-400 border-green-900/50",
-  Reprovado: "bg-red-950 text-red-400 border-red-900/50",
-  Recuperação: "bg-amber-950 text-amber-400 border-amber-900/50",
-  Pendente: "bg-zinc-900 text-zinc-400 border-zinc-700/50",
+  Aprovado: "bg-emerald-900 text-emerald-300",
+  "Exame Final": "bg-yellow-900 text-yellow-300",
+  Reprovado: "bg-red-900 text-red-300",
+  Pendente: "bg-zinc-800 text-zinc-400",
 };
 
 function iniciaisDoNome(nome: string) {
@@ -73,51 +129,133 @@ function labelTurma(turma: TurmaOption) {
 
 function parseNota(valor: string): number | null {
   if (valor.trim() === "") return null;
-  const num = Number(valor);
+  const num = Number(valor.replace(",", "."));
   if (Number.isNaN(num)) return null;
   return num;
 }
 
-function isNotaValida(valor: string): boolean {
-  if (valor.trim() === "") return true;
-  const num = Number(valor);
-  return !Number.isNaN(num) && num >= 0 && num <= 10;
+function somaCriterios(criterios: Criterios): number {
+  return (
+    Number(criterios.ativ1) +
+    Number(criterios.ativ2) +
+    Number(criterios.ativ3) +
+    Number(criterios.ativ4) +
+    Number(criterios.prova)
+  );
 }
 
-function calcularMediaEStatus(n1: string, n2: string): {
+function calcularMediaEStatus(notas: NotasParciais): {
   media: number | null;
   status: StatusNota;
 } {
-  const nota1 = parseNota(n1);
-  const nota2 = parseNota(n2);
+  const valores = [
+    parseNota(notas.a1),
+    parseNota(notas.a2),
+    parseNota(notas.a3),
+    parseNota(notas.a4),
+    parseNota(notas.prova),
+  ];
 
-  if (nota1 === null || nota2 === null || n1.trim() === "" || n2.trim() === "") {
+  const preenchidas = valores.filter((v) => v !== null);
+  if (preenchidas.length === 0) {
     return { media: null, status: "Pendente" };
   }
 
-  const media = Number((nota1 * 0.4 + nota2 * 0.6).toFixed(1));
+  const media = Number(
+    valores.reduce<number>((acc, v) => acc + (v ?? 0), 0).toFixed(1)
+  );
 
   if (media >= 7.0) return { media, status: "Aprovado" };
-  if (media >= 5.0) return { media, status: "Recuperação" };
+  if (media >= 4.0) return { media, status: "Exame Final" };
   return { media, status: "Reprovado" };
+}
+
+function notaToInput(valor: unknown): string {
+  if (valor === null || valor === undefined || valor === "") return "";
+  const num = Number(valor);
+  if (!Number.isNaN(num)) return String(num);
+  return String(valor);
+}
+
+function notasCompletas(notas: NotasParciais): boolean {
+  return CAMPOS_NOTA.every(({ key }) => notas[key].trim() !== "");
+}
+
+function normalizarCriterios(raw: unknown): Criterios {
+  if (!raw || typeof raw !== "object") {
+    return { ...CRITERIOS_PADRAO };
+  }
+
+  const c = raw as Partial<Record<keyof Criterios, unknown>>;
+  const ativ1 = Number(c.ativ1);
+  const ativ2 = Number(c.ativ2);
+  const ativ3 = Number(c.ativ3);
+  const ativ4 = Number(c.ativ4);
+  const prova = Number(c.prova);
+
+  const temAlgumValor = [ativ1, ativ2, ativ3, ativ4, prova].some(
+    (v) => !Number.isNaN(v)
+  );
+
+  if (!temAlgumValor) {
+    return { ...CRITERIOS_PADRAO };
+  }
+
+  return {
+    ativ1: Number.isNaN(ativ1) ? CRITERIOS_PADRAO.ativ1 : ativ1,
+    ativ2: Number.isNaN(ativ2) ? CRITERIOS_PADRAO.ativ2 : ativ2,
+    ativ3: Number.isNaN(ativ3) ? CRITERIOS_PADRAO.ativ3 : ativ3,
+    ativ4: Number.isNaN(ativ4) ? CRITERIOS_PADRAO.ativ4 : ativ4,
+    prova: Number.isNaN(prova) ? CRITERIOS_PADRAO.prova : prova,
+  };
+}
+
+function limitarNotaAoMaximo(valor: string, maximo: number): string {
+  if (valor.trim() === "") return "";
+  const num = parseNota(valor);
+  if (num === null) return "";
+  if (num > maximo) return String(maximo);
+  if (num < 0) return "0";
+  return valor;
 }
 
 export default function ProfessorNotasPage() {
   const { professorLogado, carregandoSessao } = useProfessorSession();
   const [turmas, setTurmas] = useState<TurmaOption[]>([]);
   const [turmaSelecionada, setTurmaSelecionada] = useState("");
-  const [alunosTurma, setAlunosTurma] = useState<AlunoNota[]>([]);
+  const [alunosTurma, setAlunosTurma] = useState<AlunoLinha[]>([]);
+  const [criterios, setCriterios] = useState<Criterios>(CRITERIOS_PADRAO);
+  const [notasAlunos, setNotasAlunos] = useState<Record<string, NotasParciais>>(
+    {}
+  );
   const [termoBusca, setTermoBusca] = useState("");
   const [paginaAtual, setPaginaAtual] = useState(1);
   const [itensPorPagina, setItensPorPagina] = useState(10);
   const [aiInsight, setAiInsight] = useState("");
   const [isLoadingAi, setIsLoadingAi] = useState(false);
+  const [salvando, setSalvando] = useState(false);
+  const [statusSalvarRegras, setStatusSalvarRegras] = useState<
+    "idle" | "salvando" | "salvo"
+  >("idle");
+  const [statusSalvamento, setStatusSalvamento] = useState<
+    Record<string, StatusSalvamentoCampo>
+  >({});
+  const timeoutsSalvamento = useRef<Record<string, ReturnType<typeof setTimeout>>>(
+    {}
+  );
+  const timeoutSalvarRegras = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [modalFeedback, setModalFeedback] = useState<{
     aberto: boolean;
     tipo: "sucesso" | "erro" | "atencao";
     titulo: string;
     mensagem: string;
   }>({ aberto: false, tipo: "sucesso", titulo: "", mensagem: "" });
+
+  const totalCriterios = useMemo(
+    () => Number(somaCriterios(criterios).toFixed(1)),
+    [criterios]
+  );
+  const criteriosValidos = Math.abs(totalCriterios - 10) < 0.001;
 
   function mostrarFeedback(
     tipo: "sucesso" | "erro" | "atencao",
@@ -163,74 +301,334 @@ export default function ProfessorNotasPage() {
     }
   }
 
-  function handleNotaChange(alunoId: string, campo: "n1" | "n2", valor: string) {
-    if (!isNotaValida(valor)) return;
+  function handleCriterioChange(campo: keyof Criterios, valor: string) {
+    const num = valor === "" ? 0 : Number(valor.replace(",", "."));
+    if (Number.isNaN(num) || num < 0) return;
 
-    setAlunosTurma((prev) =>
-      prev.map((aluno) => {
-        if (aluno.id !== alunoId) return aluno;
+    const proximos = { ...criterios, [campo]: num };
+    setCriterios(proximos);
 
-        const atualizado = {
-          ...aluno,
-          [campo]: valor,
+    // Cascata: limita notas já digitadas ao novo máximo da coluna
+    const maxPorCampo: Record<CampoNota, number> = {
+      a1: proximos.ativ1,
+      a2: proximos.ativ2,
+      a3: proximos.ativ3,
+      a4: proximos.ativ4,
+      prova: proximos.prova,
+    };
+
+    setNotasAlunos((prev) => {
+      let mudou = false;
+      const next: Record<string, NotasParciais> = {};
+      for (const [ra, notas] of Object.entries(prev)) {
+        const ajustadas: NotasParciais = {
+          a1: limitarNotaAoMaximo(notas.a1, maxPorCampo.a1),
+          a2: limitarNotaAoMaximo(notas.a2, maxPorCampo.a2),
+          a3: limitarNotaAoMaximo(notas.a3, maxPorCampo.a3),
+          a4: limitarNotaAoMaximo(notas.a4, maxPorCampo.a4),
+          prova: limitarNotaAoMaximo(notas.prova, maxPorCampo.prova),
         };
-        const { media, status } = calcularMediaEStatus(
-          atualizado.n1,
-          atualizado.n2
-        );
-
-        return { ...atualizado, media, status };
-      })
-    );
+        if (
+          ajustadas.a1 !== notas.a1 ||
+          ajustadas.a2 !== notas.a2 ||
+          ajustadas.a3 !== notas.a3 ||
+          ajustadas.a4 !== notas.a4 ||
+          ajustadas.prova !== notas.prova
+        ) {
+          mudou = true;
+        }
+        next[ra] = ajustadas;
+      }
+      return mudou ? next : prev;
+    });
   }
 
-  function handleSalvarRascunho() {
-    mostrarFeedback(
-      "sucesso",
-      "Rascunho salvo",
-      "Rascunho das notas salvo com sucesso!"
-    );
+  async function salvarCriteriosTurma() {
+    if (!turmaSelecionada || !criteriosValidos) return;
+
+    if (timeoutSalvarRegras.current) {
+      clearTimeout(timeoutSalvarRegras.current);
+      timeoutSalvarRegras.current = null;
+    }
+
+    setStatusSalvarRegras("salvando");
+    try {
+      const { error } = await supabase
+        .from("turmas")
+        .update({ criterios_notas: criterios })
+        .eq("id", turmaSelecionada);
+
+      if (error) {
+        throw new Error(error.message);
+      }
+
+      setTurmas((prev) =>
+        prev.map((turma) =>
+          turma.id === turmaSelecionada
+            ? { ...turma, criterios_notas: { ...criterios } }
+            : turma
+        )
+      );
+
+      setStatusSalvarRegras("salvo");
+      timeoutSalvarRegras.current = setTimeout(() => {
+        setStatusSalvarRegras("idle");
+        timeoutSalvarRegras.current = null;
+      }, 2000);
+    } catch (err) {
+      console.error("Erro ao salvar critérios da turma:", err);
+      setStatusSalvarRegras("idle");
+      mostrarFeedback(
+        "erro",
+        "Falha ao salvar regras",
+        "Não foi possível salvar a distribuição de pontos da turma."
+      );
+    }
   }
 
-  function handlePublicarNotas() {
+  function handleNotaChange(ra: string, campo: CampoNota, valor: string) {
+    if (!criteriosValidos) return;
+
+    const maxMap: Record<CampoNota, number> = {
+      a1: criterios.ativ1,
+      a2: criterios.ativ2,
+      a3: criterios.ativ3,
+      a4: criterios.ativ4,
+      prova: criterios.prova,
+    };
+
+    let valorFinal = valor;
+    if (valor.trim() !== "") {
+      const num = Number(valor.replace(",", "."));
+      if (Number.isNaN(num)) return;
+      if (num < 0) valorFinal = "0";
+      else if (num > maxMap[campo]) valorFinal = String(maxMap[campo]);
+    }
+
+    setNotasAlunos((prev) => ({
+      ...prev,
+      [ra]: {
+        ...(prev[ra] ?? NOTAS_VAZIAS),
+        [campo]: valorFinal,
+      },
+    }));
+  }
+
+  async function salvarNotaParcial(
+    ra: string,
+    campo: keyof Criterios,
+    valor: string
+  ) {
+    if (!turmaSelecionada || !criteriosValidos) return;
+
+    const statusKey = `${ra}-${campo}`;
+    const campoNota = CRITERIO_PARA_CAMPO[campo];
+    const notasAtuais: NotasParciais = {
+      ...(notasAlunos[ra] ?? NOTAS_VAZIAS),
+      [campoNota]: valor,
+    };
+    const { media, status } = calcularMediaEStatus(notasAtuais);
+    const valorNumerico = parseNota(valor);
+
+    if (timeoutsSalvamento.current[statusKey]) {
+      clearTimeout(timeoutsSalvamento.current[statusKey]);
+      delete timeoutsSalvamento.current[statusKey];
+    }
+
+    setStatusSalvamento((prev) => ({ ...prev, [statusKey]: "salvando" }));
+
+    try {
+      const valoresDb = {
+        ativ1: parseNota(notasAtuais.a1),
+        ativ2: parseNota(notasAtuais.a2),
+        ativ3: parseNota(notasAtuais.a3),
+        ativ4: parseNota(notasAtuais.a4),
+        prova: parseNota(notasAtuais.prova),
+      };
+
+      const patch = {
+        [campo]: valorNumerico,
+        media_final: media,
+        status,
+      };
+
+      const { data, error } = await supabase
+        .from("notas")
+        .update(patch)
+        .eq("ra_aluno", ra)
+        .eq("turma", turmaSelecionada)
+        .select("id");
+
+      if (error) {
+        throw new Error(error.message);
+      }
+
+      if (!data || data.length === 0) {
+        const { error: insertError } = await supabase.from("notas").insert({
+          ra_aluno: ra,
+          turma: turmaSelecionada,
+          ...valoresDb,
+          media_final: media,
+          status,
+        });
+
+        if (insertError) {
+          throw new Error(insertError.message);
+        }
+      }
+
+      setStatusSalvamento((prev) => ({ ...prev, [statusKey]: "sucesso" }));
+      timeoutsSalvamento.current[statusKey] = setTimeout(() => {
+        setStatusSalvamento((prev) => {
+          const next = { ...prev };
+          delete next[statusKey];
+          return next;
+        });
+        delete timeoutsSalvamento.current[statusKey];
+      }, 2000);
+    } catch (err) {
+      console.error("Erro no auto-save da nota:", err);
+      setStatusSalvamento((prev) => ({ ...prev, [statusKey]: "erro" }));
+      timeoutsSalvamento.current[statusKey] = setTimeout(() => {
+        setStatusSalvamento((prev) => {
+          const next = { ...prev };
+          delete next[statusKey];
+          return next;
+        });
+        delete timeoutsSalvamento.current[statusKey];
+      }, 2000);
+    }
+  }
+
+  useEffect(() => {
+    const timeouts = timeoutsSalvamento.current;
+    return () => {
+      Object.values(timeouts).forEach(clearTimeout);
+      if (timeoutSalvarRegras.current) {
+        clearTimeout(timeoutSalvarRegras.current);
+      }
+    };
+  }, []);
+
+  async function persistirNotas(publicado: boolean) {
+    if (!turmaSelecionada) {
+      mostrarFeedback(
+        "atencao",
+        "Turma obrigatória",
+        "Selecione uma turma antes de salvar as notas."
+      );
+      return;
+    }
+
+    if (!criteriosValidos) {
+      mostrarFeedback(
+        "atencao",
+        "Critérios inválidos",
+        "A soma dos critérios deve ser exatamente 10 antes de salvar."
+      );
+      return;
+    }
+
     if (alunosTurma.length === 0) {
       mostrarFeedback(
         "atencao",
-        "Pendências encontradas",
-        "Preencha todas as notas antes de publicar."
+        "Sem alunos",
+        "Nenhum aluno nesta turma para lançar notas."
       );
       return;
     }
 
-    const incompletos = alunosTurma.some(
-      (aluno) => aluno.n1.trim() === "" || aluno.n2.trim() === ""
-    );
+    if (publicado) {
+      const incompletos = alunosTurma.some((aluno) => {
+        const notas = notasAlunos[aluno.ra] ?? NOTAS_VAZIAS;
+        return !notasCompletas(notas);
+      });
+      if (incompletos) {
+        mostrarFeedback(
+          "atencao",
+          "Pendências encontradas",
+          "Preencha todas as 5 avaliações de cada aluno antes de publicar."
+        );
+        return;
+      }
+    }
 
-    if (incompletos) {
+    setSalvando(true);
+    try {
+      for (const aluno of alunosTurma) {
+        const notas = notasAlunos[aluno.ra] ?? NOTAS_VAZIAS;
+        const { media, status } = calcularMediaEStatus(notas);
+        const registro = {
+          ra_aluno: aluno.ra,
+          turma: turmaSelecionada,
+          ativ1: parseNota(notas.a1),
+          ativ2: parseNota(notas.a2),
+          ativ3: parseNota(notas.a3),
+          ativ4: parseNota(notas.a4),
+          prova: parseNota(notas.prova),
+          media_final: media,
+          status,
+        };
+
+        const { data, error } = await supabase
+          .from("notas")
+          .update({
+            ativ1: registro.ativ1,
+            ativ2: registro.ativ2,
+            ativ3: registro.ativ3,
+            ativ4: registro.ativ4,
+            prova: registro.prova,
+            media_final: registro.media_final,
+            status: registro.status,
+          })
+          .eq("ra_aluno", aluno.ra)
+          .eq("turma", turmaSelecionada)
+          .select("id");
+
+        if (error) {
+          throw new Error(error.message);
+        }
+
+        if (!data || data.length === 0) {
+          const { error: insertError } = await supabase
+            .from("notas")
+            .insert(registro);
+
+          if (insertError) {
+            throw new Error(insertError.message);
+          }
+        }
+      }
+
       mostrarFeedback(
-        "atencao",
-        "Pendências encontradas",
-        "Preencha todas as notas antes de publicar."
+        "sucesso",
+        publicado ? "Notas publicadas" : "Rascunho salvo",
+        publicado
+          ? "Notas publicadas com sucesso para a turma!"
+          : "Rascunho das notas salvo com sucesso!"
       );
-      return;
+    } catch (err) {
+      console.error("Erro ao salvar notas:", err);
+      mostrarFeedback(
+        "erro",
+        "Falha ao salvar",
+        "Não foi possível salvar as notas. Tente novamente."
+      );
+    } finally {
+      setSalvando(false);
     }
-
-    mostrarFeedback(
-      "sucesso",
-      "Notas publicadas",
-      "Notas publicadas com sucesso para a turma!"
-    );
   }
 
   useEffect(() => {
     if (!professorLogado) return;
 
     async function fetchTurmas() {
-      const { data, error } = await supabase
+      const areaAtuacao = professorLogado!.area_atuacao?.trim() ?? "";
+
+      const { data: turmasFiltradas, error } = await supabase
         .from("turmas")
-        .select("id, codigo, curso, turno")
-        .eq("status", "Aberta")
-        .order("curso", { ascending: true });
+        .select("*")
+        .ilike("curso", `%${areaAtuacao}%`);
 
       if (error) {
         console.error("Erro ao buscar turmas:", error.message);
@@ -239,10 +637,26 @@ export default function ProfessorNotasPage() {
         return;
       }
 
-      const lista = (data ?? []) as TurmaOption[];
+      const lista = ((turmasFiltradas ?? []) as Record<string, unknown>[]).map(
+        (turma) => ({
+          id: String(turma.id),
+          codigo: String(turma.codigo ?? ""),
+          curso: String(turma.curso ?? ""),
+          turno: turma.turno ? String(turma.turno) : undefined,
+          status: turma.status ? String(turma.status) : undefined,
+          criterios_notas: normalizarCriterios(turma.criterios_notas),
+        })
+      );
+
       setTurmas(lista);
-      if (lista.length > 0) {
+
+      // Auto-seleção apenas quando houver uma única disciplina do professor
+      if (lista.length === 1) {
         setTurmaSelecionada(lista[0].id);
+        setCriterios(lista[0].criterios_notas ?? { ...CRITERIOS_PADRAO });
+      } else {
+        setTurmaSelecionada("");
+        setCriterios({ ...CRITERIOS_PADRAO });
       }
     }
 
@@ -250,41 +664,64 @@ export default function ProfessorNotasPage() {
   }, [professorLogado]);
 
   useEffect(() => {
+    if (!turmaSelecionada) {
+      setCriterios({ ...CRITERIOS_PADRAO });
+      return;
+    }
+
+    const turma = turmas.find((t) => t.id === turmaSelecionada);
+    if (!turma) return;
+
+    setCriterios(normalizarCriterios(turma.criterios_notas));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [turmaSelecionada]);
+
+  useEffect(() => {
     if (!turmaSelecionada || !professorLogado) {
       setAlunosTurma([]);
+      setNotasAlunos({});
+      return;
+    }
+
+    const turma = turmas.find((t) => t.id === turmaSelecionada);
+    if (!turma) {
+      setAlunosTurma([]);
+      setNotasAlunos({});
       return;
     }
 
     async function fetchAlunosDaTurma() {
       const vinculoProfessor = professorLogado!.nomeCompletoTitulo;
-      const areaAtuacao = professorLogado!.area_atuacao;
+      const cursoTurma = turma!.curso;
 
       let { data, error } = await supabase
         .from("alunos")
         .select("id, nome, ra, professor, curso")
         .eq("professor", vinculoProfessor)
+        .ilike("curso", `%${cursoTurma}%`)
         .order("nome", { ascending: true });
 
-      if (error) {
+      if (error || !data || data.length === 0) {
         const fallback = await supabase
           .from("alunos")
           .select("id, nome, ra, professor, curso")
-          .eq("curso", areaAtuacao)
+          .ilike("curso", `%${cursoTurma}%`)
           .order("nome", { ascending: true });
 
         if (fallback.error) {
           console.error(
             "Erro ao buscar alunos:",
-            error.message || fallback.error.message
+            error?.message || fallback.error.message
           );
           setAlunosTurma([]);
+          setNotasAlunos({});
           return;
         }
 
         data = fallback.data;
       }
 
-      const mapeados: AlunoNota[] = (data ?? []).map((aluno) => ({
+      const mapeados: AlunoLinha[] = (data ?? []).map((aluno) => ({
         id: String(aluno.id),
         nome: String(aluno.nome ?? ""),
         ra: String(
@@ -292,13 +729,40 @@ export default function ProfessorNotasPage() {
             (aluno as { matricula?: string }).matricula ||
             "RA-"
         ),
-        n1: "",
-        n2: "",
-        media: null,
-        status: "Pendente",
       }));
 
       setAlunosTurma(mapeados);
+
+      const iniciaisNotas: Record<string, NotasParciais> = {};
+      for (const aluno of mapeados) {
+        iniciaisNotas[aluno.ra] = { ...NOTAS_VAZIAS };
+      }
+
+      const { data: notasSalvas, error: notasError } = await supabase
+        .from("notas")
+        .select("*")
+        .eq("turma", turmaSelecionada);
+
+      if (notasError) {
+        console.error("Erro ao carregar notas salvas:", notasError.message);
+      }
+
+      if (notasSalvas && notasSalvas.length > 0) {
+        for (const row of notasSalvas) {
+          const ra = String(row.ra_aluno ?? "");
+          if (!ra || !(ra in iniciaisNotas)) continue;
+
+          iniciaisNotas[ra] = {
+            a1: notaToInput(row.ativ1),
+            a2: notaToInput(row.ativ2),
+            a3: notaToInput(row.ativ3),
+            a4: notaToInput(row.ativ4),
+            prova: notaToInput(row.prova),
+          };
+        }
+      }
+
+      setNotasAlunos(iniciaisNotas);
       await fetchAiTurmaInsight(turmaSelecionada);
     }
 
@@ -344,13 +808,12 @@ export default function ProfessorNotasPage() {
     professorLogado.nome || professorLogado.nomeCompletoTitulo
   );
 
+  const inputNotaClass =
+    "w-16 bg-[#1a1d24] border border-gray-700 text-center rounded text-sm text-white h-8 block focus:outline-none focus:ring-1 focus:ring-zinc-500 disabled:opacity-50 disabled:cursor-not-allowed transition-colors duration-300 [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none";
+
   return (
     <div className="flex h-screen bg-black text-white overflow-hidden">
-      {/* ══════════════════════════════
-          SIDEBAR
-      ══════════════════════════════ */}
       <aside className="hidden md:flex flex-col w-64 shrink-0 bg-zinc-950 border-r border-zinc-800">
-        {/* Logo */}
         <div className="flex items-center gap-2.5 px-5 py-5 border-b border-zinc-800">
           <div className="w-8 h-8 bg-gradient-to-br from-zinc-800 to-zinc-950 border border-zinc-700/50 shadow-[0_0_15px_rgba(255,255,255,0.05)] flex items-center justify-center rounded-lg shrink-0">
             <GraduationCap className="w-5 h-5 text-white" />
@@ -361,7 +824,6 @@ export default function ProfessorNotasPage() {
           </span>
         </div>
 
-        {/* Perfil */}
         <div className="px-4 py-5 border-b border-zinc-800">
           <div className="flex items-center justify-between gap-3">
             <div className="flex items-center gap-3 min-w-0">
@@ -381,7 +843,6 @@ export default function ProfessorNotasPage() {
           </div>
         </div>
 
-        {/* Nav */}
         <nav className="flex flex-col gap-0.5 px-2 py-4 flex-1">
           {navItems.map(({ icon: Icon, label, href, active }) =>
             href.startsWith("/professor/dashboard") ? (
@@ -414,7 +875,6 @@ export default function ProfessorNotasPage() {
           )}
         </nav>
 
-        {/* Logout */}
         <div className="px-2 py-4 border-t border-zinc-800">
           <a
             href="/professor"
@@ -427,13 +887,8 @@ export default function ProfessorNotasPage() {
         </div>
       </aside>
 
-      {/* ══════════════════════════════
-          MAIN CONTENT
-      ══════════════════════════════ */}
       <main className="flex-1 overflow-y-auto bg-black">
         <div className="max-w-6xl mx-auto p-8">
-
-          {/* Header de Contexto */}
           <div className="mb-8 flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
             <div className="min-w-0">
               <h1 className="text-2xl font-semibold tracking-tight text-white">
@@ -446,13 +901,18 @@ export default function ProfessorNotasPage() {
                   className="appearance-none bg-zinc-950 border border-zinc-700 text-sm text-white font-medium rounded-lg pl-4 pr-10 py-2.5 focus:outline-none focus:ring-1 focus:ring-zinc-500 cursor-pointer hover:border-zinc-600 transition-colors min-w-[280px]"
                 >
                   {turmas.length === 0 ? (
-                    <option value="">Nenhuma turma ativa</option>
+                    <option value="">Nenhuma turma vinculada</option>
                   ) : (
-                    turmas.map((turma) => (
-                      <option key={turma.id} value={turma.id}>
-                        {labelTurma(turma)}
-                      </option>
-                    ))
+                    <>
+                      {turmas.length > 1 && (
+                        <option value="">Selecione uma disciplina</option>
+                      )}
+                      {turmas.map((turma) => (
+                        <option key={turma.id} value={turma.id}>
+                          {labelTurma(turma)}
+                        </option>
+                      ))}
+                    </>
                   )}
                 </select>
                 <ChevronDown className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 w-4 h-4 text-zinc-400" />
@@ -462,22 +922,23 @@ export default function ProfessorNotasPage() {
             <div className="flex items-center gap-3 shrink-0">
               <button
                 type="button"
-                onClick={handleSalvarRascunho}
-                className="px-4 py-2 rounded-lg text-sm font-medium border border-zinc-700 text-zinc-300 hover:bg-zinc-900 hover:text-white transition-colors"
+                disabled={salvando || !criteriosValidos}
+                onClick={() => void persistirNotas(false)}
+                className="px-4 py-2 rounded-lg text-sm font-medium border border-zinc-700 text-zinc-300 hover:bg-zinc-900 hover:text-white transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
               >
-                Salvar Rascunho
+                {salvando ? "Salvando..." : "Salvar Rascunho"}
               </button>
               <button
                 type="button"
-                onClick={handlePublicarNotas}
-                className="px-4 py-2 rounded-lg text-sm font-medium bg-white text-black hover:bg-zinc-200 transition-colors"
+                disabled={salvando || !criteriosValidos}
+                onClick={() => void persistirNotas(true)}
+                className="px-4 py-2 rounded-lg text-sm font-medium bg-white text-black hover:bg-zinc-200 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
               >
-                Publicar Notas
+                {salvando ? "Publicando..." : "Publicar Notas"}
               </button>
             </div>
           </div>
 
-          {/* AI Insight Card */}
           <div className="mb-8 rounded-xl bg-zinc-950 border border-indigo-900/50 p-5 flex gap-4">
             <div className="w-9 h-9 rounded-lg bg-indigo-950/60 border border-indigo-900/50 flex items-center justify-center shrink-0">
               <Sparkles className="w-4 h-4 text-indigo-300" />
@@ -486,13 +947,85 @@ export default function ProfessorNotasPage() {
               <p className="text-xs font-medium uppercase tracking-widest text-indigo-300/80 mb-1.5">
                 Análise da Turma
               </p>
-              <p className={`text-sm text-zinc-300 leading-relaxed ${isLoadingAi ? "animate-pulse text-zinc-400" : ""}`}>
-                {isLoadingAi ? "Analisando desempenho da turma..." : aiInsight}
+              <p
+                className={`text-sm text-zinc-300 leading-relaxed ${isLoadingAi ? "animate-pulse text-zinc-400" : ""}`}
+              >
+                {isLoadingAi
+                  ? "Analisando desempenho da turma..."
+                  : aiInsight}
               </p>
             </div>
           </div>
 
-          {/* Grade de Notas */}
+          {/* Distribuição de Pontos */}
+          <div className="mb-6 rounded-xl bg-zinc-950 border border-zinc-800 p-5">
+            <div className="flex flex-col gap-1 sm:flex-row sm:items-center sm:justify-between mb-4">
+              <div>
+                <h2 className="text-sm font-semibold text-white">
+                  Distribuição de Pontos do Semestre
+                </h2>
+                <p className="text-xs text-zinc-500 mt-0.5">
+                  Defina o valor máximo de cada avaliação (soma = 10)
+                </p>
+              </div>
+              <div className="flex items-center gap-3 shrink-0">
+                <p
+                  className={`text-sm font-medium ${
+                    criteriosValidos ? "text-emerald-400" : "text-red-400"
+                  }`}
+                >
+                  Total: {totalCriterios.toFixed(1)} / 10.0
+                </p>
+                <button
+                  type="button"
+                  onClick={() => void salvarCriteriosTurma()}
+                  disabled={!criteriosValidos || statusSalvarRegras === "salvando" || !turmaSelecionada}
+                  className="bg-[#9333ea] hover:bg-purple-600 text-white px-3 py-1 rounded text-sm transition-colors disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:bg-[#9333ea]"
+                >
+                  {statusSalvarRegras === "salvando"
+                    ? "Salvando..."
+                    : statusSalvarRegras === "salvo"
+                      ? "Salvo!"
+                      : "Salvar Regras"}
+                </button>
+              </div>
+            </div>
+
+            <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3">
+              {(
+                [
+                  { key: "ativ1", label: "Atividade 1" },
+                  { key: "ativ2", label: "Atividade 2" },
+                  { key: "ativ3", label: "Atividade 3" },
+                  { key: "ativ4", label: "Atividade 4" },
+                  { key: "prova", label: "Prova Semestral" },
+                ] as const
+              ).map((item) => (
+                <label key={item.key} className="flex flex-col gap-1.5">
+                  <span className="text-xs text-zinc-400">{item.label}</span>
+                  <input
+                    type="number"
+                    min={0}
+                    max={10}
+                    step={0.5}
+                    value={criterios[item.key]}
+                    onChange={(e) =>
+                      handleCriterioChange(item.key, e.target.value)
+                    }
+                    className="w-full bg-[#1a1d24] border border-gray-700 rounded-md text-sm text-white text-center px-2 py-2 focus:outline-none focus:ring-1 focus:ring-zinc-500 [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
+                  />
+                </label>
+              ))}
+            </div>
+
+            {!criteriosValidos && (
+              <div className="mt-4 flex items-center gap-2 text-sm text-red-400">
+                <AlertTriangle className="w-4 h-4 shrink-0" />
+                A soma dos critérios deve ser exatamente 10
+              </div>
+            )}
+          </div>
+
           <div className="rounded-xl bg-zinc-950 border border-zinc-800 overflow-hidden">
             <div className="px-6 py-4 border-b border-zinc-800">
               <div className="relative max-w-sm">
@@ -506,19 +1039,24 @@ export default function ProfessorNotasPage() {
                 />
               </div>
             </div>
-            <div className="overflow-x-auto">
-              <table className="w-full text-left">
+            <div
+              className="overflow-x-auto [&::-webkit-scrollbar]:h-2 [&::-webkit-scrollbar-track]:bg-[#0f1117] [&::-webkit-scrollbar-thumb]:bg-gray-700 hover:[&::-webkit-scrollbar-thumb]:bg-gray-600 [&::-webkit-scrollbar-thumb]:rounded-full"
+              style={{ scrollbarWidth: "thin", scrollbarColor: "#374151 #0f1117" }}
+            >
+              <table className="w-full text-left min-w-[900px]">
                 <thead>
                   <tr className="border-b border-zinc-800">
                     <th className="px-6 py-3.5 text-xs font-medium text-zinc-500 uppercase tracking-widest">
                       Aluno
                     </th>
-                    <th className="px-4 py-3.5 text-xs font-medium text-zinc-500 uppercase tracking-widest text-center">
-                      N1 (Peso 4)
-                    </th>
-                    <th className="px-4 py-3.5 text-xs font-medium text-zinc-500 uppercase tracking-widest text-center">
-                      N2 (Peso 6)
-                    </th>
+                    {CAMPOS_NOTA.map(({ key, criterioKey, label }) => (
+                      <th
+                        key={key}
+                        className="px-3 py-3.5 text-xs font-medium text-zinc-500 uppercase tracking-widest text-center whitespace-nowrap"
+                      >
+                        {label} (Máx: {criterios[criterioKey]})
+                      </th>
+                    ))}
                     <th className="px-4 py-3.5 text-xs font-medium text-zinc-500 uppercase tracking-widest text-center">
                       Média Final
                     </th>
@@ -531,7 +1069,7 @@ export default function ProfessorNotasPage() {
                   {alunosExibidos.length === 0 ? (
                     <tr>
                       <td
-                        colSpan={5}
+                        colSpan={8}
                         className="px-6 py-10 text-center text-sm text-zinc-500"
                       >
                         {alunosTurma.length === 0
@@ -540,67 +1078,91 @@ export default function ProfessorNotasPage() {
                       </td>
                     </tr>
                   ) : (
-                    alunosExibidos.map((aluno) => (
-                      <tr
-                        key={aluno.id}
-                        className="border-b border-zinc-800 last:border-b-0 hover:bg-zinc-900/40 transition-colors"
-                      >
-                        <td className="px-6 py-4">
-                          <div className="flex items-center gap-3">
-                            <div className="w-8 h-8 rounded-full bg-zinc-800 flex items-center justify-center text-xs font-semibold text-white shrink-0">
-                              {iniciaisDoNome(aluno.nome)}
+                    alunosExibidos.map((aluno) => {
+                      const notas = notasAlunos[aluno.ra] ?? NOTAS_VAZIAS;
+                      const { media, status } = calcularMediaEStatus(notas);
+
+                      return (
+                        <tr
+                          key={aluno.id}
+                          className="border-b border-zinc-800 last:border-b-0 hover:bg-zinc-900/40 transition-colors"
+                        >
+                          <td className="px-6 py-4">
+                            <div className="flex items-center gap-3">
+                              <div className="w-8 h-8 rounded-full bg-zinc-800 flex items-center justify-center text-xs font-semibold text-white shrink-0">
+                                {iniciaisDoNome(aluno.nome)}
+                              </div>
+                              <div className="min-w-0">
+                                <p className="text-sm font-medium text-white truncate">
+                                  {aluno.nome}
+                                </p>
+                                <p className="text-xs text-zinc-500">
+                                  RA {aluno.ra}
+                                </p>
+                              </div>
                             </div>
-                            <div className="min-w-0">
-                              <p className="text-sm font-medium text-white truncate">
-                                {aluno.nome}
-                              </p>
-                              <p className="text-xs text-zinc-500">RA {aluno.ra}</p>
-                            </div>
-                          </div>
-                        </td>
-                        <td className="px-4 py-4 text-center">
-                          <input
-                            type="number"
-                            min={0}
-                            max={10}
-                            step={0.1}
-                            value={aluno.n1}
-                            onChange={(e) =>
-                              handleNotaChange(aluno.id, "n1", e.target.value)
-                            }
-                            className="w-16 h-8 mx-auto block bg-zinc-900 border border-zinc-800 rounded-md text-sm text-white text-center focus:outline-none focus:ring-1 focus:ring-zinc-500 focus:border-zinc-600 [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
-                          />
-                        </td>
-                        <td className="px-4 py-4 text-center">
-                          <input
-                            type="number"
-                            min={0}
-                            max={10}
-                            step={0.1}
-                            value={aluno.n2}
-                            onChange={(e) =>
-                              handleNotaChange(aluno.id, "n2", e.target.value)
-                            }
-                            className="w-16 h-8 mx-auto block bg-zinc-900 border border-zinc-800 rounded-md text-sm text-white text-center focus:outline-none focus:ring-1 focus:ring-zinc-500 focus:border-zinc-600 [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
-                          />
-                        </td>
-                        <td className="px-4 py-4 text-center">
-                          <span className="text-base font-semibold tracking-tight text-white">
-                            {aluno.media !== null ? aluno.media.toFixed(1) : "—"}
-                          </span>
-                        </td>
-                        <td className="px-6 py-4 text-center">
-                          <span
-                            className={`inline-flex items-center px-2.5 py-0.5 rounded-md text-xs font-medium border ${
-                              statusStyles[aluno.status as StatusNota] ??
-                              statusStyles.Pendente
-                            }`}
-                          >
-                            {aluno.status}
-                          </span>
-                        </td>
-                      </tr>
-                    ))
+                          </td>
+                          {CAMPOS_NOTA.map(({ key, criterioKey }) => {
+                            const statusKey = `${aluno.ra}-${criterioKey}`;
+                            const statusCampo = statusSalvamento[statusKey];
+
+                            return (
+                              <td key={key} className="px-3 py-4 text-center">
+                                <div className="relative inline-block">
+                                  <input
+                                    type="number"
+                                    min={0}
+                                    max={criterios[criterioKey]}
+                                    step={0.1}
+                                    value={notas[key]}
+                                    disabled={!criteriosValidos}
+                                    onChange={(e) =>
+                                      handleNotaChange(
+                                        aluno.ra,
+                                        key,
+                                        e.target.value
+                                      )
+                                    }
+                                    onBlur={(e) =>
+                                      void salvarNotaParcial(
+                                        aluno.ra,
+                                        criterioKey,
+                                        e.target.value
+                                      )
+                                    }
+                                    className={`${inputNotaClass} ${
+                                      statusCampo === "sucesso"
+                                        ? "border-emerald-400"
+                                        : statusCampo === "erro"
+                                          ? "border-red-500"
+                                          : ""
+                                    }`}
+                                  />
+                                  {statusCampo === "salvando" && (
+                                    <Loader2 className="pointer-events-none absolute right-1 top-1/2 -translate-y-1/2 w-3 h-3 text-gray-400 animate-spin" />
+                                  )}
+                                  {statusCampo === "sucesso" && (
+                                    <Check className="pointer-events-none absolute right-1 top-1/2 -translate-y-1/2 w-3 h-3 text-emerald-400" />
+                                  )}
+                                </div>
+                              </td>
+                            );
+                          })}
+                          <td className="px-4 py-4 text-center">
+                            <span className="text-base font-semibold tracking-tight text-white">
+                              {media !== null ? media.toFixed(1) : "—"}
+                            </span>
+                          </td>
+                          <td className="px-6 py-4 text-center">
+                            <span
+                              className={`inline-flex items-center px-2.5 py-0.5 rounded-md text-xs font-medium ${statusStyles[status]}`}
+                            >
+                              {status}
+                            </span>
+                          </td>
+                        </tr>
+                      );
+                    })
                   )}
                 </tbody>
               </table>
@@ -614,7 +1176,6 @@ export default function ProfessorNotasPage() {
               onItensPorPaginaChange={setItensPorPagina}
             />
           </div>
-
         </div>
       </main>
 

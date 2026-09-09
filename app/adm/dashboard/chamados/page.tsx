@@ -6,7 +6,6 @@ import {
   Paperclip,
   Image,
   Send,
-  AlertCircle,
   Clock,
   User,
   FileText,
@@ -31,7 +30,6 @@ type AnexoLocal = {
 
 type Chamado = {
   id: string;
-  alunoId: string;
   alunoNome: string;
   alunoRa: string;
   alunoEmail: string;
@@ -40,38 +38,12 @@ type Chamado = {
   alunoStatus: string;
   assunto: string;
   mensagem: string;
+  resposta: string;
   status: StatusChamado;
   prioridade: Prioridade;
   abertoEm: string;
   abertoEmLabel: string;
 };
-
-const assuntosTemplate = [
-  {
-    assunto: "Dúvida financeira / Boleto",
-    mensagem:
-      "Olá, gostaria de confirmar o vencimento do boleto deste mês e se há alguma pendência financeira no meu cadastro. Poderiam me enviar o comprovante atualizado?",
-    prioridade: "Alta" as Prioridade,
-  },
-  {
-    assunto: "Solicitação de documentos",
-    mensagem:
-      "Preciso da declaração de matrícula atualizada para entrega em estágio. É possível emitir pelo sistema ou pela secretaria?",
-    prioridade: "Média" as Prioridade,
-  },
-  {
-    assunto: "Problema técnico no portal",
-    mensagem:
-      "Não consigo acessar o boletim no app/portal. A página carrega em branco após o login. Já tentei limpar o cache e o problema continua.",
-    prioridade: "Alta" as Prioridade,
-  },
-  {
-    assunto: "Trancamento de disciplina",
-    mensagem:
-      "Gostaria de orientação sobre o prazo e o procedimento para trancamento parcial de uma disciplina neste semestre.",
-    prioridade: "Baixa" as Prioridade,
-  },
-];
 
 function iniciaisDe(nome: string) {
   return (
@@ -97,6 +69,43 @@ function formatarTamanho(bytes: number) {
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 }
 
+function normalizarStatus(valor: unknown): StatusChamado {
+  const raw = String(valor ?? "").trim().toLowerCase();
+  if (raw === "respondido" || raw === "respondida" || raw === "concluido" || raw === "concluído") {
+    return "respondido";
+  }
+  return "aberto";
+}
+
+function normalizarPrioridade(valor: unknown): Prioridade {
+  const raw = String(valor ?? "").trim().toLowerCase();
+  if (raw === "alta") return "Alta";
+  if (raw === "baixa") return "Baixa";
+  return "Média";
+}
+
+function mapearMensagemParaChamado(row: Record<string, unknown>): Chamado {
+  const abertoEm = String(row.data_envio ?? row.created_at ?? "");
+  return {
+    id: String(row.id),
+    alunoNome: String(
+      row.remetente ?? row.aluno_nome ?? row.alunoNome ?? row.nome ?? "Estudante"
+    ),
+    alunoRa: String(row.ra ?? row.matricula ?? row.aluno_ra ?? "—"),
+    alunoEmail: String(row.email ?? row.aluno_email ?? "—"),
+    alunoCurso: String(row.curso ?? row.turma_nome ?? row.turma ?? "—"),
+    alunoSemestre: String(row.semestre ?? "—"),
+    alunoStatus: String(row.aluno_status ?? row.status_aluno ?? "Ativo"),
+    assunto: String(row.assunto ?? "Sem assunto"),
+    mensagem: String(row.conteudo ?? row.mensagem ?? row.texto ?? ""),
+    resposta: String(row.resposta ?? ""),
+    status: normalizarStatus(row.status),
+    prioridade: normalizarPrioridade(row.prioridade),
+    abertoEm,
+    abertoEmLabel: abertoEm ? formatarDataHora(abertoEm) : "—",
+  };
+}
+
 function statusBadgeClasses(status: StatusChamado) {
   if (status === "aberto") {
     return "bg-amber-950/50 text-amber-400 border border-amber-800";
@@ -114,7 +123,7 @@ export default function AdmChamadosPage() {
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const [chamados, setChamados] = useState<Chamado[]>([]);
-  const [chamadoSelecionadoId, setChamadoSelecionadoId] = useState<string | null>(null);
+  const [chamadoSelecionado, setChamadoSelecionado] = useState<Chamado | null>(null);
   const [filtroStatus, setFiltroStatus] = useState<FiltroStatus>("todos");
   const [busca, setBusca] = useState("");
   const [respostaTexto, setRespostaTexto] = useState("");
@@ -133,91 +142,48 @@ export default function AdmChamadosPage() {
     mensagem: "",
   });
 
-  useEffect(() => {
-    async function carregarChamados() {
-      setCarregando(true);
-      try {
-        const [resAlunos, resTurmas] = await Promise.all([
-          supabase.from("alunos").select("*"),
-          supabase.from("turmas").select("*"),
-        ]);
+  async function carregarChamados(manterSelecionadoId?: string | null) {
+    setCarregando(true);
+    try {
+      const { data, error } = await supabase
+        .from("mensagens")
+        .select("*")
+        .or("destinatario.eq.Secretaria,tipo.eq.Secretaria")
+        .order("data_envio", { ascending: false });
 
-        if (resAlunos.error) {
-          console.error("Erro ao buscar alunos:", resAlunos.error.message);
-        }
-        if (resTurmas.error) {
-          console.error("Erro ao buscar turmas:", resTurmas.error.message);
-        }
-
-        const alunos = resAlunos.data ?? [];
-        const turmas = resTurmas.data ?? [];
-        const cursoFallback =
-          turmas.length > 0
-            ? String(turmas[0].curso ?? turmas[0].codigo ?? "Tecnologia da Informação")
-            : "Tecnologia da Informação";
-
-        if (alunos.length === 0) {
-          setChamados([]);
-          setChamadoSelecionadoId(null);
-          return;
-        }
-
-        const agora = Date.now();
-        const fila: Chamado[] = alunos.slice(0, Math.min(alunos.length, 6)).map((aluno, index) => {
-          const template = assuntosTemplate[index % assuntosTemplate.length];
-          const abertoEm = new Date(agora - index * 3 * 60 * 60 * 1000).toISOString();
-          const curso = String(aluno.curso || cursoFallback);
-          const ra = String(aluno.ra || aluno.matricula || `RA-${index + 1}`);
-
-          return {
-            id: `chamado-${String(aluno.id)}-${index}`,
-            alunoId: String(aluno.id),
-            alunoNome: String(aluno.nome ?? "Estudante"),
-            alunoRa: ra,
-            alunoEmail: String(
-              aluno.email || `${ra.toLowerCase().replace(/\s/g, "")}@aluno.uniclasstech.edu.br`
-            ),
-            alunoCurso: curso,
-            alunoSemestre: String(aluno.semestre ?? `${(index % 4) + 1}º Semestre`),
-            alunoStatus: String(aluno.status ?? "Ativo"),
-            assunto: template.assunto,
-            mensagem: template.mensagem,
-            status: index === 2 ? "respondido" : "aberto",
-            prioridade: template.prioridade,
-            abertoEm,
-            abertoEmLabel: formatarDataHora(abertoEm),
-          };
-        });
-
-        // Garante o ticket de exemplo pedido: primeiro aluno com dúvida financeira
-        if (fila.length > 0) {
-          fila[0] = {
-            ...fila[0],
-            assunto: "Dúvida financeira / Boleto",
-            mensagem: assuntosTemplate[0].mensagem,
-            status: "aberto",
-            prioridade: "Alta",
-          };
-        }
-
-        setChamados(fila);
-        setChamadoSelecionadoId(fila[0]?.id ?? null);
-      } catch (err) {
-        console.error("Falha ao montar fila de chamados:", err);
+      if (error) {
+        console.error("Erro ao buscar chamados:", error.message);
         setChamados([]);
-        setChamadoSelecionadoId(null);
-      } finally {
-        setCarregando(false);
+        setChamadoSelecionado(null);
+        return;
       }
-    }
 
+      const lista = ((data ?? []) as Record<string, unknown>[]).map(
+        mapearMensagemParaChamado
+      );
+      setChamados(lista);
+
+      if (lista.length === 0) {
+        setChamadoSelecionado(null);
+        return;
+      }
+
+      const aindaExiste = manterSelecionadoId
+        ? lista.find((c) => c.id === manterSelecionadoId) ?? null
+        : null;
+      setChamadoSelecionado(aindaExiste ?? lista[0]);
+    } catch (err) {
+      console.error("Falha ao carregar chamados:", err);
+      setChamados([]);
+      setChamadoSelecionado(null);
+    } finally {
+      setCarregando(false);
+    }
+  }
+
+  useEffect(() => {
     void carregarChamados();
   }, []);
-
-  const chamadoAtivo = useMemo(
-    () => chamados.find((c) => c.id === chamadoSelecionadoId) ?? null,
-    [chamados, chamadoSelecionadoId]
-  );
 
   const chamadosFiltrados = useMemo(() => {
     const termo = busca.trim().toLowerCase();
@@ -271,9 +237,10 @@ export default function AdmChamadosPage() {
   }
 
   async function handleEnviarResposta() {
-    if (!chamadoAtivo) return;
+    if (!chamadoSelecionado) return;
 
-    if (!respostaTexto.trim()) {
+    const textoResposta = respostaTexto.trim();
+    if (!textoResposta) {
       abrirFeedback(
         "atencao",
         "Campos incompletos",
@@ -284,15 +251,18 @@ export default function AdmChamadosPage() {
 
     setEnviandoResposta(true);
     try {
-      await new Promise((resolve) => setTimeout(resolve, 500));
+      const { error } = await supabase
+        .from("mensagens")
+        .update({ resposta: textoResposta, status: "Respondido" })
+        .eq("id", chamadoSelecionado.id);
 
-      setChamados((prev) =>
-        prev.map((c) =>
-          c.id === chamadoAtivo.id ? { ...c, status: "respondido" as const } : c
-        )
-      );
+      if (error) {
+        throw new Error(error.message);
+      }
+
       setRespostaTexto("");
       setAnexos([]);
+      await carregarChamados(chamadoSelecionado.id);
       abrirFeedback(
         "sucesso",
         "Resposta Registrada",
@@ -370,20 +340,24 @@ export default function AdmChamadosPage() {
                   <p className="text-sm text-zinc-500 text-center py-10">
                     Carregando chamados...
                   </p>
+                ) : chamados.length === 0 ? (
+                  <div className="p-8 text-center text-gray-500 text-sm">
+                    Nenhum chamado aberto na secretaria.
+                  </div>
                 ) : chamadosFiltrados.length === 0 ? (
                   <p className="text-sm text-zinc-500 text-center py-10">
                     Nenhum chamado encontrado.
                   </p>
                 ) : (
                   chamadosFiltrados.map((chamado) => {
-                    const ativo = chamado.id === chamadoSelecionadoId;
+                    const ativo = chamado.id === chamadoSelecionado?.id;
                     return (
                       <button
                         key={chamado.id}
                         type="button"
                         onClick={() => {
-                          setChamadoSelecionadoId(chamado.id);
-                          setRespostaTexto("");
+                          setChamadoSelecionado(chamado);
+                          setRespostaTexto(chamado.resposta || "");
                           setAnexos([]);
                         }}
                         className={`w-full text-left rounded-lg border p-3.5 transition-colors ${
@@ -425,14 +399,9 @@ export default function AdmChamadosPage() {
 
             {/* Detalhe */}
             <div className="flex-1 min-w-0 rounded-xl border border-zinc-800 bg-zinc-950 overflow-hidden flex flex-col min-h-[420px]">
-              {!chamadoAtivo ? (
-                <div className="flex-1 flex items-center justify-center p-8">
-                  <div className="text-center">
-                    <AlertCircle className="w-8 h-8 text-zinc-600 mx-auto mb-3" />
-                    <p className="text-sm text-zinc-500">
-                      Selecione um chamado na lista lateral.
-                    </p>
-                  </div>
+              {!chamadoSelecionado ? (
+                <div className="h-full flex flex-col items-center justify-center text-gray-500 text-sm">
+                  Selecione um chamado na lista ao lado para visualizar os detalhes.
                 </div>
               ) : (
                 <div className="flex-1 overflow-y-auto p-5 sm:p-6 space-y-4">
@@ -440,40 +409,42 @@ export default function AdmChamadosPage() {
                   <div className="rounded-xl border border-zinc-800 bg-[#0c0e14] p-5">
                     <div className="flex items-start gap-4">
                       <div className="w-12 h-12 rounded-full bg-zinc-800 border border-zinc-700 flex items-center justify-center text-sm font-semibold text-white shrink-0">
-                        {iniciaisDe(chamadoAtivo.alunoNome)}
+                        {iniciaisDe(chamadoSelecionado.alunoNome)}
                       </div>
                       <div className="min-w-0 flex-1">
                         <div className="flex flex-wrap items-center gap-2 mb-1">
                           <h2 className="text-lg font-semibold text-white truncate">
-                            {chamadoAtivo.alunoNome}
+                            {chamadoSelecionado.alunoNome}
                           </h2>
                           <span className="text-[10px] font-semibold px-2 py-0.5 rounded-full bg-emerald-950/50 text-emerald-400 border border-emerald-800">
-                            Regular
+                            {chamadoSelecionado.alunoStatus}
                           </span>
                         </div>
                         <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-6 gap-y-2 mt-3">
                           <div className="flex items-center gap-2 text-sm text-zinc-400">
                             <User className="w-3.5 h-3.5 text-zinc-500 shrink-0" />
                             RA:{" "}
-                            <span className="text-zinc-200">{chamadoAtivo.alunoRa}</span>
+                            <span className="text-zinc-200">
+                              {chamadoSelecionado.alunoRa}
+                            </span>
                           </div>
                           <div className="flex items-center gap-2 text-sm text-zinc-400">
                             <GraduationCap className="w-3.5 h-3.5 text-zinc-500 shrink-0" />
                             <span className="text-zinc-200 truncate">
-                              {chamadoAtivo.alunoCurso}
+                              {chamadoSelecionado.alunoCurso}
                             </span>
                           </div>
                           <div className="flex items-center gap-2 text-sm text-zinc-400">
                             <FileText className="w-3.5 h-3.5 text-zinc-500 shrink-0" />
                             Semestre:{" "}
                             <span className="text-zinc-200">
-                              {chamadoAtivo.alunoSemestre}
+                              {chamadoSelecionado.alunoSemestre}
                             </span>
                           </div>
                           <div className="flex items-center gap-2 text-sm text-zinc-400 min-w-0">
                             <MessageSquareText className="w-3.5 h-3.5 text-zinc-500 shrink-0" />
                             <span className="text-zinc-200 truncate">
-                              {chamadoAtivo.alunoEmail}
+                              {chamadoSelecionado.alunoEmail}
                             </span>
                           </div>
                         </div>
@@ -489,21 +460,23 @@ export default function AdmChamadosPage() {
                           Solicitação do estudante
                         </p>
                         <h3 className="text-base font-semibold text-white">
-                          {chamadoAtivo.assunto}
+                          {chamadoSelecionado.assunto}
                         </h3>
                       </div>
                       <span
-                        className={`shrink-0 text-[10px] font-semibold px-2 py-0.5 rounded-full ${statusBadgeClasses(chamadoAtivo.status)}`}
+                        className={`shrink-0 text-[10px] font-semibold px-2 py-0.5 rounded-full ${statusBadgeClasses(chamadoSelecionado.status)}`}
                       >
-                        {chamadoAtivo.status === "aberto" ? "Aberto" : "Respondido"}
+                        {chamadoSelecionado.status === "aberto"
+                          ? "Aberto"
+                          : "Respondido"}
                       </span>
                     </div>
                     <p className="flex items-center gap-1.5 text-xs text-zinc-500 mb-3">
                       <Clock className="w-3.5 h-3.5" />
-                      Aberto em {chamadoAtivo.abertoEmLabel}
+                      Aberto em {chamadoSelecionado.abertoEmLabel}
                     </p>
                     <p className="text-sm text-zinc-300 leading-relaxed whitespace-pre-wrap">
-                      {chamadoAtivo.mensagem}
+                      {chamadoSelecionado.mensagem}
                     </p>
                   </div>
 
@@ -517,7 +490,7 @@ export default function AdmChamadosPage() {
                       onChange={(e) => setRespostaTexto(e.target.value)}
                       placeholder="Escreva a tratativa da secretaria para o aluno..."
                       className="w-full min-h-[140px] bg-black border border-zinc-800 rounded-md text-sm text-white px-3 py-2.5 placeholder:text-zinc-600 focus:outline-none focus:border-zinc-600 resize-y"
-                      disabled={chamadoAtivo.status === "respondido"}
+                      disabled={chamadoSelecionado.status === "respondido"}
                     />
 
                     <div className="mt-3 flex flex-wrap items-center gap-2">
@@ -532,7 +505,7 @@ export default function AdmChamadosPage() {
                       <button
                         type="button"
                         onClick={() => fileInputRef.current?.click()}
-                        disabled={chamadoAtivo.status === "respondido"}
+                        disabled={chamadoSelecionado.status === "respondido"}
                         className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs text-zinc-400 border border-zinc-800 hover:text-white hover:border-zinc-600 transition-colors disabled:opacity-50"
                       >
                         <Image className="w-3.5 h-3.5" />
@@ -541,7 +514,7 @@ export default function AdmChamadosPage() {
                       <button
                         type="button"
                         onClick={() => fileInputRef.current?.click()}
-                        disabled={chamadoAtivo.status === "respondido"}
+                        disabled={chamadoSelecionado.status === "respondido"}
                         className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs text-zinc-400 border border-zinc-800 hover:text-white hover:border-zinc-600 transition-colors disabled:opacity-50"
                       >
                         <Paperclip className="w-3.5 h-3.5" />
@@ -575,13 +548,15 @@ export default function AdmChamadosPage() {
                     <button
                       type="button"
                       onClick={handleEnviarResposta}
-                      disabled={enviandoResposta || chamadoAtivo.status === "respondido"}
+                      disabled={
+                        enviandoResposta || chamadoSelecionado.status === "respondido"
+                      }
                       className="mt-4 w-full sm:w-auto inline-flex items-center justify-center gap-2 px-5 py-2.5 rounded-lg bg-white text-black text-sm font-medium hover:bg-zinc-200 transition-colors disabled:opacity-60 disabled:cursor-not-allowed"
                     >
                       <Send className="w-4 h-4" />
                       {enviandoResposta
                         ? "Enviando..."
-                        : chamadoAtivo.status === "respondido"
+                        : chamadoSelecionado.status === "respondido"
                           ? "Chamado já concluído"
                           : "Enviar Resposta e Concluir Chamado"}
                     </button>

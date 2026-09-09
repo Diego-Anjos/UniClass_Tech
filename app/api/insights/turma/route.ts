@@ -5,49 +5,29 @@ const groq = new Groq({ apiKey: process.env.GROQ_API_KEY });
 
 export async function POST(req: NextRequest) {
   try {
-    const { codigo, curso, turno, semestre, matriculados, capacidade } =
-      await req.json();
+    const { professor, filtros, metricasGlobais } = await req.json();
 
-    const taxaOcupacao = Math.round((matriculados / (capacidade || 40)) * 100);
+    const systemPrompt = `Você é um analista de dados educacionais ajudando o(a) ${professor}.
+Com base nas métricas globais da turma (médias de notas e frequência) filtradas por ${filtros.ano} e ${filtros.semestre}, faça uma breve análise de desempenho (máximo de 3 frases).
+Aponte tendências (ex: "notas caíram no segundo bimestre") e dê uma recomendação rápida. 
+REGRAS OBRIGATÓRIAS:
+1. RESPONDA ESTRITAMENTE EM PORTUGUÊS DO BRASIL. 
+2. NUNCA utilize palavras em inglês.
+3. Mantenha um tom profissional e direto.`;
 
-    const systemPrompt = `Você é o gestor acadêmico do ERP UniClassTech.
-Gere uma análise direta e estratégica de no máximo 2 frases para a diretoria sobre a ocupação e alocação pedagógica da turma informada. Sem markdown nem aspas adicionais.`;
-
-    const userPrompt = `Turma: ${codigo} - ${curso} (${semestre}, Turno: ${turno}).
-Ocupação: ${matriculados}/${capacidade} vagas (${taxaOcupacao}%).`;
-
-    let completion;
-    try {
-      completion = await groq.chat.completions.create({
-        messages: [
-          { role: "system", content: systemPrompt },
-          { role: "user", content: userPrompt },
-        ],
-        model: "openai/gpt-oss-20b",
-        temperature: 0.5,
-        max_tokens: 120,
-      });
-    } catch {
-      completion = await groq.chat.completions.create({
-        messages: [
-          { role: "system", content: systemPrompt },
-          { role: "user", content: userPrompt },
-        ],
-        model: "llama-3.1-8b-instant",
-        temperature: 0.5,
-        max_tokens: 120,
-      });
-    }
-
-    const analise =
-      completion?.choices[0]?.message?.content ||
-      `Turma com ocupação dentro do planejamento acadêmico com infraestrutura e alocação docente em dia.`;
-
-    return NextResponse.json({ analise });
-  } catch {
-    return NextResponse.json({
-      analise:
-        "Turma monitorada em tempo real com conformidade pedagógica regular.",
+    const completion = await groq.chat.completions.create({
+      messages: [
+        { role: "system", content: systemPrompt },
+        { role: "user", content: `Métricas atuais: ${JSON.stringify(metricasGlobais)}` }
+      ],
+      model: "openai/gpt-oss-20b",
+      temperature: 0.5,
+      max_tokens: 300,
     });
+
+    return NextResponse.json({ analise: completion.choices[0]?.message?.content || "Análise indisponível no momento." });
+  } catch (error) {
+    console.error(error);
+    return NextResponse.json({ analise: "Não foi possível gerar a análise macro da turma neste momento." });
   }
 }

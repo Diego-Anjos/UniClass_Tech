@@ -11,10 +11,13 @@ import {
   LogOut,
   GraduationCap,
   ChevronDown,
+  ChevronLeft,
+  ChevronRight,
   AlertTriangle,
   Check,
   X,
   Search,
+  Calendar,
 } from "lucide-react";
 import { supabase } from "@/lib/supabase";
 import { ProfessorSettingsControl } from "@/components/professor/config-modal";
@@ -46,21 +49,91 @@ type AlunoChamada = {
   nome: string;
   ra: string;
   porcentagemFaltas: number;
-  presente: boolean;
+};
+
+type StatusChamada = "presente" | "falta";
+
+type AiInsightChamada = {
+  tipoAlerta: string;
+  mensagem: string;
 };
 
 function hojeISO() {
-  const d = new Date();
-  const yyyy = d.getFullYear();
-  const mm = String(d.getMonth() + 1).padStart(2, "0");
-  const dd = String(d.getDate()).padStart(2, "0");
-  return `${yyyy}-${mm}-${dd}`;
+  return new Date().toISOString().split("T")[0];
 }
 
 function formatarDataBR(iso: string) {
   const [yyyy, mm, dd] = iso.split("-");
   if (!yyyy || !mm || !dd) return iso;
   return `${dd}/${mm}/${yyyy}`;
+}
+
+function paraISOLocal(date: Date) {
+  const yyyy = date.getFullYear();
+  const mm = String(date.getMonth() + 1).padStart(2, "0");
+  const dd = String(date.getDate()).padStart(2, "0");
+  return `${yyyy}-${mm}-${dd}`;
+}
+
+const DIAS_SEMANA_LABEL = ["DOM", "SEG", "TER", "QUA", "QUI", "SEX", "SAB"] as const;
+
+const DIAS_AULA_PARA_INDICE: Record<string, number> = {
+  Domingo: 0,
+  Segunda: 1,
+  Terça: 2,
+  Terca: 2,
+  Quarta: 3,
+  Quinta: 4,
+  Sexta: 5,
+  Sábado: 6,
+  Sabado: 6,
+};
+
+/** Converte nomes salvos (ex: "Segunda") para índices JS getDay(). */
+function indicesDiasPermitidos(diasAula: string[] | undefined): number[] {
+  if (!diasAula || diasAula.length === 0) {
+    return [0, 1, 2, 3, 4, 5, 6];
+  }
+
+  const indices = diasAula
+    .map((dia) => {
+      const chave = dia.trim();
+      if (chave in DIAS_AULA_PARA_INDICE) return DIAS_AULA_PARA_INDICE[chave];
+      const normalizado = chave
+        .normalize("NFD")
+        .replace(/[\u0300-\u036f]/g, "")
+        .toLowerCase()
+        .split("-")[0]
+        ?.trim();
+      const mapa: Record<string, number> = {
+        domingo: 0,
+        segunda: 1,
+        terca: 2,
+        quarta: 3,
+        quinta: 4,
+        sexta: 5,
+        sabado: 6,
+      };
+      return normalizado ? mapa[normalizado] : undefined;
+    })
+    .filter((n): n is number => typeof n === "number");
+
+  return indices.length > 0 ? indices : [0, 1, 2, 3, 4, 5, 6];
+}
+
+function cellsDoMes(ano: number, mes: number) {
+  const primeiro = new Date(ano, mes, 1);
+  const totalDias = new Date(ano, mes + 1, 0).getDate();
+  const offset = primeiro.getDay(); // 0 = Domingo
+  const cells: (Date | null)[] = [];
+
+  for (let i = 0; i < offset; i++) cells.push(null);
+  for (let dia = 1; dia <= totalDias; dia++) {
+    cells.push(new Date(ano, mes, dia));
+  }
+  while (cells.length % 7 !== 0) cells.push(null);
+
+  return cells;
 }
 
 function labelTurma(turma: TurmaOption) {
@@ -90,12 +163,21 @@ export default function ProfessorChamadaPage() {
   const [turmas, setTurmas] = useState<TurmaOption[]>([]);
   const [turmaSelecionada, setTurmaSelecionada] = useState("");
   const [dataChamada, setDataChamada] = useState(hojeISO());
+  const [mostrarCalendario, setMostrarCalendario] = useState(false);
+  const [mesCalendario, setMesCalendario] = useState(() => {
+    const hoje = new Date();
+    return new Date(hoje.getFullYear(), hoje.getMonth(), 1);
+  });
+  const [chamadaStatus, setChamadaStatus] = useState<
+    Record<string, StatusChamada>
+  >({});
   const [alunosTurma, setAlunosTurma] = useState<AlunoChamada[]>([]);
   const [termoBusca, setTermoBusca] = useState("");
   const [paginaAtual, setPaginaAtual] = useState(1);
   const [itensPorPagina, setItensPorPagina] = useState(10);
-  const [aiInsight, setAiInsight] = useState("");
+  const [aiInsight, setAiInsight] = useState<AiInsightChamada | null>(null);
   const [isLoadingAi, setIsLoadingAi] = useState(false);
+  const [salvandoChamada, setSalvandoChamada] = useState(false);
   const [modalFeedback, setModalFeedback] = useState<{
     aberto: boolean;
     tipo: "sucesso" | "erro" | "atencao";
@@ -125,18 +207,34 @@ export default function ProfessorChamadaPage() {
   const alunosExibidos = alunosFiltrados.slice(indiceInicial, indiceFinal);
 
   const totalAlunos = alunosTurma.length;
-  const totalPresentes = useMemo(
-    () => alunosTurma.filter((a) => a.presente).length,
-    [alunosTurma]
-  );
-  const totalFaltas = useMemo(
-    () => alunosTurma.filter((a) => !a.presente).length,
-    [alunosTurma]
+  const presentes = Object.values(chamadaStatus).filter(
+    (s) => s === "presente"
+  ).length;
+  const faltas = Object.values(chamadaStatus).filter(
+    (s) => s === "falta"
+  ).length;
+
+  const engajamentoAlto =
+    aiInsight?.tipoAlerta?.toUpperCase().includes("ENGAJAMENTO") ?? false;
+
+  const diasPermitidos = useMemo(
+    () => indicesDiasPermitidos(professorLogado?.dias_aula),
+    [professorLogado?.dias_aula]
   );
 
-  const turmaAtual = useMemo(
-    () => turmas.find((t) => t.id === turmaSelecionada) ?? null,
-    [turmas, turmaSelecionada]
+  const celulasCalendario = useMemo(
+    () =>
+      cellsDoMes(mesCalendario.getFullYear(), mesCalendario.getMonth()),
+    [mesCalendario]
+  );
+
+  const labelMesCalendario = useMemo(
+    () =>
+      mesCalendario.toLocaleDateString("pt-BR", {
+        month: "long",
+        year: "numeric",
+      }),
+    [mesCalendario]
   );
 
   function mostrarFeedback(
@@ -151,47 +249,32 @@ export default function ProfessorChamadaPage() {
     setModalFeedback((prev) => ({ ...prev, aberto: false }));
   }
 
-  async function fetchFrequenciaInsight(
-    nomeTurma: string,
-    total: number,
-    faltas: number
-  ) {
-    setIsLoadingAi(true);
-    try {
-      const response = await fetch("/api/insights/frequencia", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          turma: nomeTurma,
-          totalAlunos: total,
-          totalFaltas: faltas,
-        }),
-      });
-
-      const data = await response.json();
-      if (!response.ok) {
-        throw new Error(data.error || "Falha na análise de frequência.");
-      }
-      setAiInsight((data.insight as string) ?? "");
-    } catch (err) {
-      console.error("Erro ao gerar insight de frequência:", err);
-      setAiInsight(
-        "Não foi possível gerar o alerta de frequência no momento. Tente novamente."
-      );
-    } finally {
-      setIsLoadingAi(false);
-    }
+  function setStatusAluno(ra: string, status: StatusChamada) {
+    setChamadaStatus((prev) => ({ ...prev, [ra]: status }));
   }
 
-  function setPresenca(alunoId: string, presente: boolean) {
-    setAlunosTurma((prev) =>
-      prev.map((aluno) =>
-        aluno.id === alunoId ? { ...aluno, presente } : aluno
-      )
+  function selecionarDataCalendario(dia: Date) {
+    if (!diasPermitidos.includes(dia.getDay())) return;
+    setDataChamada(paraISOLocal(dia));
+    setMostrarCalendario(false);
+  }
+
+  function navegarMes(delta: number) {
+    setMesCalendario(
+      (prev) => new Date(prev.getFullYear(), prev.getMonth() + delta, 1)
     );
   }
 
-  function handleSalvarChamada() {
+  async function salvarChamada() {
+    if (!turmaSelecionada) {
+      mostrarFeedback(
+        "atencao",
+        "Turma obrigatória",
+        "Selecione uma turma antes de salvar a chamada."
+      );
+      return;
+    }
+
     if (alunosTurma.length === 0) {
       mostrarFeedback(
         "atencao",
@@ -201,22 +284,58 @@ export default function ProfessorChamadaPage() {
       return;
     }
 
-    mostrarFeedback(
-      "sucesso",
-      "Chamada Registrada",
-      "Presenças e faltas da data salvas com sucesso."
-    );
+    setSalvandoChamada(true);
+    try {
+      const registros = alunosTurma.map((aluno) => ({
+        turma_curso: turmaSelecionada,
+        data_aula: dataChamada,
+        aluno_ra: aluno.ra,
+        status: chamadaStatus[aluno.ra] ?? "presente",
+      }));
+
+      const { error } = await supabase
+        .from("registro_chamada")
+        .upsert(registros, {
+          onConflict: "turma_curso,data_aula,aluno_ra",
+        });
+
+      if (error) {
+        console.error("Erro ao salvar chamada:", error.message);
+        mostrarFeedback(
+          "erro",
+          "Falha ao salvar",
+          "Não foi possível salvar a chamada. Tente novamente."
+        );
+        return;
+      }
+
+      mostrarFeedback(
+        "sucesso",
+        "Chamada Registrada",
+        `Chamada do dia ${formatarDataBR(dataChamada)} salva com sucesso!`
+      );
+    } catch (err) {
+      console.error("Erro ao salvar chamada:", err);
+      mostrarFeedback(
+        "erro",
+        "Falha ao salvar",
+        "Não foi possível salvar a chamada. Tente novamente."
+      );
+    } finally {
+      setSalvandoChamada(false);
+    }
   }
 
   useEffect(() => {
     if (!professorLogado) return;
 
     async function fetchTurmas() {
+      const areaAtuacao = professorLogado!.area_atuacao?.trim() ?? "";
+
       const { data, error } = await supabase
         .from("turmas")
-        .select("id, codigo, curso, turno")
-        .eq("status", "Aberta")
-        .order("curso", { ascending: true });
+        .select("*")
+        .ilike("curso", `%${areaAtuacao}%`);
 
       if (error) {
         console.error("Erro ao buscar turmas:", error.message);
@@ -225,10 +344,20 @@ export default function ProfessorChamadaPage() {
         return;
       }
 
-      const lista = (data ?? []) as TurmaOption[];
+      const lista = ((data ?? []) as TurmaOption[]).map((turma) => ({
+        id: String(turma.id),
+        codigo: String(turma.codigo ?? ""),
+        curso: String(turma.curso ?? ""),
+        turno: turma.turno ? String(turma.turno) : undefined,
+      }));
+
       setTurmas(lista);
-      if (lista.length > 0) {
+
+      // Auto-select apenas quando houver uma única turma do professor
+      if (lista.length === 1) {
         setTurmaSelecionada(lista[0].id);
+      } else {
+        setTurmaSelecionada("");
       }
     }
 
@@ -241,33 +370,41 @@ export default function ProfessorChamadaPage() {
       return;
     }
 
-    async function fetchAlunos() {
-      const vinculoProfessor = professorLogado!.nomeCompletoTitulo;
-      const areaAtuacao = professorLogado!.area_atuacao;
+    const turma = turmas.find((t) => t.id === turmaSelecionada);
+    if (!turma) {
+      setAlunosTurma([]);
+      return;
+    }
 
+    async function fetchAlunos() {
+      const cursoTurma = turma!.curso;
+      const vinculoProfessor = professorLogado!.nomeCompletoTitulo;
+
+      // Prioriza alunos do curso da turma selecionada
       let { data, error } = await supabase
         .from("alunos")
         .select("id, nome, ra, professor, curso")
-        .eq("professor", vinculoProfessor)
+        .eq("curso", cursoTurma)
         .order("nome", { ascending: true });
 
-      if (error) {
-        const fallback = await supabase
+      // Fallback: alunos vinculados ao professor logado
+      if (error || !data || data.length === 0) {
+        const porProfessor = await supabase
           .from("alunos")
           .select("id, nome, ra, professor, curso")
-          .eq("curso", areaAtuacao)
+          .eq("professor", vinculoProfessor)
           .order("nome", { ascending: true });
 
-        if (fallback.error) {
+        if (porProfessor.error) {
           console.error(
             "Erro ao buscar alunos:",
-            error.message || fallback.error.message
+            error?.message ?? porProfessor.error.message
           );
           setAlunosTurma([]);
           return;
         }
 
-        data = fallback.data;
+        data = porProfessor.data;
       }
 
       if (!data || data.length === 0) {
@@ -286,7 +423,6 @@ export default function ProfessorChamadaPage() {
               "RA-"
           ),
           porcentagemFaltas: porcentagemFaltasDeId(id),
-          presente: true,
         };
       });
 
@@ -294,11 +430,57 @@ export default function ProfessorChamadaPage() {
     }
 
     void fetchAlunos();
-  }, [turmaSelecionada, professorLogado]);
+  }, [turmaSelecionada, professorLogado, turmas]);
+
+  // Carrega status da chamada para a turma + data selecionadas
+  useEffect(() => {
+    if (!turmaSelecionada || alunosTurma.length === 0) {
+      setChamadaStatus({});
+      return;
+    }
+
+    let cancelado = false;
+
+    async function carregarChamadaDoDia() {
+      const { data: registros, error } = await supabase
+        .from("registro_chamada")
+        .select("*")
+        .eq("turma_curso", turmaSelecionada)
+        .eq("data_aula", dataChamada);
+
+      if (cancelado) return;
+
+      if (error) {
+        console.error("Erro ao buscar chamada do dia:", error.message);
+      }
+
+      const statusInicial: Record<string, StatusChamada> = {};
+      for (const aluno of alunosTurma) {
+        statusInicial[aluno.ra] = "presente";
+      }
+
+      if (registros && registros.length > 0) {
+        for (const registro of registros) {
+          const ra = String(registro.aluno_ra ?? "");
+          if (!ra) continue;
+          const status = String(registro.status ?? "").toLowerCase();
+          statusInicial[ra] = status === "falta" ? "falta" : "presente";
+        }
+      }
+
+      setChamadaStatus(statusInicial);
+    }
+
+    void carregarChamadaDoDia();
+
+    return () => {
+      cancelado = true;
+    };
+  }, [turmaSelecionada, dataChamada, alunosTurma]);
 
   useEffect(() => {
     setPaginaAtual(1);
-  }, [turmaSelecionada, termoBusca]);
+  }, [turmaSelecionada, termoBusca, dataChamada]);
 
   useEffect(() => {
     if (paginaAtual > totalPaginas) {
@@ -306,19 +488,56 @@ export default function ProfessorChamadaPage() {
     }
   }, [paginaAtual, totalPaginas]);
 
+  // Análise de IA com debounce (1.5s)
   useEffect(() => {
-    if (!turmaAtual || totalAlunos === 0) {
-      setAiInsight("");
+    if (
+      !turmaSelecionada ||
+      totalAlunos === 0 ||
+      Object.keys(chamadaStatus).length === 0
+    ) {
+      setAiInsight(null);
+      setIsLoadingAi(false);
       return;
     }
 
-    void fetchFrequenciaInsight(
-      labelTurma(turmaAtual),
-      totalAlunos,
-      totalFaltas
-    );
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [turmaSelecionada, totalAlunos, totalFaltas, turmaAtual?.id]);
+    const timeoutId = window.setTimeout(async () => {
+      setIsLoadingAi(true);
+      try {
+        const response = await fetch("/api/insights/chamada", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            turma: turmaSelecionada,
+            presentes,
+            faltas,
+            total: totalAlunos,
+          }),
+        });
+
+        const data = await response.json();
+        setAiInsight({
+          tipoAlerta:
+            (data.tipoAlerta as string) || "ALERTA DE FREQUÊNCIA",
+          mensagem:
+            (data.mensagem as string) ||
+            "Presença registrada. Acompanhe os alunos recorrentemente ausentes para evitar evasão.",
+        });
+      } catch (err) {
+        console.error("Erro ao gerar insight da chamada:", err);
+        setAiInsight({
+          tipoAlerta: "ALERTA DE FREQUÊNCIA",
+          mensagem:
+            "Presença registrada. Acompanhe os alunos recorrentemente ausentes para evitar evasão.",
+        });
+      } finally {
+        setIsLoadingAi(false);
+      }
+    }, 1500);
+
+    return () => {
+      window.clearTimeout(timeoutId);
+    };
+  }, [turmaSelecionada, presentes, faltas, totalAlunos, chamadaStatus]);
 
   if (carregandoSessao || !professorLogado) {
     return (
@@ -427,7 +646,10 @@ export default function ProfessorChamadaPage() {
               <h1 className="text-2xl font-semibold tracking-tight text-white">
                 Chamada Rápida
               </h1>
-              <div className="mt-3 flex flex-col sm:flex-row gap-3">
+              <div className="mt-3 flex flex-col sm:flex-row sm:items-center gap-3">
+                <span className="text-xs bg-gray-800 text-gray-300 px-2 py-1 rounded shrink-0">
+                  Turno: {professorLogado.turno_aula || "—"}
+                </span>
                 <div className="relative inline-block">
                   <select
                     value={turmaSelecionada}
@@ -435,46 +657,155 @@ export default function ProfessorChamadaPage() {
                     className="appearance-none bg-zinc-950 border border-zinc-700 text-sm text-white font-medium rounded-lg pl-4 pr-10 py-2.5 focus:outline-none focus:ring-1 focus:ring-zinc-500 cursor-pointer hover:border-zinc-600 transition-colors min-w-[260px]"
                   >
                     {turmas.length === 0 ? (
-                      <option value="">Nenhuma turma ativa</option>
+                      <option value="">Nenhuma turma da sua área</option>
                     ) : (
-                      turmas.map((turma) => (
-                        <option key={turma.id} value={turma.id}>
-                          {labelTurma(turma)}
-                        </option>
-                      ))
+                      <>
+                        {turmas.length > 1 && (
+                          <option value="">Selecione uma turma</option>
+                        )}
+                        {turmas.map((turma) => (
+                          <option key={turma.id} value={turma.id}>
+                            {labelTurma(turma)}
+                          </option>
+                        ))}
+                      </>
                     )}
                   </select>
                   <ChevronDown className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 w-4 h-4 text-zinc-400" />
                 </div>
                 <div className="relative inline-block">
-                  <input
-                    type="date"
-                    value={dataChamada}
-                    onChange={(e) => setDataChamada(e.target.value)}
-                    className="appearance-none bg-zinc-950 border border-zinc-700 text-sm text-white font-medium rounded-lg px-4 py-2.5 focus:outline-none focus:ring-1 focus:ring-zinc-500 cursor-pointer hover:border-zinc-600 transition-colors"
-                  />
-                  <p className="sr-only">Data: {formatarDataBR(dataChamada)}</p>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setMostrarCalendario((prev) => {
+                        const abrir = !prev;
+                        if (abrir) {
+                          const [yyyy, mm] = dataChamada.split("-").map(Number);
+                          if (yyyy && mm) {
+                            setMesCalendario(new Date(yyyy, mm - 1, 1));
+                          }
+                        }
+                        return abrir;
+                      });
+                    }}
+                    className="inline-flex items-center gap-2 bg-[#0f1117] border border-gray-800 text-gray-300 rounded-lg px-4 py-2.5 text-sm hover:border-purple-500 focus:outline-none focus:border-purple-500 transition-colors min-w-[160px]"
+                  >
+                    <Calendar className="w-4 h-4 text-zinc-400 shrink-0" />
+                    <span>{formatarDataBR(dataChamada)}</span>
+                  </button>
+
+                  {mostrarCalendario && (
+                    <div className="absolute z-50 bg-[#0f1117] border border-gray-800 rounded-lg p-4 shadow-xl mt-2 w-[300px]">
+                      <div className="flex items-center justify-between mb-3">
+                        <button
+                          type="button"
+                          onClick={() => navegarMes(-1)}
+                          className="p-1 rounded-md text-zinc-400 hover:text-white hover:bg-zinc-800 transition-colors"
+                          aria-label="Mês anterior"
+                        >
+                          <ChevronLeft className="w-4 h-4" />
+                        </button>
+                        <p className="text-sm font-medium text-white capitalize">
+                          {labelMesCalendario}
+                        </p>
+                        <button
+                          type="button"
+                          onClick={() => navegarMes(1)}
+                          className="p-1 rounded-md text-zinc-400 hover:text-white hover:bg-zinc-800 transition-colors"
+                          aria-label="Próximo mês"
+                        >
+                          <ChevronRight className="w-4 h-4" />
+                        </button>
+                      </div>
+
+                      <div className="grid grid-cols-7 gap-1 mb-2">
+                        {DIAS_SEMANA_LABEL.map((label) => (
+                          <div
+                            key={label}
+                            className="text-[10px] font-medium text-zinc-500 text-center py-1"
+                          >
+                            {label}
+                          </div>
+                        ))}
+                      </div>
+
+                      <div className="grid grid-cols-7 gap-1">
+                        {celulasCalendario.map((dia, idx) => {
+                          if (!dia) {
+                            return <div key={`empty-${idx}`} className="h-9" />;
+                          }
+
+                          const permitido = diasPermitidos.includes(
+                            dia.getDay()
+                          );
+                          const iso = paraISOLocal(dia);
+                          const selecionado = iso === dataChamada;
+
+                          return (
+                            <button
+                              key={iso}
+                              type="button"
+                              disabled={!permitido}
+                              onClick={() => selecionarDataCalendario(dia)}
+                              className={`h-9 rounded-md text-sm transition-colors ${
+                                !permitido
+                                  ? "opacity-30 cursor-not-allowed text-gray-500 bg-transparent"
+                                  : selecionado
+                                    ? "bg-purple-600 text-white cursor-pointer"
+                                    : "hover:bg-purple-600 text-white cursor-pointer"
+                              }`}
+                            >
+                              {dia.getDate()}
+                            </button>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  )}
                 </div>
               </div>
             </div>
 
             <button
               type="button"
-              onClick={handleSalvarChamada}
-              className="px-4 py-2 rounded-lg text-sm font-medium bg-white text-black hover:bg-zinc-200 transition-colors shrink-0 self-start lg:self-auto"
+              onClick={() => void salvarChamada()}
+              disabled={salvandoChamada}
+              className="px-4 py-2 rounded-lg text-sm font-medium bg-white text-black hover:bg-zinc-200 transition-colors shrink-0 self-start lg:self-auto disabled:opacity-60 disabled:cursor-not-allowed"
             >
-              Salvar Chamada
+              {salvandoChamada ? "Salvando..." : "Salvar Chamada"}
             </button>
           </div>
 
           {/* AI Insight Card */}
-          <div className="mb-4 rounded-xl bg-zinc-950 border border-orange-900/50 p-5 flex gap-4">
-            <div className="w-9 h-9 rounded-lg bg-orange-950/60 border border-orange-900/50 flex items-center justify-center shrink-0">
-              <Sparkles className="w-4 h-4 text-orange-300" />
+          <div
+            className={`mb-4 rounded-xl bg-zinc-950 p-5 flex gap-4 border ${
+              engajamentoAlto
+                ? "border-emerald-900/50"
+                : "border-orange-900/50"
+            }`}
+          >
+            <div
+              className={`w-9 h-9 rounded-lg flex items-center justify-center shrink-0 border ${
+                engajamentoAlto
+                  ? "bg-emerald-950/60 border-emerald-900/50"
+                  : "bg-orange-950/60 border-orange-900/50"
+              }`}
+            >
+              {engajamentoAlto ? (
+                <Check className="w-4 h-4 text-emerald-300" />
+              ) : (
+                <Sparkles className="w-4 h-4 text-orange-300" />
+              )}
             </div>
             <div className="min-w-0">
-              <p className="text-xs font-medium uppercase tracking-widest text-orange-300/80 mb-1.5">
-                Alerta de Frequência
+              <p
+                className={`text-xs font-medium uppercase tracking-widest mb-1.5 ${
+                  engajamentoAlto
+                    ? "text-emerald-300/80"
+                    : "text-orange-300/80"
+                }`}
+              >
+                {aiInsight?.tipoAlerta || "Alerta de Frequência"}
               </p>
               <p
                 className={`text-sm text-zinc-300 leading-relaxed ${
@@ -483,7 +814,8 @@ export default function ProfessorChamadaPage() {
               >
                 {isLoadingAi
                   ? "Analisando frequência da turma..."
-                  : aiInsight || "Selecione uma turma para gerar o alerta."}
+                  : aiInsight?.mensagem ||
+                    "Selecione uma turma para gerar o alerta."}
               </p>
             </div>
           </div>
@@ -494,10 +826,10 @@ export default function ProfessorChamadaPage() {
             <span className="text-white font-medium">{totalAlunos}</span>
             <span className="mx-2 text-zinc-700">|</span>
             Presentes:{" "}
-            <span className="text-green-400 font-medium">{totalPresentes}</span>
+            <span className="text-emerald-500 font-medium">{presentes}</span>
             <span className="mx-2 text-zinc-700">|</span>
             Faltas:{" "}
-            <span className="text-red-400 font-medium">{totalFaltas}</span>
+            <span className="text-red-500 font-medium">{faltas}</span>
           </div>
 
           {/* Lista de Alunos */}
@@ -536,14 +868,18 @@ export default function ProfessorChamadaPage() {
                         colSpan={3}
                         className="px-6 py-10 text-center text-sm text-zinc-500"
                       >
-                        {alunosTurma.length === 0
-                          ? "Nenhum aluno nesta turma"
-                          : "Nenhum aluno encontrado para a busca"}
+                        {!turmaSelecionada
+                          ? "Selecione uma turma para carregar os alunos"
+                          : alunosTurma.length === 0
+                            ? "Nenhum aluno nesta turma"
+                            : "Nenhum aluno encontrado para a busca"}
                       </td>
                     </tr>
                   ) : (
                     alunosExibidos.map((aluno) => {
                       const alerta = aluno.porcentagemFaltas >= 25;
+                      const status = chamadaStatus[aluno.ra] ?? "presente";
+                      const estaPresente = status === "presente";
                       return (
                         <tr
                           key={aluno.id}
@@ -583,9 +919,11 @@ export default function ProfessorChamadaPage() {
                               <div className="inline-flex rounded-lg overflow-hidden border border-zinc-800">
                                 <button
                                   type="button"
-                                  onClick={() => setPresenca(aluno.id, true)}
+                                  onClick={() =>
+                                    setStatusAluno(aluno.ra, "presente")
+                                  }
                                   className={`flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium transition-colors ${
-                                    aluno.presente
+                                    estaPresente
                                       ? "bg-green-900/40 text-green-500"
                                       : "bg-zinc-950 text-zinc-500 hover:text-zinc-300"
                                   }`}
@@ -595,9 +933,11 @@ export default function ProfessorChamadaPage() {
                                 </button>
                                 <button
                                   type="button"
-                                  onClick={() => setPresenca(aluno.id, false)}
+                                  onClick={() =>
+                                    setStatusAluno(aluno.ra, "falta")
+                                  }
                                   className={`flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium border-l border-zinc-800 transition-colors ${
-                                    !aluno.presente
+                                    !estaPresente
                                       ? "bg-red-900/40 text-red-500"
                                       : "bg-zinc-950 text-zinc-500 hover:text-zinc-300"
                                   }`}

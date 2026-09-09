@@ -9,6 +9,8 @@ export type ProfessorSession = {
   titulacao: string;
   area_atuacao: string;
   nomeCompletoTitulo: string;
+  turno_aula?: string;
+  dias_aula?: string[];
 };
 
 export function iniciaisDoProfessor(nome: string) {

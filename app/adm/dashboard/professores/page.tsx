@@ -43,6 +43,8 @@ type Professor = {
   email_pessoal: string;
   email_institucional: string;
   telefone: string;
+  turno_aula: string;
+  dias_aula: string[];
 };
 
 type AiInsight = {
@@ -105,6 +107,17 @@ const statusBadge: Record<StatusProfessor, string> = {
 };
 
 const titulacoes: Titulacao[] = ["Especialista", "Mestre(a)", "Doutor(a)"];
+
+const turnosAula = ["Manhã", "Tarde", "Noite", "Integral"] as const;
+
+const diasSemanaBase = [
+  "Segunda",
+  "Terça",
+  "Quarta",
+  "Quinta",
+  "Sexta",
+  "Sábado",
+] as const;
 
 const abasCadastro: { id: AbaCadastro; label: string }[] = [
   { id: "docente", label: "1. Docência & Turma" },
@@ -173,11 +186,32 @@ function mascaraTelefone(valor: string) {
     .replace(/(\d{5})(\d)/, "$1-$2");
 }
 
+function normalizarDiasAula(valor: unknown): string[] {
+  if (Array.isArray(valor)) {
+    return valor.map((dia) => String(dia)).filter(Boolean);
+  }
+  if (typeof valor === "string" && valor.trim()) {
+    try {
+      const parsed = JSON.parse(valor);
+      if (Array.isArray(parsed)) {
+        return parsed.map((dia) => String(dia)).filter(Boolean);
+      }
+    } catch {
+      return valor
+        .split(",")
+        .map((dia) => dia.trim())
+        .filter(Boolean);
+    }
+  }
+  return [];
+}
+
 function mapProfessor(row: Record<string, unknown>): Professor {
   const nome = String(row.nome ?? "");
   const emailInstitucional = String(
     row.email_institucional ?? row.email ?? "—"
   );
+  const turno = String(row.turno_aula ?? "Noite");
   return {
     id: String(row.id ?? ""),
     matricula: String(row.matricula ?? "—"),
@@ -195,6 +229,10 @@ function mapProfessor(row: Record<string, unknown>): Professor {
     email_pessoal: String(row.email_pessoal ?? ""),
     email_institucional: emailInstitucional === "—" ? "" : emailInstitucional,
     telefone: String(row.telefone ?? ""),
+    turno_aula: turnosAula.includes(turno as (typeof turnosAula)[number])
+      ? turno
+      : "Noite",
+    dias_aula: normalizarDiasAula(row.dias_aula),
   };
 }
 
@@ -205,6 +243,8 @@ export default function GestaoProfessoresPage() {
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [formError, setFormError] = useState<string | null>(null);
   const [formData, setFormData] = useState<FormDataProfessor>(formInicial);
+  const [turnoAula, setTurnoAula] = useState("Noite");
+  const [diasAula, setDiasAula] = useState<string[]>([]);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [itemToDelete, setItemToDelete] = useState<string | null>(null);
   const [turmasDisponiveis, setTurmasDisponiveis] = useState<TurmaDisponivel[]>([]);
@@ -420,21 +460,54 @@ export default function GestaoProfessoresPage() {
     setFormData((prev) => ({ ...prev, [campo]: valor }));
   }
 
+  function toggleDiaAula(dia: string) {
+    setDiasAula((prev) =>
+      prev.includes(dia) ? prev.filter((d) => d !== dia) : [...prev, dia]
+    );
+  }
+
+  function resetCamposTurnoDias() {
+    setTurnoAula("Noite");
+    setDiasAula([]);
+  }
+
   function fecharModal() {
     setIsModalOpen(false);
     setFormData(formInicial);
+    resetCamposTurnoDias();
     setFormError(null);
     setEditingId(null);
     setAbaAtiva("docente");
   }
 
+  async function gerarNovaMatricula() {
+    const { data, error } = await supabase
+      .from("professores")
+      .select("matricula")
+      .order("matricula", { ascending: false })
+      .limit(1);
+
+    if (error) {
+      console.error("Erro ao gerar matrícula:", error.message);
+    }
+
+    const ultima = data?.[0]?.matricula;
+    const numero = Number(String(ultima ?? "").replace(/\D/g, ""));
+    const novaMatricula =
+      Number.isFinite(numero) && numero > 0 ? String(numero + 1) : "9001";
+
+    setFormData((prev) => ({ ...prev, matricula: novaMatricula }));
+  }
+
   function abrirModalCadastro() {
     setFormData(formInicial);
+    resetCamposTurnoDias();
     setFormError(null);
     setEditingId(null);
     setAbaAtiva("docente");
     void fetchTurmasDisponiveis();
     setIsModalOpen(true);
+    void gerarNovaMatricula();
   }
 
   function abrirFeedback(
@@ -476,6 +549,8 @@ export default function GestaoProfessoresPage() {
         prof.email_institucional || gerarEmailInstitucional(prof.nome),
       telefone: prof.telefone,
     });
+    setTurnoAula(prof.turno_aula || "Noite");
+    setDiasAula(prof.dias_aula ?? []);
     setEditingId(prof.id);
     setAbaAtiva("docente");
     void fetchTurmasDisponiveis();
@@ -514,6 +589,8 @@ export default function GestaoProfessoresPage() {
       email_pessoal: formData.email_pessoal.trim(),
       email_institucional,
       telefone: formData.telefone.trim(),
+      turno_aula: turnoAula,
+      dias_aula: diasAula,
       status: "Ativo" as const,
     };
 
@@ -1119,17 +1196,16 @@ export default function GestaoProfessoresPage() {
                   <>
                     <div>
                       <label className={labelClass} htmlFor="prof-matricula">
-                        Matrícula
+                        Matrícula (gerada automaticamente)
                       </label>
                       <input
                         id="prof-matricula"
                         type="text"
                         value={formData.matricula}
-                        onChange={(e) =>
-                          atualizarCampo("matricula", e.target.value)
-                        }
-                        className={inputClass}
-                        placeholder="Ex: 9012"
+                        readOnly
+                        disabled
+                        className="w-full px-3 py-2.5 rounded-lg bg-gray-800/50 text-gray-500 cursor-not-allowed border border-gray-700 text-sm outline-none"
+                        placeholder="Gerado automaticamente"
                       />
                     </div>
 
@@ -1224,6 +1300,48 @@ export default function GestaoProfessoresPage() {
                         className={inputClass}
                         placeholder="Ex: 20"
                       />
+                    </div>
+
+                    <div>
+                      <label className={labelClass} htmlFor="prof-turno-aula">
+                        Turno de Atuação
+                      </label>
+                      <select
+                        id="prof-turno-aula"
+                        value={turnoAula}
+                        onChange={(e) => setTurnoAula(e.target.value)}
+                        className={inputClass}
+                      >
+                        {turnosAula.map((turno) => (
+                          <option key={turno} value={turno}>
+                            {turno}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+
+                    <div>
+                      <p className={labelClass}>Dias de Aula</p>
+                      <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
+                        {diasSemanaBase.map((dia) => {
+                          const selecionado = diasAula.includes(dia);
+                          return (
+                            <button
+                              key={dia}
+                              type="button"
+                              onClick={() => toggleDiaAula(dia)}
+                              aria-pressed={selecionado}
+                              className={`rounded-lg px-3 py-2 text-sm font-medium transition-colors ${
+                                selecionado
+                                  ? "bg-purple-600 text-white"
+                                  : "bg-[#0c0e14] text-gray-400 border border-gray-800 hover:border-gray-700"
+                              }`}
+                            >
+                              {dia}
+                            </button>
+                          );
+                        })}
+                      </div>
                     </div>
                   </>
                 )}

@@ -39,6 +39,8 @@ export default function LoginProfessorPage() {
           titulacao: data.titulacao,
           area_atuacao: data.area_atuacao,
           nomeCompletoTitulo: `${data.titulacao} ${data.nome}`,
+          turno_aula: data.turno_aula ?? "Noite",
+          dias_aula: Array.isArray(data.dias_aula) ? data.dias_aula : [],
         })
       );
 

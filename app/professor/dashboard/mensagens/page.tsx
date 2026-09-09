@@ -49,27 +49,6 @@ type MensagemInbox = {
   historico: MensagemHistorico[];
 };
 
-const assuntosTemplate = [
-  "Dúvida sobre a nota da N1",
-  "Justificativa de falta",
-  "Material complementar",
-  "Esclarecimento sobre o trabalho",
-  "Prazo de entrega da atividade",
-];
-
-const conteudosTemplate = [
-  (nome: string) =>
-    `Olá professor, sou ${nome}. Notei uma divergência no lançamento da minha nota e gostaria de confirmar se está tudo correto no sistema.`,
-  (nome: string) =>
-    `Professor, ${nome} aqui. Precisei ausentar-me da última aula por motivos de saúde. Há como justificar a falta e receber o material?`,
-  (nome: string) =>
-    `Bom dia, professor. ${nome} solicitando indicação de material complementar para reforçar os tópicos da última prova.`,
-  (nome: string) =>
-    `Professor, ${nome} com dúvida sobre o enunciado do trabalho. Poderia esclarecer o critério de avaliação da parte prática?`,
-  (nome: string) =>
-    `Olá professor, ${nome} gostaria de confirmar se ainda é possível entregar a atividade com atraso e quais as condições.`,
-];
-
 function iniciaisDoNome(nome: string) {
   return nome
     .split(" ")
@@ -79,74 +58,48 @@ function iniciaisDoNome(nome: string) {
     .join("");
 }
 
-function hashId(id: string) {
-  let hash = 0;
-  for (let i = 0; i < id.length; i++) {
-    hash = (hash * 31 + id.charCodeAt(i)) >>> 0;
-  }
-  return hash;
-}
-
-function tempoRelativo(indice: number) {
-  if (indice === 0) return "Há 2 horas";
-  if (indice === 1) return "Há 1 dia";
-  return `Há ${indice + 1} dias`;
-}
-
-function gerarMensagensDeAlunos(
-  alunos: Array<{ id: string; nome: string; ra?: string; matricula?: string }>
-): MensagemInbox[] {
-  return alunos.map((aluno, index) => {
-    const id = String(aluno.id);
-    const nome = String(aluno.nome ?? "Aluno");
-    const ra = String(aluno.ra || aluno.matricula || "RA-");
-    const templateIdx = hashId(id) % assuntosTemplate.length;
-    const assunto = assuntosTemplate[templateIdx];
-    const conteudo = conteudosTemplate[templateIdx](nome);
-    const turmaNome = "Turma Ativa";
-
-    return {
-      id: `msg-${id}`,
-      alunoNome: nome,
-      alunoRa: ra,
-      turmaNome,
-      assunto,
-      conteudo,
-      tempo: tempoRelativo(index),
-      naoLida: index < 2,
-      historico: [
-        {
-          id: `h-${id}-1`,
-          autor: "aluno",
-          texto: conteudo,
-          horario: tempoRelativo(index),
-        },
-      ],
-    };
+function formatarTempoEnvio(valor: unknown): string {
+  if (!valor) return "";
+  const date = new Date(String(valor));
+  if (Number.isNaN(date.getTime())) return String(valor);
+  return date.toLocaleString("pt-BR", {
+    day: "2-digit",
+    month: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
   });
 }
 
 function mapearMensagensSupabase(rows: Record<string, unknown>[]): MensagemInbox[] {
   return rows.map((row, index) => {
     const id = String(row.id ?? `msg-${index}`);
-    const alunoNome = String(row.aluno_nome ?? row.alunoNome ?? row.nome ?? "Aluno");
+    const alunoNome = String(
+      row.remetente ??
+        row.aluno_nome ??
+        row.alunoNome ??
+        row.nome ??
+        "Aluno"
+    );
     const assunto = String(row.assunto ?? "Mensagem");
     const conteudo = String(row.conteudo ?? row.mensagem ?? row.texto ?? "");
+    const tempo = formatarTempoEnvio(row.data_envio) || String(row.tempo ?? "");
     return {
       id,
       alunoNome,
-      alunoRa: String(row.ra ?? row.matricula ?? "RA-"),
-      turmaNome: String(row.turma_nome ?? row.turmaNome ?? row.turma ?? "Turma"),
+      alunoRa: String(row.ra ?? row.matricula ?? row.aluno_ra ?? "—"),
+      turmaNome: String(
+        row.turma_nome ?? row.turmaNome ?? row.turma ?? row.curso ?? "—"
+      ),
       assunto,
       conteudo,
-      tempo: String(row.tempo ?? tempoRelativo(index)),
-      naoLida: Boolean(row.nao_lida ?? row.naoLida ?? index === 0),
+      tempo,
+      naoLida: !(row.lida === true || row.nao_lida === false || row.naoLida === false),
       historico: [
         {
           id: `${id}-orig`,
           autor: "aluno" as const,
           texto: conteudo,
-          horario: String(row.tempo ?? tempoRelativo(index)),
+          horario: tempo || "—",
         },
       ],
     };
@@ -157,6 +110,7 @@ export default function ProfessorMensagensPage() {
   const { professorLogado, carregandoSessao } = useProfessorSession();
   const [busca, setBusca] = useState("");
   const [mensagens, setMensagens] = useState<MensagemInbox[]>([]);
+  const [carregando, setCarregando] = useState(true);
   const [mensagemSelecionadaId, setMensagemSelecionadaId] = useState<string | null>(
     null
   );
@@ -277,56 +231,46 @@ export default function ProfessorMensagensPage() {
     if (!professorLogado) return;
 
     async function carregarMensagens() {
-      const vinculoProfessor = professorLogado!.nomeCompletoTitulo;
-      const areaAtuacao = professorLogado!.area_atuacao;
+      setCarregando(true);
+      const destinatario = professorLogado!.nomeCompletoTitulo;
 
-      const { data: mensagensData, error: mensagensError } = await supabase
+      let { data, error } = await supabase
         .from("mensagens")
-        .select("*");
+        .select("*")
+        .eq("destinatario", destinatario)
+        .order("data_envio", { ascending: false });
 
-      if (!mensagensError && mensagensData && mensagensData.length > 0) {
-        const lista = mapearMensagensSupabase(
-          mensagensData as Record<string, unknown>[]
-        );
-        setMensagens(lista);
-        setMensagemSelecionadaId(lista[0]?.id ?? null);
-        return;
-      }
-
-      let { data: alunosData, error: alunosError } = await supabase
-        .from("alunos")
-        .select("id, nome, ra, professor, curso")
-        .eq("professor", vinculoProfessor)
-        .order("nome", { ascending: true });
-
-      if (alunosError) {
+      // Fallback provisório: sem filtro de destinatário se a caixa filtrada vier vazia/erro
+      if (error || !data || data.length === 0) {
+        if (error) {
+          console.error("Erro ao buscar mensagens filtradas:", error.message);
+        }
         const fallback = await supabase
-          .from("alunos")
-          .select("id, nome, ra, professor, curso")
-          .eq("curso", areaAtuacao)
-          .order("nome", { ascending: true });
+          .from("mensagens")
+          .select("*")
+          .order("data_envio", { ascending: false });
 
         if (fallback.error) {
           console.error(
-            "Erro ao buscar alunos:",
-            alunosError.message || fallback.error.message
+            "Erro ao buscar mensagens:",
+            fallback.error.message
           );
           setMensagens([]);
           setMensagemSelecionadaId(null);
+          setCarregando(false);
           return;
         }
-        alunosData = fallback.data;
+
+        data = fallback.data;
+        error = fallback.error;
       }
 
-      if (!alunosData || alunosData.length === 0) {
-        setMensagens([]);
-        setMensagemSelecionadaId(null);
-        return;
-      }
-
-      const geradas = gerarMensagensDeAlunos(alunosData);
-      setMensagens(geradas);
-      setMensagemSelecionadaId(geradas[0]?.id ?? null);
+      const lista = mapearMensagensSupabase(
+        (data ?? []) as Record<string, unknown>[]
+      );
+      setMensagens(lista);
+      setMensagemSelecionadaId(lista[0]?.id ?? null);
+      setCarregando(false);
     }
 
     void carregarMensagens();
@@ -469,9 +413,17 @@ export default function ProfessorMensagensPage() {
               </div>
 
               <div className="flex-1 overflow-y-auto flex flex-col gap-2 pb-2">
-                {mensagensFiltradas.length === 0 ? (
+                {carregando ? (
+                  <p className="text-sm text-zinc-500 px-2 py-6 text-center animate-pulse">
+                    Carregando mensagens...
+                  </p>
+                ) : mensagens.length === 0 ? (
                   <p className="text-sm text-zinc-500 px-2 py-6 text-center">
-                    Nenhuma mensagem encontrada.
+                    Nenhuma mensagem na caixa de entrada.
+                  </p>
+                ) : mensagensFiltradas.length === 0 ? (
+                  <p className="text-sm text-zinc-500 px-2 py-6 text-center">
+                    Nenhuma mensagem encontrada para a busca.
                   </p>
                 ) : (
                   mensagensFiltradas.map((msg) => (

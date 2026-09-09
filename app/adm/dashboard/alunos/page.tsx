@@ -654,6 +654,34 @@ export default function GestaoAlunosPage() {
     setBuscandoCep(false);
   }
 
+  async function gerarNovoRA() {
+    const { data, error } = await supabase
+      .from("alunos")
+      .select("ra")
+      .order("ra", { ascending: false })
+      .limit(1);
+
+    if (error) {
+      console.error("Erro ao gerar RA:", error.message);
+    }
+
+    const ultimoRa = data?.[0]?.ra;
+    let novoRa: string;
+
+    if (ultimoRa) {
+      const numero = Number(String(ultimoRa).replace(/\D/g, ""));
+      novoRa =
+        Number.isFinite(numero) && numero > 0
+          ? String(numero + 1)
+          : `${new Date().getFullYear()}1001`;
+    } else {
+      const ano = new Date().getFullYear();
+      novoRa = `${ano}1001`;
+    }
+
+    setFormData((prev) => ({ ...prev, ra: novoRa }));
+  }
+
   function abrirModalCadastro() {
     setFormData(formInicial);
     setFormError(null);
@@ -664,6 +692,7 @@ export default function GestaoAlunosPage() {
     setCepErro(null);
     void fetchProfessoresDisponiveis();
     setIsModalOpen(true);
+    void gerarNovoRA();
   }
 
   async function confirmDelete() {
@@ -1367,15 +1396,15 @@ export default function GestaoAlunosPage() {
                   <>
                     <div>
                       <label className={labelClass} htmlFor="ra">
-                        RA
+                        RA (gerado automaticamente)
                       </label>
                       <input
                         id="ra"
                         type="text"
                         value={formData.ra}
-                        onChange={(e) => atualizarCampo("ra", e.target.value)}
-                        className={inputClass}
-                        placeholder="Ex: 20261001"
+                        readOnly
+                        disabled
+                        className="w-full px-3 py-2.5 rounded-lg bg-gray-800/50 text-gray-500 cursor-not-allowed border border-gray-700 text-sm outline-none"
                       />
                     </div>
                     <div>
