@@ -14,6 +14,11 @@ import {
 } from "lucide-react";
 import { supabase } from "@/lib/supabase";
 import { ProfessorSettingsControl } from "@/components/professor/config-modal";
+import {
+  iniciaisDoProfessor,
+  limparSessaoProfessor,
+  useProfessorSession,
+} from "@/lib/professor-session";
 
 const navItems = [
   { icon: LayoutDashboard, label: "Visão Geral",    href: "/professor/dashboard",           active: false },
@@ -92,6 +97,7 @@ function mediaDeTurma(id: string) {
 }
 
 export default function ProfessorInsightsPage() {
+  const { professorLogado, carregandoSessao } = useProfessorSession();
   const [turmas, setTurmas] = useState<TurmaOption[]>([]);
   const [filtroEscopo, setFiltroEscopo] = useState("todos");
   const [alunosRisco, setAlunosRisco] = useState<AlunoRisco[]>([]);
@@ -148,9 +154,13 @@ export default function ProfessorInsightsPage() {
   }
 
   useEffect(() => {
+    if (!professorLogado) return;
+
     async function carregarDados() {
       let listaTurmas: TurmaOption[] = [];
       let listaRisco: AlunoRisco[] = [];
+      const vinculoProfessor = professorLogado!.nomeCompletoTitulo;
+      const areaAtuacao = professorLogado!.area_atuacao;
 
       const { data: turmasData, error: turmasError } = await supabase
         .from("turmas")
@@ -180,20 +190,25 @@ export default function ProfessorInsightsPage() {
 
       let { data: alunosData, error: alunosError } = await supabase
         .from("alunos")
-        .select("id, nome, matricula, ra")
+        .select("id, nome, ra, professor, curso")
+        .eq("professor", vinculoProfessor)
         .order("nome", { ascending: true });
 
       if (alunosError) {
-        const retry = await supabase
+        const fallback = await supabase
           .from("alunos")
-          .select("id, nome, ra")
+          .select("id, nome, ra, professor, curso")
+          .eq("curso", areaAtuacao)
           .order("nome", { ascending: true });
 
-        if (retry.error) {
-          console.error("Erro ao buscar alunos:", retry.error.message);
+        if (fallback.error) {
+          console.error(
+            "Erro ao buscar alunos:",
+            alunosError.message || fallback.error.message
+          );
           setAlunosRisco([]);
         } else {
-          alunosData = retry.data;
+          alunosData = fallback.data;
           alunosError = null;
         }
       }
@@ -226,12 +241,24 @@ export default function ProfessorInsightsPage() {
 
     void carregarDados();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [professorLogado]);
 
   function handleEscopoChange(valor: string) {
     setFiltroEscopo(valor);
     void fetchAiPredicao(valor);
   }
+
+  if (carregandoSessao || !professorLogado) {
+    return (
+      <div className="flex h-screen items-center justify-center bg-black text-zinc-400 text-sm">
+        Carregando sessão...
+      </div>
+    );
+  }
+
+  const iniciais = iniciaisDoProfessor(
+    professorLogado.nome || professorLogado.nomeCompletoTitulo
+  );
 
   return (
     <div className="flex h-screen bg-black text-white overflow-hidden">
@@ -255,11 +282,15 @@ export default function ProfessorInsightsPage() {
           <div className="flex items-center justify-between gap-3">
             <div className="flex items-center gap-3 min-w-0">
               <div className="w-10 h-10 rounded-full bg-zinc-800 flex items-center justify-center text-sm font-semibold text-white shrink-0">
-                RL
+                {iniciais || "PR"}
               </div>
               <div className="min-w-0">
-                <p className="text-sm font-medium truncate">Prof. Roberto Lima</p>
-                <p className="text-xs text-zinc-500">Dep. de Tecnologia</p>
+                <p className="text-sm font-medium truncate">
+                  {professorLogado.nomeCompletoTitulo}
+                </p>
+                <p className="text-xs text-zinc-500 truncate">
+                  {professorLogado.area_atuacao}
+                </p>
               </div>
             </div>
             <ProfessorSettingsControl />
@@ -303,6 +334,7 @@ export default function ProfessorInsightsPage() {
         <div className="px-2 py-4 border-t border-zinc-800">
           <a
             href="/professor"
+            onClick={limparSessaoProfessor}
             className="flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm text-zinc-500 hover:bg-zinc-900 hover:text-white transition-colors"
           >
             <LogOut className="w-4 h-4 shrink-0" />

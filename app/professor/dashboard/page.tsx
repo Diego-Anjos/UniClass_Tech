@@ -18,6 +18,11 @@ import {
 } from "lucide-react";
 import { supabase } from "@/lib/supabase";
 import { ProfessorSettingsControl } from "@/components/professor/config-modal";
+import {
+  iniciaisDoProfessor,
+  limparSessaoProfessor,
+  useProfessorSession,
+} from "@/lib/professor-session";
 
 const navItems = [
   { icon: LayoutDashboard, label: "Visão Geral",    href: "/professor/dashboard",       active: true  },
@@ -28,16 +33,16 @@ const navItems = [
 ];
 
 export default function ProfessorDashboardPage() {
+  const { professorLogado, carregandoSessao } = useProfessorSession();
   const [turmasAtivas, setTurmasAtivas] = useState(0);
   const [aiInsight, setAiInsight] = useState("");
   const [isLoadingAi, setIsLoadingAi] = useState(true);
-  const [professorNome] = useState("Roberto Lima");
   const [mediaGlobal, setMediaGlobal] = useState<number | null>(null);
   const [alunosRisco, setAlunosRisco] = useState<number>(0);
   const [agenda, setAgenda] = useState<any[]>([]);
   const [pendencias, setPendencias] = useState<any[]>([]);
 
-  async function fetchAiInsight(turmasAtivas: number) {
+  async function fetchAiInsight(turmasAtivas: number, nomeContexto: string) {
     setIsLoadingAi(true);
     try {
       const response = await fetch("/api/insights", {
@@ -46,7 +51,7 @@ export default function ProfessorDashboardPage() {
           "Content-Type": "application/json",
         },
         body: JSON.stringify({
-          context: professorNome || "Professor Roberto Lima",
+          context: nomeContexto || "Professor",
           turmasAtivas,
         }),
       });
@@ -65,27 +70,47 @@ export default function ProfessorDashboardPage() {
   }
 
   useEffect(() => {
+    if (!professorLogado) return;
+
     async function fetchDadosBase() {
       const { count, error } = await supabase
         .from("turmas")
         .select("*", { count: "exact", head: true })
         .eq("status", "Aberta");
 
+      const nomeContexto =
+        professorLogado!.nomeCompletoTitulo || professorLogado!.nome;
+
       if (error) {
         console.error("Erro ao buscar turmas ativas:", error.message);
         setTurmasAtivas(0);
-        await fetchAiInsight(0);
+        await fetchAiInsight(0, nomeContexto);
         return;
       }
 
       const total = count ?? 0;
       setTurmasAtivas(total);
-      await fetchAiInsight(total);
+      await fetchAiInsight(total, nomeContexto);
     }
 
     void fetchDadosBase();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [professorLogado]);
+
+  if (carregandoSessao || !professorLogado) {
+    return (
+      <div className="flex h-screen items-center justify-center bg-black text-zinc-400 text-sm">
+        Carregando sessão...
+      </div>
+    );
+  }
+
+  const iniciais = iniciaisDoProfessor(
+    professorLogado.nome || professorLogado.nomeCompletoTitulo
+  );
+  const primeiroNome =
+    professorLogado.nome?.split(" ").filter(Boolean)[0] ||
+    professorLogado.nomeCompletoTitulo.split(" ").filter(Boolean).slice(-1)[0] ||
+    "Professor";
 
   return (
     <div className="flex h-screen bg-black text-white overflow-hidden">
@@ -109,11 +134,15 @@ export default function ProfessorDashboardPage() {
           <div className="flex items-center justify-between gap-3">
             <div className="flex items-center gap-3 min-w-0">
               <div className="w-10 h-10 rounded-full bg-zinc-800 flex items-center justify-center text-sm font-semibold text-white shrink-0">
-                RL
+                {iniciais || "PR"}
               </div>
               <div className="min-w-0">
-                <p className="text-sm font-medium truncate">Prof. {professorNome}</p>
-                <p className="text-xs text-zinc-500">Dep. de Tecnologia</p>
+                <p className="text-sm font-medium truncate">
+                  {professorLogado.nomeCompletoTitulo}
+                </p>
+                <p className="text-xs text-zinc-500 truncate">
+                  {professorLogado.area_atuacao}
+                </p>
               </div>
             </div>
             <ProfessorSettingsControl />
@@ -157,6 +186,7 @@ export default function ProfessorDashboardPage() {
         <div className="px-2 py-4 border-t border-zinc-800">
           <a
             href="/professor"
+            onClick={limparSessaoProfessor}
             className="flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm text-zinc-500 hover:bg-zinc-900 hover:text-white transition-colors"
           >
             <LogOut className="w-4 h-4 shrink-0" />
@@ -174,7 +204,7 @@ export default function ProfessorDashboardPage() {
           {/* Header */}
           <div className="mb-8">
             <h1 className="text-2xl font-semibold tracking-tight text-white">
-              Bom dia, {professorNome.split(" ")[0]}!
+              Bom dia, {primeiroNome}!
             </h1>
             <p className="text-sm text-zinc-400 mt-1">
               Aqui está o resumo das suas turmas e pendências de hoje.

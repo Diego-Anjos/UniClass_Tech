@@ -14,10 +14,17 @@ import {
   AlertTriangle,
   Check,
   X,
+  Search,
 } from "lucide-react";
 import { supabase } from "@/lib/supabase";
 import { ProfessorSettingsControl } from "@/components/professor/config-modal";
 import { ModalFeedback } from "@/components/ModalFeedback";
+import { PaginationFooter } from "@/components/ui/pagination-footer";
+import {
+  iniciaisDoProfessor,
+  limparSessaoProfessor,
+  useProfessorSession,
+} from "@/lib/professor-session";
 
 const navItems = [
   { icon: LayoutDashboard, label: "Visão Geral",    href: "/professor/dashboard",          active: false },
@@ -79,10 +86,14 @@ function porcentagemFaltasDeId(id: string) {
 }
 
 export default function ProfessorChamadaPage() {
+  const { professorLogado, carregandoSessao } = useProfessorSession();
   const [turmas, setTurmas] = useState<TurmaOption[]>([]);
   const [turmaSelecionada, setTurmaSelecionada] = useState("");
   const [dataChamada, setDataChamada] = useState(hojeISO());
-  const [alunos, setAlunos] = useState<AlunoChamada[]>([]);
+  const [alunosTurma, setAlunosTurma] = useState<AlunoChamada[]>([]);
+  const [termoBusca, setTermoBusca] = useState("");
+  const [paginaAtual, setPaginaAtual] = useState(1);
+  const [itensPorPagina, setItensPorPagina] = useState(10);
   const [aiInsight, setAiInsight] = useState("");
   const [isLoadingAi, setIsLoadingAi] = useState(false);
   const [modalFeedback, setModalFeedback] = useState<{
@@ -97,14 +108,30 @@ export default function ProfessorChamadaPage() {
     mensagem: "",
   });
 
-  const totalAlunos = useMemo(() => alunos.length, [alunos]);
+  const alunosFiltrados = useMemo(() => {
+    const termo = termoBusca.trim().toLowerCase();
+    if (!termo) return alunosTurma;
+    return alunosTurma.filter(
+      (aluno) =>
+        aluno.nome.toLowerCase().includes(termo) ||
+        aluno.ra.toLowerCase().includes(termo)
+    );
+  }, [alunosTurma, termoBusca]);
+
+  const totalRegistros = alunosFiltrados.length;
+  const totalPaginas = Math.max(1, Math.ceil(totalRegistros / itensPorPagina));
+  const indiceInicial = (paginaAtual - 1) * itensPorPagina;
+  const indiceFinal = indiceInicial + itensPorPagina;
+  const alunosExibidos = alunosFiltrados.slice(indiceInicial, indiceFinal);
+
+  const totalAlunos = alunosTurma.length;
   const totalPresentes = useMemo(
-    () => alunos.filter((a) => a.presente).length,
-    [alunos]
+    () => alunosTurma.filter((a) => a.presente).length,
+    [alunosTurma]
   );
   const totalFaltas = useMemo(
-    () => alunos.filter((a) => !a.presente).length,
-    [alunos]
+    () => alunosTurma.filter((a) => !a.presente).length,
+    [alunosTurma]
   );
 
   const turmaAtual = useMemo(
@@ -157,7 +184,7 @@ export default function ProfessorChamadaPage() {
   }
 
   function setPresenca(alunoId: string, presente: boolean) {
-    setAlunos((prev) =>
+    setAlunosTurma((prev) =>
       prev.map((aluno) =>
         aluno.id === alunoId ? { ...aluno, presente } : aluno
       )
@@ -165,7 +192,7 @@ export default function ProfessorChamadaPage() {
   }
 
   function handleSalvarChamada() {
-    if (alunos.length === 0) {
+    if (alunosTurma.length === 0) {
       mostrarFeedback(
         "atencao",
         "Sem alunos",
@@ -182,6 +209,8 @@ export default function ProfessorChamadaPage() {
   }
 
   useEffect(() => {
+    if (!professorLogado) return;
+
     async function fetchTurmas() {
       const { data, error } = await supabase
         .from("turmas")
@@ -204,37 +233,45 @@ export default function ProfessorChamadaPage() {
     }
 
     void fetchTurmas();
-  }, []);
+  }, [professorLogado]);
 
   useEffect(() => {
-    if (!turmaSelecionada) {
-      setAlunos([]);
+    if (!turmaSelecionada || !professorLogado) {
+      setAlunosTurma([]);
       return;
     }
 
     async function fetchAlunos() {
+      const vinculoProfessor = professorLogado!.nomeCompletoTitulo;
+      const areaAtuacao = professorLogado!.area_atuacao;
+
       let { data, error } = await supabase
         .from("alunos")
-        .select("id, nome, matricula, ra")
+        .select("id, nome, ra, professor, curso")
+        .eq("professor", vinculoProfessor)
         .order("nome", { ascending: true });
 
       if (error) {
-        const retry = await supabase
+        const fallback = await supabase
           .from("alunos")
-          .select("id, nome, ra")
+          .select("id, nome, ra, professor, curso")
+          .eq("curso", areaAtuacao)
           .order("nome", { ascending: true });
 
-        if (retry.error) {
-          console.error("Erro ao buscar alunos:", retry.error.message);
-          setAlunos([]);
+        if (fallback.error) {
+          console.error(
+            "Erro ao buscar alunos:",
+            error.message || fallback.error.message
+          );
+          setAlunosTurma([]);
           return;
         }
-        data = retry.data;
-        error = null;
+
+        data = fallback.data;
       }
 
       if (!data || data.length === 0) {
-        setAlunos([]);
+        setAlunosTurma([]);
         return;
       }
 
@@ -253,11 +290,21 @@ export default function ProfessorChamadaPage() {
         };
       });
 
-      setAlunos(mapeados);
+      setAlunosTurma(mapeados);
     }
 
     void fetchAlunos();
-  }, [turmaSelecionada]);
+  }, [turmaSelecionada, professorLogado]);
+
+  useEffect(() => {
+    setPaginaAtual(1);
+  }, [turmaSelecionada, termoBusca]);
+
+  useEffect(() => {
+    if (paginaAtual > totalPaginas) {
+      setPaginaAtual(totalPaginas);
+    }
+  }, [paginaAtual, totalPaginas]);
 
   useEffect(() => {
     if (!turmaAtual || totalAlunos === 0) {
@@ -272,6 +319,18 @@ export default function ProfessorChamadaPage() {
     );
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [turmaSelecionada, totalAlunos, totalFaltas, turmaAtual?.id]);
+
+  if (carregandoSessao || !professorLogado) {
+    return (
+      <div className="flex h-screen items-center justify-center bg-black text-zinc-400 text-sm">
+        Carregando sessão...
+      </div>
+    );
+  }
+
+  const iniciais = iniciaisDoProfessor(
+    professorLogado.nome || professorLogado.nomeCompletoTitulo
+  );
 
   return (
     <div className="flex h-screen bg-black text-white overflow-hidden">
@@ -295,11 +354,15 @@ export default function ProfessorChamadaPage() {
           <div className="flex items-center justify-between gap-3">
             <div className="flex items-center gap-3 min-w-0">
               <div className="w-10 h-10 rounded-full bg-zinc-800 flex items-center justify-center text-sm font-semibold text-white shrink-0">
-                RL
+                {iniciais || "PR"}
               </div>
               <div className="min-w-0">
-                <p className="text-sm font-medium truncate">Prof. Roberto Lima</p>
-                <p className="text-xs text-zinc-500">Dep. de Tecnologia</p>
+                <p className="text-sm font-medium truncate">
+                  {professorLogado.nomeCompletoTitulo}
+                </p>
+                <p className="text-xs text-zinc-500 truncate">
+                  {professorLogado.area_atuacao}
+                </p>
               </div>
             </div>
             <ProfessorSettingsControl />
@@ -343,6 +406,7 @@ export default function ProfessorChamadaPage() {
         <div className="px-2 py-4 border-t border-zinc-800">
           <a
             href="/professor"
+            onClick={limparSessaoProfessor}
             className="flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm text-zinc-500 hover:bg-zinc-900 hover:text-white transition-colors"
           >
             <LogOut className="w-4 h-4 shrink-0" />
@@ -438,6 +502,18 @@ export default function ProfessorChamadaPage() {
 
           {/* Lista de Alunos */}
           <div className="rounded-xl bg-zinc-950 border border-zinc-800 overflow-hidden">
+            <div className="px-6 py-4 border-b border-zinc-800">
+              <div className="relative max-w-sm">
+                <Search className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-zinc-500" />
+                <input
+                  type="search"
+                  value={termoBusca}
+                  onChange={(e) => setTermoBusca(e.target.value)}
+                  placeholder="Buscar por nome ou RA..."
+                  className="w-full bg-zinc-900 border border-zinc-800 rounded-lg pl-9 pr-3 py-2 text-sm text-white placeholder:text-zinc-500 focus:outline-none focus:ring-1 focus:ring-zinc-500 focus:border-zinc-600"
+                />
+              </div>
+            </div>
             <div className="overflow-x-auto">
               <table className="w-full text-left">
                 <thead>
@@ -454,17 +530,19 @@ export default function ProfessorChamadaPage() {
                   </tr>
                 </thead>
                 <tbody>
-                  {alunos.length === 0 ? (
+                  {alunosExibidos.length === 0 ? (
                     <tr>
                       <td
                         colSpan={3}
                         className="px-6 py-10 text-center text-sm text-zinc-500"
                       >
-                        Nenhum aluno nesta turma
+                        {alunosTurma.length === 0
+                          ? "Nenhum aluno nesta turma"
+                          : "Nenhum aluno encontrado para a busca"}
                       </td>
                     </tr>
                   ) : (
-                    alunos.map((aluno) => {
+                    alunosExibidos.map((aluno) => {
                       const alerta = aluno.porcentagemFaltas >= 25;
                       return (
                         <tr
@@ -537,6 +615,14 @@ export default function ProfessorChamadaPage() {
                 </tbody>
               </table>
             </div>
+
+            <PaginationFooter
+              total={totalRegistros}
+              paginaAtual={paginaAtual}
+              itensPorPagina={itensPorPagina}
+              onPaginaChange={setPaginaAtual}
+              onItensPorPaginaChange={setItensPorPagina}
+            />
           </div>
 
         </div>
