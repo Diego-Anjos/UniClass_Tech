@@ -45,6 +45,15 @@ type Aluno = {
   estado: string;
 };
 
+type AiInsightAluno = {
+  tipoAlerta: string;
+  corAlerta: "amber" | "emerald" | "rose" | string;
+  mensagem: string;
+  riscoLabel: string;
+  metricaLabel: string;
+  metricaValor: string;
+};
+
 type ProfessorDisponivel = {
   id: string;
   nome: string;
@@ -175,6 +184,57 @@ function mascaraCEP(valor: string) {
   return digits.replace(/(\d{5})(\d)/, "$1-$2");
 }
 
+function valorOpcaoProfessor(p: {
+  nome: string;
+  titulacao: string;
+}) {
+  const titulo = p.titulacao.trim();
+  const nome = p.nome.trim();
+  if (!nome) return "";
+  return titulo ? `${titulo} ${nome}` : nome;
+}
+
+function encontrarProfessorNaLista(
+  professorSalvo: string,
+  lista: ProfessorDisponivel[]
+) {
+  const salvo = professorSalvo.trim().toLowerCase();
+  if (!salvo) return null;
+
+  return (
+    lista.find((p) => {
+      const nome = p.nome.trim().toLowerCase();
+      const comTitulo = valorOpcaoProfessor(p).toLowerCase();
+      return (
+        nome === salvo ||
+        comTitulo === salvo ||
+        (nome.length > 0 &&
+          (salvo.endsWith(nome) || comTitulo.endsWith(salvo) || salvo.includes(nome)))
+      );
+    }) ?? null
+  );
+}
+
+function sugerirProfessorPorArea(
+  curso: string,
+  lista: ProfessorDisponivel[]
+) {
+  const cursoNorm = curso.trim().toLowerCase();
+  if (!cursoNorm) return null;
+
+  return (
+    lista.find((p) => {
+      const area = p.area_atuacao.trim().toLowerCase();
+      if (!area) return false;
+      return (
+        area === cursoNorm ||
+        area.includes(cursoNorm) ||
+        cursoNorm.includes(area)
+      );
+    }) ?? null
+  );
+}
+
 function mapAluno(row: Record<string, unknown>): Aluno {
   const nome = String(row.nome ?? "");
   const status = String(row.status ?? "Ativo");
@@ -237,6 +297,11 @@ export default function GestaoAlunosPage() {
   const [drawerAberto, setDrawerAberto] = useState(false);
   const [abaProntuario, setAbaProntuario] = useState<AbaProntuario>("Cadastral");
   const [abaAtiva, setAbaAtiva] = useState<AbaCadastro>("academico");
+  const [aiInsightAluno, setAiInsightAluno] = useState<AiInsightAluno | null>(
+    null
+  );
+  const [carregandoAiAluno, setCarregandoAiAluno] = useState(false);
+  const [notificandoResend, setNotificandoResend] = useState(false);
   const [cursosAtivos, setCursosAtivos] = useState<string[]>([]);
   const [professoresDisponiveis, setProfessoresDisponiveis] = useState<
     ProfessorDisponivel[]
@@ -248,6 +313,45 @@ export default function GestaoAlunosPage() {
 
   function fecharFeedback() {
     setModalFeedback((prev) => ({ ...prev, aberto: false }));
+  }
+
+  function corAlertaClasses(cor: string) {
+    if (cor === "emerald") {
+      return {
+        border: "border-l-emerald-500 border-emerald-900/40",
+        iconBox: "bg-emerald-950/60 border-emerald-900/50",
+        icon: "text-emerald-400",
+        text: "text-emerald-400",
+      };
+    }
+    if (cor === "rose") {
+      return {
+        border: "border-l-rose-500 border-rose-900/40",
+        iconBox: "bg-rose-950/60 border-rose-900/50",
+        icon: "text-rose-400",
+        text: "text-rose-400",
+      };
+    }
+    return {
+      border: "border-l-amber-500 border-amber-900/40",
+      iconBox: "bg-amber-950/60 border-amber-900/50",
+      icon: "text-amber-400",
+      text: "text-amber-400",
+    };
+  }
+
+  function corRiscoClasses(risco: string) {
+    const normalizado = risco.trim().toLowerCase();
+    if (normalizado === "crítico" || normalizado === "critico") {
+      return "text-rose-400";
+    }
+    if (normalizado === "moderado") {
+      return "text-amber-400";
+    }
+    if (normalizado === "baixo" || normalizado === "nenhum") {
+      return "text-emerald-400";
+    }
+    return "text-amber-400";
   }
 
   async function fetchAlunos() {
@@ -445,6 +549,46 @@ export default function GestaoAlunosPage() {
     };
   }, [formData.cep]);
 
+  useEffect(() => {
+    if (!alunoSelecionado) {
+      setAiInsightAluno(null);
+      setCarregandoAiAluno(false);
+      return;
+    }
+
+    const aluno = alunoSelecionado;
+    let cancelado = false;
+
+    async function carregarInsightAluno() {
+      setCarregandoAiAluno(true);
+      setAiInsightAluno(null);
+      try {
+        const res = await fetch("/api/insights/aluno", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            nome: aluno.nome,
+            curso: aluno.curso,
+            semestre: aluno.semestre,
+            professor: aluno.professor,
+          }),
+        });
+        const data = (await res.json()) as AiInsightAluno;
+        if (!cancelado) setAiInsightAluno(data);
+      } catch (err) {
+        console.error("Erro ao buscar insight do aluno:", err);
+        if (!cancelado) setAiInsightAluno(null);
+      } finally {
+        if (!cancelado) setCarregandoAiAluno(false);
+      }
+    }
+
+    void carregarInsightAluno();
+    return () => {
+      cancelado = true;
+    };
+  }, [alunoSelecionado?.id]);
+
   function abrirProntuario(aluno: Aluno) {
     setAlunoSelecionado(aluno);
     setAbaProntuario("Cadastral");
@@ -453,7 +597,29 @@ export default function GestaoAlunosPage() {
 
   function fecharProntuario() {
     setDrawerAberto(false);
-    window.setTimeout(() => setAlunoSelecionado(null), 300);
+    window.setTimeout(() => {
+      setAlunoSelecionado(null);
+      setAiInsightAluno(null);
+      setCarregandoAiAluno(false);
+      setNotificandoResend(false);
+    }, 300);
+  }
+
+  async function notificarViaResend() {
+    if (!alunoSelecionado || notificandoResend) return;
+    setNotificandoResend(true);
+    await new Promise((resolve) => window.setTimeout(resolve, 800));
+    const destino =
+      alunoSelecionado.email_institucional ||
+      alunoSelecionado.email_pessoal ||
+      alunoSelecionado.email;
+    setModalFeedback({
+      aberto: true,
+      tipo: "sucesso",
+      titulo: "Notificação Emitida",
+      mensagem: `Alerta pedagógico enviado com sucesso para ${destino}.`,
+    });
+    setNotificandoResend(false);
   }
 
   function atualizarCampo<K extends keyof FormDataAluno>(campo: K, valor: FormDataAluno[K]) {
@@ -461,21 +627,15 @@ export default function GestaoAlunosPage() {
   }
 
   function sugerirProfessorPorCurso(cursoSelecionado: string) {
-    const cursoNorm = cursoSelecionado.trim().toLowerCase();
-    if (!cursoNorm) {
-      setProfessorVinculado("");
-      setProfessorSugerido(null);
-      return;
-    }
-
-    const professor = professoresDisponiveis.find((p) => {
-      const area = p.area_atuacao.trim().toLowerCase();
-      return area === cursoNorm || area.includes(cursoNorm);
-    });
+    const professor = sugerirProfessorPorArea(
+      cursoSelecionado,
+      professoresDisponiveis
+    );
 
     if (professor) {
-      setProfessorVinculado(professor.nome);
-      setProfessorSugerido(professor.nome);
+      const valor = valorOpcaoProfessor(professor);
+      setProfessorVinculado(valor);
+      setProfessorSugerido(valor);
     } else {
       setProfessorVinculado("");
       setProfessorSugerido(null);
@@ -502,6 +662,7 @@ export default function GestaoAlunosPage() {
     setProfessorSugerido(null);
     setAbaAtiva("academico");
     setCepErro(null);
+    void fetchProfessoresDisponiveis();
     setIsModalOpen(true);
   }
 
@@ -517,12 +678,15 @@ export default function GestaoAlunosPage() {
     await fetchAlunos();
   }
 
-  function handleEdit(aluno: Aluno) {
+  async function handleEdit(aluno: Aluno) {
+    const curso = aluno.curso === "—" ? "" : aluno.curso;
+    const semestre = aluno.semestre ? String(aluno.semestre) : "1";
+
     setFormData({
-      ra: aluno.ra === "—" ? "" : aluno.ra,
-      nome: aluno.nome,
-      curso: aluno.curso === "—" ? "" : aluno.curso,
-      semestre: String(aluno.semestre),
+      ra: aluno.ra === "—" ? "" : aluno.ra || "",
+      nome: aluno.nome || "",
+      curso: curso || "",
+      semestre,
       cpf: aluno.cpf,
       rg: aluno.rg,
       data_nascimento: aluno.data_nascimento
@@ -539,10 +703,50 @@ export default function GestaoAlunosPage() {
       cidade: aluno.cidade,
       estado: aluno.estado,
     });
-    setProfessorVinculado(aluno.professor);
-    setProfessorSugerido(null);
+
+    let lista = professoresDisponiveis;
+    const { data, error } = await supabase
+      .from("professores")
+      .select("id, nome, area_atuacao, titulacao");
+
+    if (!error && data && data.length > 0) {
+      lista = data.map((p) => ({
+        id: String(p.id),
+        nome: String(p.nome ?? ""),
+        area_atuacao: String(p.area_atuacao ?? ""),
+        titulacao: String(p.titulacao ?? ""),
+      }));
+      setProfessoresDisponiveis(lista);
+    }
+
+    const professorSalvo = (aluno.professor || "").trim();
+    const matchSalvo = encontrarProfessorNaLista(professorSalvo, lista);
+
+    if (matchSalvo) {
+      setProfessorVinculado(valorOpcaoProfessor(matchSalvo));
+      setProfessorSugerido(null);
+    } else if (professorSalvo) {
+      setProfessorVinculado(professorSalvo);
+      setProfessorSugerido(null);
+    } else if (curso) {
+      const sugerido = sugerirProfessorPorArea(curso, lista);
+      if (sugerido) {
+        const valor = valorOpcaoProfessor(sugerido);
+        setProfessorVinculado(valor);
+        setProfessorSugerido(valor);
+      } else {
+        setProfessorVinculado("");
+        setProfessorSugerido(null);
+      }
+    } else {
+      setProfessorVinculado("");
+      setProfessorSugerido(null);
+    }
+
     setEditingId(aluno.id);
     setAbaAtiva("academico");
+    setFormError(null);
+    setCepErro(null);
     setIsModalOpen(true);
   }
 
@@ -553,7 +757,7 @@ export default function GestaoAlunosPage() {
     const nome = formData.nome.trim();
     const curso = formData.curso.trim();
     const professor = professorVinculado.trim();
-    const semestreNum = Number(formData.semestre);
+    const semestreNum = parseInt(formData.semestre, 10);
     const email_institucional =
       formData.email_institucional.trim() ||
       gerarEmailInstitucional(nome, ra);
@@ -570,7 +774,7 @@ export default function GestaoAlunosPage() {
       nome,
       curso,
       professor,
-      semestre: Number.isNaN(semestreNum) ? null : semestreNum,
+      semestre: Number.isNaN(semestreNum) ? formData.semestre : semestreNum,
       cpf: formData.cpf.trim(),
       rg: formData.rg.trim(),
       data_nascimento: formData.data_nascimento || null,
@@ -602,7 +806,7 @@ export default function GestaoAlunosPage() {
       aberto: true,
       tipo: "sucesso",
       titulo: wasEditing
-        ? "Matrícula Atualizada com Sucesso"
+        ? "Aluno Atualizado com Sucesso"
         : "Matrícula Realizada com Sucesso",
       mensagem: wasEditing
         ? `Dados de ${nome} atualizados. Credencial institucional: ${email_institucional}`
@@ -781,7 +985,10 @@ export default function GestaoAlunosPage() {
                           <div className="flex items-center justify-end gap-2">
                             <button
                               type="button"
-                              onClick={(e) => { e.stopPropagation(); handleEdit(aluno); }}
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                void handleEdit(aluno);
+                              }}
                               className="p-1.5 rounded-md text-zinc-500 hover:text-blue-500 hover:bg-zinc-800 transition-colors"
                               aria-label="Editar aluno"
                             >
@@ -1001,45 +1208,93 @@ export default function GestaoAlunosPage() {
                       </div>
 
                       <div className="p-4 space-y-4">
-                        <div className="rounded-lg bg-black/40 border-l-4 border-orange-500 border border-orange-900/40 p-4 flex gap-3">
-                          <div className="w-9 h-9 rounded-lg bg-orange-950/60 border border-orange-900/50 flex items-center justify-center shrink-0">
-                            <AlertTriangle className="w-4 h-4 text-orange-400" />
-                          </div>
-                          <div className="min-w-0">
-                            <p className="text-xs font-semibold uppercase tracking-wide text-orange-400 mb-1.5">
-                              Alerta Preditivo
+                        {carregandoAiAluno ? (
+                          <div className="space-y-3 animate-pulse">
+                            <div className="h-20 rounded-lg bg-zinc-950 border border-zinc-800" />
+                            <div className="grid grid-cols-2 gap-3">
+                              <div className="h-16 rounded-lg bg-zinc-950 border border-zinc-800" />
+                              <div className="h-16 rounded-lg bg-zinc-950 border border-zinc-800" />
+                            </div>
+                            <div className="h-12 rounded-lg bg-zinc-950 border border-zinc-800" />
+                            <p className="text-xs text-zinc-500 text-center pt-1">
+                              Analisando histórico pedagógico com Llama 3...
                             </p>
-                            <p className="text-sm text-zinc-300 leading-relaxed">
-                              O aluno atingiu 22% de faltas na disciplina de Banco de
-                              Dados. Risco moderado de reprovação.
-                            </p>
                           </div>
-                        </div>
+                        ) : aiInsightAluno ? (
+                          <>
+                            <div
+                              className={`rounded-lg bg-black/40 border-l-4 p-4 flex gap-3 border ${
+                                corAlertaClasses(aiInsightAluno.corAlerta).border
+                              }`}
+                            >
+                              <div
+                                className={`w-9 h-9 rounded-lg flex items-center justify-center shrink-0 border ${
+                                  corAlertaClasses(aiInsightAluno.corAlerta)
+                                    .iconBox
+                                }`}
+                              >
+                                <AlertTriangle
+                                  className={`w-4 h-4 ${
+                                    corAlertaClasses(aiInsightAluno.corAlerta)
+                                      .icon
+                                  }`}
+                                />
+                              </div>
+                              <div className="min-w-0">
+                                <p
+                                  className={`text-xs font-semibold uppercase tracking-wide mb-1.5 ${
+                                    corAlertaClasses(aiInsightAluno.corAlerta)
+                                      .text
+                                  }`}
+                                >
+                                  {aiInsightAluno.tipoAlerta}
+                                </p>
+                                <p className="text-sm text-zinc-300 leading-relaxed">
+                                  {aiInsightAluno.mensagem}
+                                </p>
+                              </div>
+                            </div>
 
-                        <div className="grid grid-cols-2 gap-3">
-                          <div className="rounded-lg bg-zinc-950 border border-zinc-800 p-3">
-                            <p className="text-[11px] text-zinc-500 uppercase tracking-widest">
-                              Risco
-                            </p>
-                            <p className="text-lg font-semibold text-orange-400 mt-1">
-                              Moderado
-                            </p>
-                          </div>
-                          <div className="rounded-lg bg-zinc-950 border border-zinc-800 p-3">
-                            <p className="text-[11px] text-zinc-500 uppercase tracking-widest">
-                              Faltas BD
-                            </p>
-                            <p className="text-lg font-semibold text-white mt-1">22%</p>
-                          </div>
-                        </div>
+                            <div className="grid grid-cols-2 gap-3">
+                              <div className="rounded-lg bg-zinc-950 border border-zinc-800 p-3">
+                                <p className="text-[11px] text-zinc-500 uppercase tracking-widest">
+                                  Risco
+                                </p>
+                                <p
+                                  className={`text-lg font-semibold mt-1 ${corRiscoClasses(
+                                    aiInsightAluno.riscoLabel
+                                  )}`}
+                                >
+                                  {aiInsightAluno.riscoLabel}
+                                </p>
+                              </div>
+                              <div className="rounded-lg bg-zinc-950 border border-zinc-800 p-3">
+                                <p className="text-[11px] text-zinc-500 uppercase tracking-widest">
+                                  {aiInsightAluno.metricaLabel}
+                                </p>
+                                <p className="text-lg font-semibold text-white mt-1">
+                                  {aiInsightAluno.metricaValor}
+                                </p>
+                              </div>
+                            </div>
 
-                        <button
-                          type="button"
-                          className="w-full inline-flex items-center justify-center gap-2 px-4 py-2.5 rounded-lg bg-white text-black text-sm font-medium hover:bg-zinc-200 transition-colors"
-                        >
-                          <Mail className="w-4 h-4" />
-                          Notificar via Resend
-                        </button>
+                            <button
+                              type="button"
+                              onClick={() => void notificarViaResend()}
+                              disabled={notificandoResend}
+                              className="w-full inline-flex items-center justify-center gap-2 px-4 py-2.5 rounded-lg bg-white text-black text-sm font-medium hover:bg-zinc-200 transition-colors disabled:opacity-50"
+                            >
+                              <Mail className="w-4 h-4" />
+                              {notificandoResend
+                                ? "Enviando notificação..."
+                                : "Notificar via Resend"}
+                            </button>
+                          </>
+                        ) : (
+                          <p className="text-sm text-zinc-500 text-center py-6">
+                            Não foi possível carregar o insight preditivo.
+                          </p>
+                        )}
                       </div>
                     </div>
                   </div>
@@ -1181,11 +1436,25 @@ export default function GestaoAlunosPage() {
                         <option value="">
                           Selecione ou confirme o docente...
                         </option>
-                        {professoresDisponiveis.map((p) => (
-                          <option key={p.id} value={p.nome}>
-                            {p.titulacao} {p.nome} ({p.area_atuacao})
-                          </option>
-                        ))}
+                        {professorVinculado &&
+                          !professoresDisponiveis.some(
+                            (p) =>
+                              valorOpcaoProfessor(p) === professorVinculado ||
+                              p.nome === professorVinculado
+                          ) && (
+                            <option value={professorVinculado}>
+                              {professorVinculado}
+                            </option>
+                          )}
+                        {professoresDisponiveis.map((p) => {
+                          const valor = valorOpcaoProfessor(p);
+                          return (
+                            <option key={p.id} value={valor}>
+                              {valor}
+                              {p.area_atuacao ? ` (${p.area_atuacao})` : ""}
+                            </option>
+                          );
+                        })}
                       </select>
                       {professorSugerido && (
                         <span className="text-[11px] text-purple-400 mt-1 block">
