@@ -26,17 +26,17 @@ export async function POST(req: NextRequest) {
       // Tentativa 1: Modelo Primário
       completion = await groq.chat.completions.create({
         messages: mensagens,
-        model: "openai/gpt-oss-20b",
+        model: "gemma2-9b-it",
         temperature: 0.7,
         max_tokens: 150,
       });
     } catch (erroPrimario: any) {
-      console.warn("Falha no modelo primário (openai/gpt-oss-20b):", erroPrimario.message || erroPrimario);
+      console.warn("Falha no modelo primário (gemma2-9b-it):", erroPrimario.message || erroPrimario);
       
       // Tentativa 2: Modelo de Redundância
       completion = await groq.chat.completions.create({
         messages: mensagens,
-        model: "llama3-8b-8192",
+        model: "gemma-7b-it",
         temperature: 0.7,
         max_tokens: 150,
       });
@@ -47,9 +47,6 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ insight });
   } catch (error) {
     console.error("Erro crítico na API do Groq (ambos os modelos falharam):", error);
-    return NextResponse.json(
-      { error: "Falha ao gerar o insight da IA." },
-      { status: 500 }
-    );
+    return NextResponse.json({ insight: "Os insights gerados por IA estão temporariamente indisponíveis. Tente novamente mais tarde." }, { status: 200 });
   }
 }

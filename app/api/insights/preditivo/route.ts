@@ -22,14 +22,14 @@ export async function POST(req: NextRequest) {
     try {
       completion = await groq.chat.completions.create({
         messages: mensagens,
-        model: "openai/gpt-oss-20b",
+        model: "gemma2-9b-it",
         temperature: 0.6,
         max_tokens: 140,
       });
     } catch (err) {
       completion = await groq.chat.completions.create({
         messages: mensagens,
-        model: "llama3-8b-8192",
+        model: "gemma-7b-it",
         temperature: 0.6,
         max_tokens: 140,
       });
@@ -40,6 +40,6 @@ export async function POST(req: NextRequest) {
 
     return NextResponse.json({ insight });
   } catch (error) {
-    return NextResponse.json({ error: "Falha ao gerar análise preditiva." }, { status: 500 });
+    return NextResponse.json({ insight: "Os insights gerados por IA estão temporariamente indisponíveis. Tente novamente mais tarde." }, { status: 200 });
   }
 }

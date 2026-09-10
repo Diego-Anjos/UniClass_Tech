@@ -27,15 +27,15 @@ export async function POST(req: NextRequest) {
     try {
       completion = await groq.chat.completions.create({
         messages: mensagens,
-        model: "openai/gpt-oss-20b",
+        model: "gemma2-9b-it",
         temperature: 0.6,
         max_tokens: 150,
       });
     } catch (err) {
-      console.warn("Falha no modelo primário (openai/gpt-oss-20b):", err);
+      console.warn("Falha no modelo primário (gemma2-9b-it):", err);
       completion = await groq.chat.completions.create({
         messages: mensagens,
-        model: "llama3-8b-8192",
+        model: "gemma-7b-it",
         temperature: 0.6,
         max_tokens: 150,
       });
@@ -48,9 +48,6 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ insight });
   } catch (error) {
     console.error("Erro crítico na API de frequência do aluno:", error);
-    return NextResponse.json(
-      { error: "Falha na análise de frequência do aluno." },
-      { status: 500 }
-    );
+    return NextResponse.json({ insight: "Os insights gerados por IA estão temporariamente indisponíveis. Tente novamente mais tarde." }, { status: 200 });
   }
 }

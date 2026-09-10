@@ -12,6 +12,7 @@ import {
   GraduationCap,
   Search,
   Send,
+  Clock,
 } from "lucide-react";
 import { supabase } from "@/lib/supabase";
 import { ProfessorSettingsControl } from "@/components/professor/config-modal";
@@ -23,30 +24,25 @@ import {
 } from "@/lib/professor-session";
 
 const navItems = [
-  { icon: LayoutDashboard, label: "Visão Geral",    href: "/professor/dashboard",            active: false },
-  { icon: BookOpen,        label: "Turmas e Notas", href: "/professor/dashboard/notas",      active: false },
-  { icon: UserCheck,       label: "Chamada Rápida", href: "/professor/dashboard/chamada",    active: false },
-  { icon: Sparkles,        label: "Insights IA",    href: "/professor/dashboard/insights",   active: false },
-  { icon: MessageSquare,   label: "Mensagens",      href: "/professor/dashboard/mensagens",  active: true  },
+  { icon: LayoutDashboard, label: "Visão Geral", href: "/professor/dashboard", active: false },
+  { icon: BookOpen, label: "Turmas e Notas", href: "/professor/dashboard/notas", active: false },
+  { icon: UserCheck, label: "Chamada Rápida", href: "/professor/dashboard/chamada", active: false },
+  { icon: Sparkles, label: "Insights IA", href: "/professor/dashboard/insights", active: false },
+  { icon: MessageSquare, label: "Mensagens", href: "/professor/dashboard/mensagens", active: true },
 ];
 
-type MensagemHistorico = {
-  id: string;
-  autor: "aluno" | "professor";
-  texto: string;
-  horario: string;
-};
+type StatusChamado = "aberto" | "respondido";
 
-type MensagemInbox = {
+type MensagemChamado = {
   id: string;
-  alunoNome: string;
-  alunoRa: string;
-  turmaNome: string;
+  nome_aluno: string;
+  ra_aluno: string;
   assunto: string;
-  conteudo: string;
-  tempo: string;
-  naoLida: boolean;
-  historico: MensagemHistorico[];
+  mensagem: string;
+  resposta: string;
+  status: StatusChamado;
+  data_abertura: string;
+  data_resposta: string;
 };
 
 function iniciaisDoNome(nome: string) {
@@ -58,65 +54,62 @@ function iniciaisDoNome(nome: string) {
     .join("");
 }
 
-function formatarTempoEnvio(valor: unknown): string {
-  if (!valor) return "";
+function formatarDataHora(valor: unknown): string {
+  if (!valor) return "—";
   const date = new Date(String(valor));
   if (Number.isNaN(date.getTime())) return String(valor);
   return date.toLocaleString("pt-BR", {
     day: "2-digit",
     month: "2-digit",
+    year: "numeric",
     hour: "2-digit",
     minute: "2-digit",
   });
 }
 
-function mapearMensagensSupabase(rows: Record<string, unknown>[]): MensagemInbox[] {
-  return rows.map((row, index) => {
-    const id = String(row.id ?? `msg-${index}`);
-    const alunoNome = String(
-      row.remetente ??
-        row.aluno_nome ??
-        row.alunoNome ??
-        row.nome ??
-        "Aluno"
-    );
-    const assunto = String(row.assunto ?? "Mensagem");
-    const conteudo = String(row.conteudo ?? row.mensagem ?? row.texto ?? "");
-    const tempo = formatarTempoEnvio(row.data_envio) || String(row.tempo ?? "");
-    return {
-      id,
-      alunoNome,
-      alunoRa: String(row.ra ?? row.matricula ?? row.aluno_ra ?? "—"),
-      turmaNome: String(
-        row.turma_nome ?? row.turmaNome ?? row.turma ?? row.curso ?? "—"
-      ),
-      assunto,
-      conteudo,
-      tempo,
-      naoLida: !(row.lida === true || row.nao_lida === false || row.naoLida === false),
-      historico: [
-        {
-          id: `${id}-orig`,
-          autor: "aluno" as const,
-          texto: conteudo,
-          horario: tempo || "—",
-        },
-      ],
-    };
-  });
+function normalizarStatus(valor: unknown): StatusChamado {
+  const raw = String(valor ?? "").trim().toLowerCase();
+  if (
+    raw === "respondido" ||
+    raw === "respondida" ||
+    raw === "concluido" ||
+    raw === "concluído"
+  ) {
+    return "respondido";
+  }
+  return "aberto";
+}
+
+function mapearChamado(row: Record<string, unknown>): MensagemChamado {
+  return {
+    id: String(row.id),
+    nome_aluno: String(row.nome_aluno ?? "Aluno"),
+    ra_aluno: String(row.ra_aluno ?? "—"),
+    assunto: String(row.assunto ?? "Sem assunto"),
+    mensagem: String(row.mensagem ?? ""),
+    resposta: String(row.resposta ?? ""),
+    status: normalizarStatus(row.status),
+    data_abertura: String(row.data_abertura ?? row.created_at ?? ""),
+    data_resposta: String(row.data_resposta ?? ""),
+  };
+}
+
+function statusBadgeClasses(status: StatusChamado) {
+  if (status === "aberto") {
+    return "bg-rose-950/50 text-rose-400 border border-rose-800";
+  }
+  return "bg-emerald-950/50 text-emerald-400 border border-emerald-800";
 }
 
 export default function ProfessorMensagensPage() {
   const { professorLogado, carregandoSessao } = useProfessorSession();
   const [busca, setBusca] = useState("");
-  const [mensagens, setMensagens] = useState<MensagemInbox[]>([]);
+  const [mensagens, setMensagens] = useState<MensagemChamado[]>([]);
   const [carregando, setCarregando] = useState(true);
-  const [mensagemSelecionadaId, setMensagemSelecionadaId] = useState<string | null>(
-    null
-  );
-  const [respostaTexto, setRespostaTexto] = useState("");
-  const [contextoIa, setContextoIa] = useState("");
-  const [isLoadingContexto, setIsLoadingContexto] = useState(false);
+  const [mensagemSelecionada, setMensagemSelecionada] =
+    useState<MensagemChamado | null>(null);
+  const [textoResposta, setTextoResposta] = useState("");
+  const [enviandoResposta, setEnviandoResposta] = useState(false);
   const [modalFeedback, setModalFeedback] = useState<{
     aberto: boolean;
     tipo: "sucesso" | "erro" | "atencao";
@@ -134,15 +127,11 @@ export default function ProfessorMensagensPage() {
     if (!termo) return mensagens;
     return mensagens.filter(
       (m) =>
-        m.alunoNome.toLowerCase().includes(termo) ||
-        m.assunto.toLowerCase().includes(termo)
+        m.nome_aluno.toLowerCase().includes(termo) ||
+        m.assunto.toLowerCase().includes(termo) ||
+        m.ra_aluno.toLowerCase().includes(termo)
     );
   }, [mensagens, busca]);
-
-  const conversaAtiva = useMemo(
-    () => mensagens.find((m) => m.id === mensagemSelecionadaId) ?? null,
-    [mensagens, mensagemSelecionadaId]
-  );
 
   function mostrarFeedback(
     tipo: "sucesso" | "erro" | "atencao",
@@ -156,47 +145,70 @@ export default function ProfessorMensagensPage() {
     setModalFeedback((prev) => ({ ...prev, aberto: false }));
   }
 
-  async function fetchContextoIa(conversa: MensagemInbox) {
-    setIsLoadingContexto(true);
-    try {
-      const response = await fetch("/api/insights/mensagem-contexto", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          alunoNome: conversa.alunoNome,
-          turmaNome: conversa.turmaNome,
-          assunto: conversa.assunto,
-          conteudo: conversa.conteudo,
-        }),
-      });
+  async function carregarMensagens(manterSelecionadoId?: string | null) {
+    const professor = professorLogado;
+    if (!professor?.nome) {
+      setMensagens([]);
+      setMensagemSelecionada(null);
+      return;
+    }
 
-      const data = await response.json();
-      if (!response.ok) {
-        throw new Error(data.error || "Falha ao gerar contexto da mensagem.");
+    setCarregando(true);
+    try {
+      // Sessão já vem do localStorage via useProfessorSession (uniclass_prof_session)
+      const { data, error } = await supabase
+        .from("chamados")
+        .select("*")
+        .eq("destinatario_tipo", "Professor")
+        .ilike("destinatario_nome", `%${professor.nome}%`)
+        .order("data_abertura", { ascending: false });
+
+      if (error) {
+        console.error("Erro ao buscar chamados do professor:", error.message);
+        setMensagens([]);
+        setMensagemSelecionada(null);
+        return;
       }
-      setContextoIa((data.insight as string) ?? "");
-    } catch (err) {
-      console.error("Erro ao gerar contexto IA:", err);
-      setContextoIa(
-        "Não foi possível gerar o contexto desta conversa no momento."
+
+      const lista = ((data ?? []) as Record<string, unknown>[]).map(
+        mapearChamado
       );
+      setMensagens(lista);
+
+      if (lista.length === 0) {
+        setMensagemSelecionada(null);
+        return;
+      }
+
+      const aindaExiste = manterSelecionadoId
+        ? lista.find((m) => m.id === manterSelecionadoId) ?? null
+        : null;
+      setMensagemSelecionada(aindaExiste ?? lista[0]);
+    } catch (err) {
+      console.error("Falha ao carregar mensagens:", err);
+      setMensagens([]);
+      setMensagemSelecionada(null);
     } finally {
-      setIsLoadingContexto(false);
+      setCarregando(false);
     }
   }
 
-  function selecionarMensagem(id: string) {
-    setMensagemSelecionadaId(id);
-    setRespostaTexto("");
-    setMensagens((prev) =>
-      prev.map((m) => (m.id === id ? { ...m, naoLida: false } : m))
-    );
+  useEffect(() => {
+    if (!professorLogado) return;
+    void carregarMensagens();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [professorLogado]);
+
+  function handleSelecionarMensagem(msg: MensagemChamado) {
+    setMensagemSelecionada(msg);
+    setTextoResposta("");
   }
 
-  function handleEnviarResposta() {
-    if (!conversaAtiva) return;
+  async function handleEnviarResposta() {
+    if (!mensagemSelecionada) return;
 
-    if (!respostaTexto.trim()) {
+    const resposta = textoResposta.trim();
+    if (!resposta) {
       mostrarFeedback(
         "atencao",
         "Resposta vazia",
@@ -205,85 +217,39 @@ export default function ProfessorMensagensPage() {
       return;
     }
 
-    const novaEntrada: MensagemHistorico = {
-      id: `resp-${Date.now()}`,
-      autor: "professor",
-      texto: respostaTexto.trim(),
-      horario: "Agora",
-    };
+    setEnviandoResposta(true);
+    try {
+      const { error } = await supabase
+        .from("chamados")
+        .update({
+          resposta,
+          status: "Respondido",
+          data_resposta: new Date().toISOString(),
+        })
+        .eq("id", mensagemSelecionada.id);
 
-    setMensagens((prev) =>
-      prev.map((m) =>
-        m.id === conversaAtiva.id
-          ? { ...m, historico: [...m.historico, novaEntrada], naoLida: false }
-          : m
-      )
-    );
-    setRespostaTexto("");
-    mostrarFeedback(
-      "sucesso",
-      "Mensagem Enviada",
-      "Sua resposta foi entregue com sucesso ao aluno."
-    );
-  }
-
-  useEffect(() => {
-    if (!professorLogado) return;
-
-    async function carregarMensagens() {
-      setCarregando(true);
-      const destinatario = professorLogado!.nomeCompletoTitulo;
-
-      let { data, error } = await supabase
-        .from("mensagens")
-        .select("*")
-        .eq("destinatario", destinatario)
-        .order("data_envio", { ascending: false });
-
-      // Fallback provisório: sem filtro de destinatário se a caixa filtrada vier vazia/erro
-      if (error || !data || data.length === 0) {
-        if (error) {
-          console.error("Erro ao buscar mensagens filtradas:", error.message);
-        }
-        const fallback = await supabase
-          .from("mensagens")
-          .select("*")
-          .order("data_envio", { ascending: false });
-
-        if (fallback.error) {
-          console.error(
-            "Erro ao buscar mensagens:",
-            fallback.error.message
-          );
-          setMensagens([]);
-          setMensagemSelecionadaId(null);
-          setCarregando(false);
-          return;
-        }
-
-        data = fallback.data;
-        error = fallback.error;
+      if (error) {
+        throw new Error(error.message);
       }
 
-      const lista = mapearMensagensSupabase(
-        (data ?? []) as Record<string, unknown>[]
+      setTextoResposta("");
+      await carregarMensagens(mensagemSelecionada.id);
+      mostrarFeedback(
+        "sucesso",
+        "Mensagem Enviada",
+        "Sua resposta foi entregue com sucesso ao aluno."
       );
-      setMensagens(lista);
-      setMensagemSelecionadaId(lista[0]?.id ?? null);
-      setCarregando(false);
+    } catch (err) {
+      console.error("Erro ao enviar resposta:", err);
+      mostrarFeedback(
+        "erro",
+        "Falha no envio",
+        "Não foi possível registrar a resposta. Tente novamente."
+      );
+    } finally {
+      setEnviandoResposta(false);
     }
-
-    void carregarMensagens();
-  }, [professorLogado]);
-
-  useEffect(() => {
-    if (!conversaAtiva) {
-      setContextoIa("");
-      return;
-    }
-    void fetchContextoIa(conversaAtiva);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [mensagemSelecionadaId]);
+  }
 
   if (carregandoSessao || !professorLogado) {
     return (
@@ -299,11 +265,7 @@ export default function ProfessorMensagensPage() {
 
   return (
     <div className="flex h-screen bg-black text-white overflow-hidden">
-      {/* ══════════════════════════════
-          SIDEBAR
-      ══════════════════════════════ */}
       <aside className="hidden md:flex flex-col w-64 shrink-0 bg-zinc-950 border-r border-zinc-800">
-        {/* Logo */}
         <div className="flex items-center gap-2.5 px-5 py-5 border-b border-zinc-800">
           <div className="w-8 h-8 bg-gradient-to-br from-zinc-800 to-zinc-950 border border-zinc-700/50 shadow-[0_0_15px_rgba(255,255,255,0.05)] flex items-center justify-center rounded-lg shrink-0">
             <GraduationCap className="w-5 h-5 text-white" />
@@ -314,7 +276,6 @@ export default function ProfessorMensagensPage() {
           </span>
         </div>
 
-        {/* Perfil */}
         <div className="px-4 py-5 border-b border-zinc-800">
           <div className="flex items-center justify-between gap-3">
             <div className="flex items-center gap-3 min-w-0">
@@ -334,7 +295,6 @@ export default function ProfessorMensagensPage() {
           </div>
         </div>
 
-        {/* Nav */}
         <nav className="flex flex-col gap-0.5 px-2 py-4 flex-1">
           {navItems.map(({ icon: Icon, label, href, active }) =>
             href.startsWith("/professor/dashboard") ? (
@@ -367,10 +327,9 @@ export default function ProfessorMensagensPage() {
           )}
         </nav>
 
-        {/* Logout */}
         <div className="px-2 py-4 border-t border-zinc-800">
           <a
-            href="/professor"
+            href="/"
             onClick={limparSessaoProfessor}
             className="flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm text-zinc-500 hover:bg-zinc-900 hover:text-white transition-colors"
           >
@@ -380,13 +339,8 @@ export default function ProfessorMensagensPage() {
         </div>
       </aside>
 
-      {/* ══════════════════════════════
-          MAIN CONTENT
-      ══════════════════════════════ */}
       <main className="flex-1 min-w-0 overflow-hidden bg-black flex flex-col">
         <div className="flex-1 min-h-0 flex flex-col p-8 max-w-6xl mx-auto w-full">
-
-          {/* Header */}
           <div className="mb-6 shrink-0">
             <h1 className="text-2xl font-semibold tracking-tight text-white">
               Caixa de Entrada
@@ -396,10 +350,7 @@ export default function ProfessorMensagensPage() {
             </p>
           </div>
 
-          {/* Split pane */}
           <div className="flex-1 min-h-0 flex flex-col md:flex-row overflow-hidden">
-
-            {/* Lista de Mensagens */}
             <div className="w-full md:w-1/3 border-r border-zinc-800 pr-4 flex flex-col min-h-0 overflow-hidden">
               <div className="relative mb-4 shrink-0">
                 <Search className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-zinc-500" />
@@ -426,46 +377,41 @@ export default function ProfessorMensagensPage() {
                     Nenhuma mensagem encontrada para a busca.
                   </p>
                 ) : (
-                  mensagensFiltradas.map((msg) => (
-                    <button
-                      key={msg.id}
-                      type="button"
-                      onClick={() => selecionarMensagem(msg.id)}
-                      className={`w-full text-left rounded-lg border p-3.5 transition-colors ${
-                        msg.id === mensagemSelecionadaId
-                          ? "bg-zinc-900 border-zinc-700"
-                          : "bg-transparent border-transparent hover:bg-zinc-900/50"
-                      }`}
-                    >
-                      <div className="flex items-start justify-between gap-2 mb-1">
-                        <p className="text-sm font-medium text-white truncate">
-                          {msg.alunoNome}
-                        </p>
-                        <span className="text-[11px] text-zinc-500 shrink-0">
-                          {msg.tempo}
-                        </span>
-                      </div>
-                      <div className="flex items-center gap-2">
-                        <p
-                          className={`text-xs truncate ${
-                            msg.naoLida ? "text-zinc-200" : "text-zinc-500"
-                          }`}
-                        >
+                  mensagensFiltradas.map((msg) => {
+                    const ativo = msg.id === mensagemSelecionada?.id;
+                    return (
+                      <button
+                        key={msg.id}
+                        type="button"
+                        onClick={() => handleSelecionarMensagem(msg)}
+                        className={`w-full text-left rounded-lg border p-3.5 transition-colors ${
+                          ativo
+                            ? "bg-zinc-900 border-zinc-700"
+                            : "bg-transparent border-transparent hover:bg-zinc-900/50"
+                        }`}
+                      >
+                        <div className="flex items-start justify-between gap-2 mb-1.5">
+                          <p className="text-sm font-medium text-white truncate">
+                            {msg.nome_aluno}
+                          </p>
+                          <span
+                            className={`shrink-0 text-[10px] font-semibold px-1.5 py-0.5 rounded-full ${statusBadgeClasses(msg.status)}`}
+                          >
+                            {msg.status === "aberto" ? "Aberto" : "Respondido"}
+                          </span>
+                        </div>
+                        <p className="text-xs text-zinc-400 truncate">
                           {msg.assunto}
                         </p>
-                        {msg.naoLida && (
-                          <span className="w-1.5 h-1.5 rounded-full bg-blue-500 shrink-0" />
-                        )}
-                      </div>
-                    </button>
-                  ))
+                      </button>
+                    );
+                  })
                 )}
               </div>
             </div>
 
-            {/* Detalhe e Resposta */}
             <div className="w-full md:w-2/3 pl-0 md:pl-4 pt-6 md:pt-0 flex flex-col gap-4 min-h-0 overflow-hidden">
-              {!conversaAtiva ? (
+              {!mensagemSelecionada ? (
                 <div className="flex-1 flex items-center justify-center">
                   <p className="text-sm text-zinc-500 text-center px-4">
                     Selecione uma mensagem para visualizar e responder.
@@ -476,77 +422,81 @@ export default function ProfessorMensagensPage() {
                   <div className="border-b border-zinc-800 pb-4 shrink-0">
                     <div className="flex items-center gap-3">
                       <div className="w-10 h-10 rounded-full bg-zinc-800 flex items-center justify-center text-sm font-semibold text-white shrink-0">
-                        {iniciaisDoNome(conversaAtiva.alunoNome)}
+                        {iniciaisDoNome(mensagemSelecionada.nome_aluno)}
                       </div>
-                      <div className="min-w-0">
-                        <p className="text-sm font-medium text-white">
-                          {conversaAtiva.alunoNome}
-                        </p>
+                      <div className="min-w-0 flex-1">
+                        <div className="flex flex-wrap items-center gap-2">
+                          <p className="text-sm font-medium text-white">
+                            {mensagemSelecionada.nome_aluno}
+                          </p>
+                          <span
+                            className={`text-[10px] font-semibold px-1.5 py-0.5 rounded-full ${statusBadgeClasses(mensagemSelecionada.status)}`}
+                          >
+                            {mensagemSelecionada.status === "aberto"
+                              ? "Aberto"
+                              : "Respondido"}
+                          </span>
+                        </div>
                         <p className="text-xs text-zinc-500">
-                          RA {conversaAtiva.alunoRa} · {conversaAtiva.turmaNome}
+                          RA {mensagemSelecionada.ra_aluno} ·{" "}
+                          {mensagemSelecionada.assunto}
                         </p>
                       </div>
                     </div>
-                  </div>
-
-                  <div className="bg-indigo-950/30 border border-indigo-900/50 rounded-md p-3 flex gap-3 shrink-0">
-                    <Sparkles className="w-4 h-4 text-indigo-300 shrink-0 mt-0.5" />
-                    <p
-                      className={`text-xs text-zinc-400 leading-relaxed ${
-                        isLoadingContexto ? "animate-pulse" : ""
-                      }`}
-                    >
-                      {isLoadingContexto
-                        ? "IA analisando histórico do aluno..."
-                        : `Contexto IA: ${contextoIa}`}
-                    </p>
                   </div>
 
                   <div className="flex-1 overflow-y-auto min-h-0 flex flex-col gap-3">
-                    {conversaAtiva.historico.map((item) => (
-                      <div
-                        key={item.id}
-                        className={`rounded-lg p-4 ${
-                          item.autor === "professor"
-                            ? "bg-zinc-800/80 ml-8"
-                            : "bg-zinc-900 mr-8"
-                        }`}
-                      >
-                        <p className="text-[11px] text-zinc-500 mb-1.5">
-                          {item.autor === "professor" ? "Você" : conversaAtiva.alunoNome}
-                          {" · "}
-                          {item.horario}
+                    <div className="rounded-lg bg-zinc-900 mr-8 p-4">
+                      <p className="flex items-center gap-1.5 text-[11px] text-zinc-500 mb-1.5">
+                        <Clock className="w-3 h-3" />
+                        {mensagemSelecionada.nome_aluno} ·{" "}
+                        {formatarDataHora(mensagemSelecionada.data_abertura)}
+                      </p>
+                      <p className="text-sm text-zinc-300 leading-relaxed whitespace-pre-wrap">
+                        {mensagemSelecionada.mensagem}
+                      </p>
+                    </div>
+
+                    {mensagemSelecionada.status === "respondido" &&
+                    mensagemSelecionada.resposta ? (
+                      <div className="rounded-lg bg-zinc-800/80 ml-8 p-4">
+                        <p className="flex items-center gap-1.5 text-[11px] text-zinc-500 mb-1.5">
+                          <Clock className="w-3 h-3" />
+                          Você ·{" "}
+                          {formatarDataHora(mensagemSelecionada.data_resposta)}
                         </p>
-                        <p className="text-sm text-zinc-300 leading-relaxed">
-                          {item.texto}
+                        <p className="text-sm text-zinc-300 leading-relaxed whitespace-pre-wrap">
+                          {mensagemSelecionada.resposta}
                         </p>
                       </div>
-                    ))}
+                    ) : null}
                   </div>
 
-                  <div className="shrink-0 flex flex-col gap-3">
-                    <textarea
-                      rows={3}
-                      value={respostaTexto}
-                      onChange={(e) => setRespostaTexto(e.target.value)}
-                      placeholder={`Escreva sua resposta para ${conversaAtiva.alunoNome.split(" ")[0]}...`}
-                      className="w-full resize-none bg-black border border-zinc-800 rounded-lg px-3 py-2.5 text-sm text-white placeholder:text-zinc-600 focus:outline-none focus:ring-1 focus:ring-zinc-500"
-                    />
-                    <div className="flex justify-end">
-                      <button
-                        type="button"
-                        onClick={handleEnviarResposta}
-                        className="inline-flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium bg-white text-black hover:bg-zinc-200 transition-colors"
-                      >
-                        <Send className="w-4 h-4" />
-                        Enviar Resposta
-                      </button>
+                  {mensagemSelecionada.status === "aberto" ? (
+                    <div className="shrink-0 flex flex-col gap-3">
+                      <textarea
+                        rows={3}
+                        value={textoResposta}
+                        onChange={(e) => setTextoResposta(e.target.value)}
+                        placeholder={`Escreva sua resposta para ${mensagemSelecionada.nome_aluno.split(" ")[0]}...`}
+                        className="w-full resize-none bg-black border border-zinc-800 rounded-lg px-3 py-2.5 text-sm text-white placeholder:text-zinc-600 focus:outline-none focus:ring-1 focus:ring-zinc-500"
+                      />
+                      <div className="flex justify-end">
+                        <button
+                          type="button"
+                          onClick={handleEnviarResposta}
+                          disabled={enviandoResposta}
+                          className="inline-flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium bg-white text-black hover:bg-zinc-200 transition-colors disabled:opacity-60 disabled:cursor-not-allowed"
+                        >
+                          <Send className="w-4 h-4" />
+                          {enviandoResposta ? "Enviando..." : "Enviar Resposta"}
+                        </button>
+                      </div>
                     </div>
-                  </div>
+                  ) : null}
                 </>
               )}
             </div>
-
           </div>
         </div>
       </main>

@@ -32,7 +32,7 @@ Turmas Atribuídas: ${turmasCount}`;
           { role: "system", content: systemPrompt },
           { role: "user", content: userPrompt },
         ],
-        model: "openai/gpt-oss-20b",
+        model: "gemma2-9b-it",
         temperature: 0.5,
         response_format: { type: "json_object" },
       });
@@ -42,7 +42,7 @@ Turmas Atribuídas: ${turmasCount}`;
           { role: "system", content: systemPrompt },
           { role: "user", content: userPrompt },
         ],
-        model: "llama3-8b-8192",
+        model: "gemma-7b-it",
         temperature: 0.5,
         response_format: { type: "json_object" },
       });

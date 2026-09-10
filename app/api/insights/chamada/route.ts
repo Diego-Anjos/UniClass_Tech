@@ -19,7 +19,7 @@ Retorne um JSON: { "tipoAlerta": "ALERTA DE FREQUÊNCIA" ou "ENGAJAMENTO ALTO", 
         { role: "system", content: systemPrompt },
         { role: "user", content: userPrompt }
       ],
-      model: "llama3-8b-8192",
+      model: "gemma2-9b-it",
       temperature: 0.5,
       response_format: { type: "json_object" }
     });

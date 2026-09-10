@@ -7,7 +7,7 @@ import {
   ClipboardList,
   CalendarCheck,
   BookOpen,
-  Map,
+  Map as MapIcon,
   LogOut,
   Camera,
   GraduationCap,
@@ -16,17 +16,27 @@ import {
   Headphones,
   User,
   Ticket,
+  Clock,
 } from "lucide-react";
 import { supabase } from "@/lib/supabase";
 import { ModalFeedback } from "@/components/ModalFeedback";
 import { limparSessaoAluno } from "@/lib/aluno-session";
+import {
+  normalizarPreferencias,
+} from "@/lib/professor-preferencias";
+
+type DisponibilidadeProf = {
+  dias: string[];
+  de: string;
+  ate: string;
+};
 
 const navItems = [
   { icon: LayoutDashboard, label: "Visão Geral", href: "/aluno/dashboard", active: false },
   { icon: ClipboardList, label: "Boletim e Notas", href: "/aluno/dashboard/notas", active: false },
   { icon: CalendarCheck, label: "Frequência", href: "/aluno/dashboard/frequencia", active: false },
   { icon: BookOpen, label: "Grade e Matérias", href: "/aluno/dashboard/grade", active: false },
-  { icon: Map, label: "Mapa de Salas e Labs", href: "/aluno/dashboard/mapa", active: false },
+  { icon: MapIcon, label: "Mapa de Salas e Labs", href: "/aluno/dashboard/mapa", active: false },
   { icon: MessageSquare, label: "Contato", href: "/aluno/dashboard/contato", active: true },
 ];
 
@@ -40,10 +50,10 @@ const assuntosSuporte: Record<string, string> = {
   outros: "Outros",
 };
 
-type DisciplinaContato = {
-  id: string;
-  nome: string;
-  docente: string;
+type DisciplinaAluno = {
+  id: string | number;
+  curso: string;
+  professor: string;
 };
 
 type ChamadoAluno = {
@@ -53,6 +63,8 @@ type ChamadoAluno = {
   status: string;
   resposta: string | null;
   data_abertura: string;
+  destinatario_tipo: string | null;
+  destinatario_nome: string | null;
 };
 
 function normalizarStatusChamado(valor: unknown): "aberto" | "respondido" {
@@ -79,14 +91,37 @@ function rotuloAssunto(assunto: string) {
   return assuntosSuporte[assunto] ?? assunto;
 }
 
+function mapearChamadoAluno(row: Record<string, unknown>): ChamadoAluno {
+  return {
+    id: String(row.id),
+    assunto: String(row.assunto ?? "Sem assunto"),
+    mensagem: String(row.mensagem ?? ""),
+    status: String(row.status ?? "Aberto"),
+    resposta: row.resposta != null ? String(row.resposta) : null,
+    data_abertura: String(row.data_abertura ?? row.created_at ?? ""),
+    destinatario_tipo:
+      row.destinatario_tipo != null ? String(row.destinatario_tipo) : null,
+    destinatario_nome:
+      row.destinatario_nome != null ? String(row.destinatario_nome) : null,
+  };
+}
+
+function destinoChamado(chamado: ChamadoAluno) {
+  return chamado.destinatario_tipo === "Professor"
+    ? chamado.destinatario_nome || "Professor"
+    : "Suporte / Secretaria";
+}
+
 export default function AlunoContatoPage() {
   const [aluno, setAluno] = useState<{ nome: string; ra: string } | null>(null);
   const [assuntoSuporte, setAssuntoSuporte] = useState("");
   const [mensagemSuporte, setMensagemSuporte] = useState("");
   const [enviandoSuporte, setEnviandoSuporte] = useState(false);
 
-  const [disciplinas, setDisciplinas] = useState<DisciplinaContato[]>([]);
-  const [turmaDocenteSelecionada, setTurmaDocenteSelecionada] = useState("");
+  const [disciplinasAluno, setDisciplinasAluno] = useState<DisciplinaAluno[]>([]);
+  const [professorSelecionado, setProfessorSelecionado] = useState("");
+  const [disponibilidadeProf, setDisponibilidadeProf] =
+    useState<DisponibilidadeProf | null>(null);
   const [assuntoProfessor, setAssuntoProfessor] = useState("");
   const [mensagemProfessor, setMensagemProfessor] = useState("");
   const [enviandoProfessor, setEnviandoProfessor] = useState(false);
@@ -119,32 +154,97 @@ export default function AlunoContatoPage() {
   }, []);
 
   useEffect(() => {
-    async function carregarDisciplinas() {
-      const { data: turmasData, error: turmasError } = await supabase
-        .from("turmas")
-        .select("id, codigo, curso, turno");
+    if (!aluno) return;
 
-      if (turmasError) {
-        console.error("Erro ao buscar turmas:", turmasError.message);
-        setDisciplinas([]);
-        return;
-      }
+    async function carregarDisciplinasAluno() {
+      // 1. Pega os IDs das turmas onde o aluno tem nota/matrícula
+      const { data: notas } = await supabase
+        .from("notas")
+        .select("turma")
+        .eq("ra_aluno", aluno!.ra);
 
-      if (turmasData && turmasData.length > 0) {
-        setDisciplinas(
-          turmasData.map((turma) => ({
-            id: String(turma.id),
-            nome: String(turma.curso ?? turma.codigo ?? "Disciplina"),
-            docente: "Prof. Roberto Lima",
-          }))
-        );
+      if (notas && notas.length > 0) {
+        const turmaIds = notas.map((n) => n.turma);
+
+        // 2. Busca os dados dessas turmas específicas
+        const { data: turmas } = await supabase
+          .from("turmas")
+          .select("id, curso, professor")
+          .in("id", turmaIds);
+
+        if (turmas) {
+          setDisciplinasAluno(turmas as DisciplinaAluno[]);
+        }
       } else {
-        setDisciplinas([]);
+        setDisciplinasAluno([]);
       }
     }
 
-    void carregarDisciplinas();
-  }, []);
+    void carregarDisciplinasAluno();
+  }, [aluno]);
+
+  useEffect(() => {
+    if (!professorSelecionado) {
+      setDisponibilidadeProf(null);
+      return;
+    }
+
+    let cancelado = false;
+
+    async function carregarDisponibilidade() {
+      setDisponibilidadeProf(null);
+
+      const { data, error } = await supabase
+        .from("professores")
+        .select("dias_atendimento, atendimento_de, atendimento_ate")
+        .ilike("nome", `%${professorSelecionado}%`)
+        .maybeSingle();
+
+      if (cancelado) return;
+
+      if (!error && data) {
+        const dias = Array.isArray(data.dias_atendimento)
+          ? (data.dias_atendimento as string[]).filter(Boolean)
+          : [];
+        const de =
+          typeof data.atendimento_de === "string" ? data.atendimento_de : "";
+        const ate =
+          typeof data.atendimento_ate === "string" ? data.atendimento_ate : "";
+
+        if (dias.length > 0 && de && ate) {
+          setDisponibilidadeProf({ dias, de, ate });
+          return;
+        }
+      }
+
+      // Fallback: dados ainda só em preferencias (jsonb)
+      const { data: alt } = await supabase
+        .from("professores")
+        .select("preferencias")
+        .ilike("nome", `%${professorSelecionado}%`)
+        .maybeSingle();
+
+      if (cancelado) return;
+
+      if (alt?.preferencias) {
+        const prefs = normalizarPreferencias(alt.preferencias);
+        setDisponibilidadeProf({
+          dias: prefs.dias_atendimento,
+          de: prefs.atendimento_de,
+          ate: prefs.atendimento_ate,
+        });
+        return;
+      }
+
+      setDisponibilidadeProf(null);
+    }
+
+    void carregarDisponibilidade();
+
+    return () => {
+      cancelado = true;
+    };
+  }, [professorSelecionado]);
 
   useEffect(() => {
     if (!aluno?.ra) return;
@@ -165,14 +265,7 @@ export default function AlunoContatoPage() {
         }
 
         setMeusChamados(
-          ((data ?? []) as Record<string, unknown>[]).map((row) => ({
-            id: String(row.id),
-            assunto: String(row.assunto ?? "Sem assunto"),
-            mensagem: String(row.mensagem ?? ""),
-            status: String(row.status ?? "Aberto"),
-            resposta: row.resposta != null ? String(row.resposta) : null,
-            data_abertura: String(row.data_abertura ?? row.created_at ?? ""),
-          }))
+          ((data ?? []) as Record<string, unknown>[]).map(mapearChamadoAluno)
         );
       } catch (err) {
         console.error("Falha ao carregar chamados:", err);
@@ -184,6 +277,20 @@ export default function AlunoContatoPage() {
 
     void carregarMeusChamados();
   }, [aluno]);
+
+  async function atualizarListaChamados(ra: string) {
+    const { data, error } = await supabase
+      .from("chamados")
+      .select("*")
+      .eq("ra_aluno", ra)
+      .order("data_abertura", { ascending: false });
+
+    if (!error && data) {
+      setMeusChamados(
+        (data as Record<string, unknown>[]).map(mapearChamadoAluno)
+      );
+    }
+  }
 
   function abrirFeedback(
     tipo: "sucesso" | "erro" | "atencao",
@@ -230,6 +337,8 @@ export default function AlunoContatoPage() {
           nome_aluno: aluno.nome,
           assunto: assuntoSelecionado,
           mensagem: textoMensagem,
+          destinatario_tipo: "Secretaria",
+          destinatario_nome: "Suporte / Secretaria",
         },
       ]);
 
@@ -250,25 +359,7 @@ export default function AlunoContatoPage() {
         "Ticket Criado",
         "Sua solicitação foi protocolada junto à secretaria acadêmica. O prazo de resposta é de até 48 horas úteis."
       );
-
-      const { data, error: erroLista } = await supabase
-        .from("chamados")
-        .select("*")
-        .eq("ra_aluno", aluno.ra)
-        .order("data_abertura", { ascending: false });
-
-      if (!erroLista && data) {
-        setMeusChamados(
-          (data as Record<string, unknown>[]).map((row) => ({
-            id: String(row.id),
-            assunto: String(row.assunto ?? "Sem assunto"),
-            mensagem: String(row.mensagem ?? ""),
-            status: String(row.status ?? "Aberto"),
-            resposta: row.resposta != null ? String(row.resposta) : null,
-            data_abertura: String(row.data_abertura ?? row.created_at ?? ""),
-          }))
-        );
-      }
+      await atualizarListaChamados(aluno.ra);
     } catch (err) {
       console.error("Erro ao enviar suporte:", err);
       abrirFeedback(
@@ -284,8 +375,17 @@ export default function AlunoContatoPage() {
   async function handleEnviarProfessor(e: React.FormEvent) {
     e.preventDefault();
 
+    if (!aluno?.ra || !aluno?.nome) {
+      abrirFeedback(
+        "atencao",
+        "Sessão inválida",
+        "Não foi possível identificar o aluno logado. Faça login novamente."
+      );
+      return;
+    }
+
     if (
-      !turmaDocenteSelecionada ||
+      !professorSelecionado ||
       !assuntoProfessor.trim() ||
       !mensagemProfessor.trim()
     ) {
@@ -297,24 +397,33 @@ export default function AlunoContatoPage() {
       return;
     }
 
+    const assuntoSelecionado = assuntoProfessor.trim();
+    const textoMensagem = mensagemProfessor.trim();
+
     setEnviandoProfessor(true);
     try {
-      const disciplina = disciplinas.find((d) => d.id === turmaDocenteSelecionada);
-      const { error } = await supabase.from("mensagens").insert({
-        assunto: assuntoProfessor.trim(),
-        conteudo: mensagemProfessor.trim(),
-        turma_id: turmaDocenteSelecionada,
-        turma_nome: disciplina?.nome ?? "",
-        docente: disciplina?.docente ?? "",
-        origem: "aluno",
-      });
+      const { error } = await supabase.from("chamados").insert([
+        {
+          ra_aluno: aluno.ra,
+          nome_aluno: aluno.nome,
+          assunto: assuntoSelecionado,
+          mensagem: textoMensagem,
+          destinatario_tipo: "Professor",
+          destinatario_nome: professorSelecionado,
+        },
+      ]);
 
       if (error) {
-        // Schema pode variar — segue o fluxo de sucesso simulado
-        console.warn("Insert em mensagens indisponível, simulando envio:", error.message);
-        await new Promise((resolve) => setTimeout(resolve, 400));
+        console.error("Erro ao inserir chamado para professor:", error.message);
+        abrirFeedback(
+          "erro",
+          "Falha no envio",
+          "Não foi possível enviar a mensagem ao professor. Tente novamente."
+        );
+        return;
       }
 
+      setProfessorSelecionado("");
       setAssuntoProfessor("");
       setMensagemProfessor("");
       abrirFeedback(
@@ -322,14 +431,13 @@ export default function AlunoContatoPage() {
         "Mensagem Enviada",
         "Sua dúvida foi entregue diretamente na caixa de entrada do docente."
       );
+      await atualizarListaChamados(aluno.ra);
     } catch (err) {
       console.error("Erro ao enviar mensagem ao professor:", err);
-      setAssuntoProfessor("");
-      setMensagemProfessor("");
       abrirFeedback(
-        "sucesso",
-        "Mensagem Enviada",
-        "Sua dúvida foi entregue diretamente na caixa de entrada do docente."
+        "erro",
+        "Falha no envio",
+        "Não foi possível enviar a mensagem ao professor. Tente novamente."
       );
     } finally {
       setEnviandoProfessor(false);
@@ -354,7 +462,15 @@ export default function AlunoContatoPage() {
             <div className="flex items-center gap-3 min-w-0">
               <div className="relative shrink-0">
                 <div className="w-10 h-10 rounded-full bg-zinc-800 flex items-center justify-center text-base font-semibold text-white">
-                  {aluno?.nome ? aluno.nome.substring(0, 2).toUpperCase() : "UN"}
+                  {aluno?.nome
+                    ? (aluno.nome.split(" ").length > 1
+                        ? aluno.nome.split(" ")[0][0] +
+                          aluno.nome.split(" ")[
+                            aluno.nome.split(" ").length - 1
+                          ][0]
+                        : aluno.nome.substring(0, 2)
+                      ).toUpperCase()
+                    : "UN"}
                 </div>
                 <div className="absolute -bottom-0.5 -right-0.5 w-4 h-4 bg-zinc-700 border border-zinc-900 rounded-full flex items-center justify-center cursor-pointer hover:bg-zinc-600 transition-colors">
                   <Camera className="w-2.5 h-2.5 text-zinc-300" />
@@ -508,18 +624,28 @@ export default function AlunoContatoPage() {
                     id="disciplina-professor"
                     name="disciplina"
                     className={inputClass}
-                    value={turmaDocenteSelecionada}
-                    onChange={(e) => setTurmaDocenteSelecionada(e.target.value)}
+                    value={professorSelecionado}
+                    onChange={(e) => setProfessorSelecionado(e.target.value)}
                   >
                     <option value="" disabled>
                       Selecione a disciplina
                     </option>
-                    {disciplinas.map((d) => (
-                      <option key={d.id} value={d.id}>
-                        {d.nome} - {d.docente}
+                    {disciplinasAluno.map((item) => (
+                      <option key={item.id} value={item.professor}>
+                        {item.curso} - Prof. {item.professor}
                       </option>
                     ))}
                   </select>
+                  {disponibilidadeProf ? (
+                    <p className="mt-2 flex items-start gap-1.5 text-xs text-zinc-500">
+                      <Clock className="w-3.5 h-3.5 shrink-0 mt-0.5" />
+                      <span>
+                        Disponibilidade: {disponibilidadeProf.dias.join(", ")}{" "}
+                        • das {disponibilidadeProf.de} às{" "}
+                        {disponibilidadeProf.ate}
+                      </span>
+                    </p>
+                  ) : null}
                 </div>
                 <div>
                   <label
@@ -573,7 +699,8 @@ export default function AlunoContatoPage() {
               <div>
                 <h2 className="text-sm font-semibold">Meus Chamados</h2>
                 <p className="text-xs text-zinc-500">
-                  Acompanhe o status das solicitações enviadas à secretaria.
+                  Acompanhe o status das solicitações enviadas ao suporte e aos
+                  professores.
                 </p>
               </div>
             </div>
@@ -583,7 +710,7 @@ export default function AlunoContatoPage() {
             ) : meusChamados.length === 0 ? (
               <div className="bg-zinc-900/50 border border-zinc-800 rounded-xl px-6 py-8 text-center">
                 <p className="text-sm text-zinc-400">
-                  Você ainda não abriu nenhum chamado de suporte.
+                  Você ainda não abriu nenhum chamado.
                 </p>
               </div>
             ) : (
@@ -604,6 +731,9 @@ export default function AlunoContatoPage() {
                           </p>
                           <p className="text-xs text-zinc-500 mt-0.5">
                             Aberto em {formatarDataChamado(chamado.data_abertura)}
+                          </p>
+                          <p className="text-xs text-zinc-400 mt-1">
+                            Destino: {destinoChamado(chamado)}
                           </p>
                         </div>
                         <span

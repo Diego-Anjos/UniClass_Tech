@@ -26,6 +26,22 @@ export function limparSessaoProfessor() {
   localStorage.removeItem("uniclass_prof_session");
 }
 
+/** Lê a sessão do professor no localStorage (sem redirecionar). */
+export function lerSessaoProfessor(): ProfessorSession | null {
+  if (typeof window === "undefined") return null;
+  try {
+    const session = localStorage.getItem("uniclass_prof_session");
+    if (!session) return null;
+    const parsed = JSON.parse(session) as ProfessorSession;
+    if (!parsed?.id && !parsed?.nome && !parsed?.nomeCompletoTitulo) {
+      return null;
+    }
+    return parsed;
+  } catch {
+    return null;
+  }
+}
+
 /** Lê a sessão do professor; redireciona para o login se inválida/ausente. */
 export function useProfessorSession() {
   const router = useRouter();
@@ -35,29 +51,24 @@ export function useProfessorSession() {
   const [carregandoSessao, setCarregandoSessao] = useState(true);
 
   useEffect(() => {
-    const session = localStorage.getItem("uniclass_prof_session");
+    const parsed = lerSessaoProfessor();
 
-    if (!session) {
+    if (!parsed) {
+      limparSessaoProfessor();
       setCarregandoSessao(false);
-      router.push("/professor");
+      router.push("/");
       return;
     }
 
-    try {
-      const parsed = JSON.parse(session) as ProfessorSession;
-      if (!parsed?.nome && !parsed?.nomeCompletoTitulo) {
-        limparSessaoProfessor();
-        setCarregandoSessao(false);
-        router.push("/professor");
-        return;
-      }
-      setProfessorLogado(parsed);
-    } catch {
+    if (!parsed.nome && !parsed.nomeCompletoTitulo) {
       limparSessaoProfessor();
-      router.push("/professor");
-    } finally {
       setCarregandoSessao(false);
+      router.push("/");
+      return;
     }
+
+    setProfessorLogado(parsed);
+    setCarregandoSessao(false);
   }, [router]);
 
   return { professorLogado, carregandoSessao };

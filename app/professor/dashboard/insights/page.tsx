@@ -526,7 +526,7 @@ export default function ProfessorInsightsPage() {
 
         <div className="px-2 py-4 border-t border-zinc-800">
           <a
-            href="/professor"
+            href="/"
             onClick={limparSessaoProfessor}
             className="flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm text-zinc-500 hover:bg-zinc-900 hover:text-white transition-colors"
           >

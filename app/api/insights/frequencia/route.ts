@@ -22,14 +22,14 @@ export async function POST(req: NextRequest) {
     try {
       completion = await groq.chat.completions.create({
         messages: mensagens,
-        model: "openai/gpt-oss-20b",
+        model: "gemma2-9b-it",
         temperature: 0.6,
         max_tokens: 120,
       });
     } catch (err) {
       completion = await groq.chat.completions.create({
         messages: mensagens,
-        model: "llama3-8b-8192",
+        model: "gemma-7b-it",
         temperature: 0.6,
         max_tokens: 120,
       });
@@ -38,6 +38,6 @@ export async function POST(req: NextRequest) {
     const insight = completion?.choices[0]?.message?.content || "Presença registrada. Acompanhe os alunos recorrentemente ausentes para evitar evasão.";
     return NextResponse.json({ insight });
   } catch (error) {
-    return NextResponse.json({ error: "Falha na análise de frequência." }, { status: 500 });
+    return NextResponse.json({ insight: "Os insights gerados por IA estão temporariamente indisponíveis. Tente novamente mais tarde." }, { status: 200 });
   }
 }

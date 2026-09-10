@@ -23,7 +23,7 @@ Responda sempre em português do Brasil de forma clara e sem usar formatações 
 
     const completion = await groq.chat.completions.create({
       messages: groqMessages,
-      model: "openai/gpt-oss-20b",
+      model: "gemma2-9b-it",
       temperature: 0.7,
       max_tokens: 500,
     });
@@ -33,9 +33,6 @@ Responda sempre em português do Brasil de forma clara e sem usar formatações 
     return NextResponse.json({ reply: respostaTexto });
   } catch (error) {
     console.error(error);
-    return NextResponse.json(
-      { error: "Falha na comunicação com o Groq." },
-      { status: 500 }
-    );
+    return NextResponse.json({ insight: "Os insights gerados por IA estão temporariamente indisponíveis. Tente novamente mais tarde." }, { status: 200 });
   }
 }

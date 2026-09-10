@@ -144,7 +144,7 @@ export function AdmDashboardShell({ children }: { children: React.ReactNode }) {
 
         <div className="px-2 py-4 border-t border-zinc-800">
           <Link
-            href="/adm/login"
+            href="/"
             onClick={() => {
               limparSessaoAdmin();
               fecharSidebarMobile();

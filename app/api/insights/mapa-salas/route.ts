@@ -37,26 +37,26 @@ export async function POST(req: NextRequest) {
     try {
       const completion = await groq.chat.completions.create({
         messages: mensagens,
-        model: "openai/gpt-oss-20b",
+        model: "gemma2-9b-it",
         temperature: 0.6,
         max_tokens: 100,
       });
       dica = extrairTexto(completion);
     } catch (err) {
-      console.warn("Falha no modelo primário (openai/gpt-oss-20b):", err);
+      console.warn("Falha no modelo primário (gemma2-9b-it):", err);
     }
 
     if (!dica) {
       try {
         const completion = await groq.chat.completions.create({
           messages: mensagens,
-          model: "llama3-8b-8192",
+          model: "gemma-7b-it",
           temperature: 0.6,
           max_tokens: 100,
         });
         dica = extrairTexto(completion);
       } catch (err) {
-        console.warn("Falha no modelo secundário (llama3-8b-8192):", err);
+        console.warn("Falha no modelo secundário (gemma-7b-it):", err);
       }
     }
 
@@ -65,9 +65,6 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ dica, insight: dica });
   } catch (error) {
     console.error("Erro crítico na API do mapa de salas:", error);
-    return NextResponse.json(
-      { error: "Falha ao gerar dica do mapa." },
-      { status: 500 }
-    );
+    return NextResponse.json({ insight: "Os insights gerados por IA estão temporariamente indisponíveis. Tente novamente mais tarde." }, { status: 200 });
   }
 }
