@@ -7,7 +7,7 @@ import {
   ClipboardList,
   CalendarCheck,
   BookOpen,
-  Map,
+  Map as MapIcon,
   LogOut,
   Camera,
   Sparkles,
@@ -24,20 +24,27 @@ const navItems = [
   { icon: ClipboardList, label: "Boletim e Notas", href: "/aluno/dashboard/notas", active: false },
   { icon: CalendarCheck, label: "Frequência", href: "/aluno/dashboard/frequencia", active: true },
   { icon: BookOpen, label: "Grade e Matérias", href: "/aluno/dashboard/grade", active: false },
-  { icon: Map, label: "Mapa de Salas e Labs", href: "/aluno/dashboard/mapa", active: false },
+  { icon: MapIcon, label: "Mapa de Salas e Labs", href: "/aluno/dashboard/mapa", active: false },
   { icon: MessageSquare, label: "Contato", href: "/aluno/dashboard/contato", active: false },
 ];
+
+const CARGA_HORARIA_PADRAO = 80;
 
 type AlunoInfo = {
   nome: string;
   ra: string;
+  professor?: string;
 };
 
 type FrequenciaItem = {
   id: string;
   disciplina: string;
+  professor: string;
   faltas: number;
-  limite: number;
+  limiteFaltas: number;
+  totalAulasRegistradas: number;
+  percentualFalta: number;
+  percentualPresenca: number;
 };
 
 function iniciaisDe(nome: string) {
@@ -51,49 +58,81 @@ function iniciaisDe(nome: string) {
   );
 }
 
-function estiloBarra(porcentagemUso: number) {
-  if (porcentagemUso >= 75) {
+function isFalta(status: string) {
+  const s = status.toLowerCase();
+  return s === "falta" || s === "ausente" || s === "absent";
+}
+
+function corBarra(percentualFalta: number) {
+  if (percentualFalta > 75) return "bg-red-500";
+  if (percentualFalta >= 50) return "bg-yellow-500";
+  return "bg-emerald-500";
+}
+
+function estiloCard(percentualFalta: number) {
+  if (percentualFalta > 75) {
+    return "border-red-900/50 bg-red-950/20";
+  }
+  if (percentualFalta >= 50) {
+    return "border-yellow-900/40 bg-yellow-950/10";
+  }
+  return "border-zinc-800 bg-zinc-950";
+}
+
+function estiloAlertaRisco(qtdEmRisco: number) {
+  if (qtdEmRisco > 2) {
     return {
-      cardClasses: "border-orange-900/50 bg-orange-950/20",
-      fillClasses: "bg-orange-500",
+      card: "bg-zinc-900/50 border-red-900/50",
+      iconWrap: "bg-zinc-800 border-red-900/30",
+      icon: "text-red-300",
+      label: "text-red-300",
     };
   }
-  if (porcentagemUso >= 50) {
+  if (qtdEmRisco >= 1) {
     return {
-      cardClasses: "border-amber-900/40 bg-amber-950/10",
-      fillClasses: "bg-amber-500",
+      card: "bg-zinc-900/50 border-yellow-900/50",
+      iconWrap: "bg-zinc-800 border-yellow-900/30",
+      icon: "text-yellow-300",
+      label: "text-yellow-300",
     };
   }
   return {
-    cardClasses: "border-zinc-800 bg-zinc-950",
-    fillClasses: "bg-emerald-500",
+    card: "bg-zinc-900/50 border-emerald-900/50",
+    iconWrap: "bg-zinc-800 border-emerald-900/30",
+    icon: "text-emerald-300",
+    label: "text-emerald-300",
   };
+}
+
+function toCargaHoraria(raw: unknown): number {
+  const n = Number(raw);
+  if (!Number.isFinite(n) || n <= 0) return CARGA_HORARIA_PADRAO;
+  return n;
 }
 
 export default function AlunoFrequenciaPage() {
   const [aluno, setAluno] = useState<AlunoInfo | null>(null);
   const [frequencias, setFrequencias] = useState<FrequenciaItem[]>([]);
+  const [carregando, setCarregando] = useState(true);
   const [aiInsight, setAiInsight] = useState("");
   const [isLoadingAi, setIsLoadingAi] = useState(true);
 
   const totalDisciplinas = frequencias.length;
 
   const disciplinasEmRisco = useMemo(
-    () => frequencias.filter((f) => f.limite > 0 && f.faltas / f.limite >= 0.75),
+    () => frequencias.filter((f) => f.percentualFalta > 75),
     [frequencias]
   );
 
   const presencaGlobal = useMemo(() => {
     if (totalDisciplinas === 0) return 100;
     return Math.round(
-      frequencias.reduce(
-        (acc, curr) =>
-          acc +
-          ((curr.limite - curr.faltas) / Math.max(curr.limite, 1)) * 100,
-        0
-      ) / totalDisciplinas
+      frequencias.reduce((acc, curr) => acc + curr.percentualPresenca, 0) /
+        totalDisciplinas
     );
   }, [frequencias, totalDisciplinas]);
+
+  const alertaRisco = estiloAlertaRisco(disciplinasEmRisco.length);
 
   async function fetchAiFrequencia(
     alunoNome: string,
@@ -108,7 +147,9 @@ export default function AlunoFrequenciaPage() {
         body: JSON.stringify({
           alunoNome: alunoNome || "Estudante",
           presencaGlobal: presenca,
-          disciplinasEmRisco: emRisco.map((d) => d.disciplina),
+          disciplinasEmRisco: emRisco.map(
+            (d) => `${d.disciplina} - Prof. ${d.professor}`
+          ),
         }),
       });
 
@@ -129,71 +170,207 @@ export default function AlunoFrequenciaPage() {
 
   useEffect(() => {
     async function carregarFrequencia() {
-      const { data: alunoData, error: alunoError } = await supabase
-        .from("alunos")
-        .select("*")
-        .limit(1)
-        .maybeSingle();
+      setCarregando(true);
 
-      let alunoNome = "Estudante";
-      if (alunoError || !alunoData) {
-        if (alunoError) {
-          console.error("Erro ao buscar aluno:", alunoError.message);
+      try {
+        // 1) Aluno logado (RA)
+        const { data: alunoData, error: alunoError } = await supabase
+          .from("alunos")
+          .select("*")
+          .limit(1)
+          .maybeSingle();
+
+        if (alunoError || !alunoData) {
+          if (alunoError) {
+            console.error("Erro ao buscar aluno:", alunoError.message);
+          }
+          setAluno(null);
+          setFrequencias([]);
+          setIsLoadingAi(false);
+          return;
         }
-        setAluno(null);
-      } else {
-        const info: AlunoInfo = {
+
+        const alunoLogado: AlunoInfo = {
           nome: String(alunoData.nome ?? "Estudante"),
-          ra: String(alunoData.ra || alunoData.matricula || "RA-0000"),
+          ra: String(alunoData.ra || alunoData.matricula || ""),
+          professor: alunoData.professor
+            ? String(alunoData.professor)
+            : undefined,
         };
-        setAluno(info);
-        alunoNome = info.nome;
-      }
+        setAluno(alunoLogado);
 
-      const { data: turmasData, error: turmasError } = await supabase
-        .from("turmas")
-        .select("id, codigo, curso, turno");
+        if (!alunoLogado.ra) {
+          setFrequencias([]);
+          setIsLoadingAi(false);
+          return;
+        }
 
-      let lista: FrequenciaItem[] = [];
-      if (turmasError) {
-        console.error("Erro ao buscar turmas:", turmasError.message);
-        setFrequencias([]);
-        setIsLoadingAi(false);
-        return;
-      }
+        // 2) Disciplinas matriculadas (cruzando com notas)
+        const { data: notasData, error: notasError } = await supabase
+          .from("notas")
+          .select("turma")
+          .eq("ra_aluno", alunoLogado.ra);
 
-      if (turmasData && turmasData.length > 0) {
-        lista = turmasData.map((turma) => ({
-          id: String(turma.id),
-          disciplina: String(turma.curso ?? "Disciplina"),
-          faltas: 0,
-          limite: 20,
+        if (notasError) {
+          console.error("Erro ao buscar matrículas (notas):", notasError.message);
+        }
+
+        const turmaIds = [
+          ...new Set(
+            (notasData ?? [])
+              .map((n) => String(n.turma ?? ""))
+              .filter(Boolean)
+          ),
+        ];
+
+        let turmasRows: Record<string, unknown>[] = [];
+
+        if (turmaIds.length > 0) {
+          const { data: turmasData, error: turmasError } = await supabase
+            .from("turmas")
+            .select("*")
+            .in("id", turmaIds);
+
+          if (turmasError) {
+            console.error("Erro ao buscar turmas:", turmasError.message);
+          } else {
+            turmasRows = (turmasData ?? []) as Record<string, unknown>[];
+          }
+        }
+
+        // Fallback: turmas do mesmo curso do aluno (regra de negócio atual)
+        if (turmasRows.length === 0 && alunoData.curso) {
+          const { data: turmasCurso, error: turmasCursoError } = await supabase
+            .from("turmas")
+            .select("*")
+            .ilike("curso", `%${String(alunoData.curso)}%`);
+
+          if (turmasCursoError) {
+            console.error(
+              "Erro ao buscar turmas por curso:",
+              turmasCursoError.message
+            );
+          } else {
+            turmasRows = (turmasCurso ?? []) as Record<string, unknown>[];
+          }
+        }
+
+        const idsTurmas = turmasRows.map((t) => String(t.id));
+
+        // 3) Registros de chamada do aluno + totais por turma
+        const { data: registrosAluno, error: faltasError } = await supabase
+          .from("registro_chamada")
+          .select("turma_curso, status, data_aula")
+          .eq("aluno_ra", alunoLogado.ra);
+
+        if (faltasError) {
+          console.error("Erro ao buscar registro_chamada:", faltasError.message);
+        }
+
+        const registrosDoAluno = (registrosAluno ?? []).map((r) => ({
+          turma: String(r.turma_curso ?? ""),
+          status: String(r.status ?? ""),
+          data: String(r.data_aula ?? ""),
         }));
+
+        // Totais de aulas registradas por turma (todas as chamadas no banco)
+        const totalAulasPorTurma = new Map<string, number>();
+
+        if (idsTurmas.length > 0) {
+          const { data: registrosTurma, error: regTurmaError } = await supabase
+            .from("registro_chamada")
+            .select("turma_curso, data_aula")
+            .in("turma_curso", idsTurmas);
+
+          if (regTurmaError) {
+            console.error(
+              "Erro ao buscar totais de chamada por turma:",
+              regTurmaError.message
+            );
+          } else {
+            const datasPorTurma = new Map<string, Set<string>>();
+            for (const r of registrosTurma ?? []) {
+              const tid = String(r.turma_curso ?? "");
+              const data = String(r.data_aula ?? "");
+              if (!tid || !data) continue;
+              if (!datasPorTurma.has(tid)) datasPorTurma.set(tid, new Set());
+              datasPorTurma.get(tid)!.add(data);
+            }
+            for (const [tid, datas] of datasPorTurma) {
+              totalAulasPorTurma.set(tid, datas.size);
+            }
+          }
+        }
+
+        // 4) Agrupar e calcular por disciplina
+        const lista: FrequenciaItem[] = turmasRows.map((turma) => {
+          const id = String(turma.id);
+          const disciplina = String(
+            turma.nome ?? turma.curso ?? turma.codigo ?? "Disciplina"
+          );
+          const professor = String(
+            turma.professor ?? alunoLogado.professor ?? "—"
+          );
+          const cargaHoraria = toCargaHoraria(turma.carga_horaria);
+          const limiteFaltas = Math.max(1, Math.floor(cargaHoraria * 0.25));
+
+          const doAluno = registrosDoAluno.filter((r) => r.turma === id);
+          const faltas = doAluno.filter((r) => isFalta(r.status)).length;
+
+          // Fallback: se não houver datas únicas da turma, usa registros do aluno
+          const totalAulasRegistradas =
+            totalAulasPorTurma.get(id) ??
+            new Set(doAluno.map((r) => r.data).filter(Boolean)).size;
+
+          const percentualFalta = Math.min(
+            100,
+            Math.round((faltas / limiteFaltas) * 100)
+          );
+
+          const percentualPresenca =
+            totalAulasRegistradas === 0
+              ? 100
+              : Math.max(
+                  0,
+                  Math.round(
+                    100 - (faltas / totalAulasRegistradas) * 100
+                  )
+                );
+
+          return {
+            id,
+            disciplina,
+            professor,
+            faltas,
+            limiteFaltas,
+            totalAulasRegistradas,
+            percentualFalta,
+            percentualPresenca,
+          };
+        });
+
         setFrequencias(lista);
 
-        const emRisco = lista.filter(
-          (f) => f.limite > 0 && f.faltas / f.limite >= 0.75
-        );
+        if (lista.length === 0) {
+          setIsLoadingAi(false);
+          setAiInsight(
+            "Nenhuma disciplina vinculada ainda. Assim que houver turmas, o acompanhamento de frequência será exibido aqui."
+          );
+          return;
+        }
+
+        const emRisco = lista.filter((f) => f.percentualFalta > 75);
         const presenca =
           lista.length === 0
             ? 100
             : Math.round(
-                lista.reduce(
-                  (acc, curr) =>
-                    acc +
-                    ((curr.limite - curr.faltas) / Math.max(curr.limite, 1)) *
-                      100,
-                  0
-                ) / lista.length
+                lista.reduce((acc, curr) => acc + curr.percentualPresenca, 0) /
+                  lista.length
               );
 
-        await fetchAiFrequencia(alunoNome, presenca, emRisco);
-      } else {
-        setFrequencias([]);
-        setIsLoadingAi(false);
-        setAiInsight(
-          "Nenhuma disciplina vinculada ainda. Assim que houver turmas, o acompanhamento de frequência será exibido aqui."
-        );
+        await fetchAiFrequencia(alunoLogado.nome, presenca, emRisco);
+      } finally {
+        setCarregando(false);
       }
     }
 
@@ -248,7 +425,7 @@ export default function AlunoFrequenciaPage() {
         {/* Nav */}
         <nav className="flex flex-col gap-0.5 px-2 py-4 flex-1">
           {navItems.map(({ icon: Icon, label, href, active }) => (
-            <a
+            <Link
               key={label}
               href={href}
               className={`flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm transition-colors ${
@@ -259,7 +436,7 @@ export default function AlunoFrequenciaPage() {
             >
               <Icon className="w-4 h-4 shrink-0" />
               {label}
-            </a>
+            </Link>
           ))}
         </nav>
 
@@ -294,12 +471,18 @@ export default function AlunoFrequenciaPage() {
           </div>
 
           {/* ── AI Insight Card (Alerta de Risco) ── */}
-          <div className="flex items-start gap-4 p-5 rounded-xl bg-zinc-900/50 border border-orange-900/50 mb-8">
-            <div className="shrink-0 mt-0.5 w-8 h-8 rounded-lg bg-zinc-800 border border-orange-900/30 flex items-center justify-center">
-              <Sparkles className="w-4 h-4 text-orange-200" />
+          <div
+            className={`flex items-start gap-4 p-5 rounded-xl border mb-8 ${alertaRisco.card}`}
+          >
+            <div
+              className={`shrink-0 mt-0.5 w-8 h-8 rounded-lg border flex items-center justify-center ${alertaRisco.iconWrap}`}
+            >
+              <Sparkles className={`w-4 h-4 ${alertaRisco.icon}`} />
             </div>
             <div>
-              <p className="text-xs font-semibold text-orange-200 uppercase tracking-widest mb-1">
+              <p
+                className={`text-xs font-semibold uppercase tracking-widest mb-1 ${alertaRisco.label}`}
+              >
                 Alerta de Risco
               </p>
               <p
@@ -324,7 +507,7 @@ export default function AlunoFrequenciaPage() {
                 <Check className="w-4 h-4 text-emerald-400" />
               </div>
               <p className="text-4xl font-semibold tracking-tight">
-                {presencaGlobal}%
+                {carregando ? "…" : `${presencaGlobal}%`}
               </p>
             </div>
 
@@ -333,24 +516,40 @@ export default function AlunoFrequenciaPage() {
                 <p className="text-xs text-zinc-500 uppercase tracking-widest">
                   Disciplinas em Risco
                 </p>
-                <AlertTriangle className="w-4 h-4 text-orange-400" />
+                <AlertTriangle
+                  className={`w-4 h-4 ${
+                    disciplinasEmRisco.length > 2
+                      ? "text-red-400"
+                      : disciplinasEmRisco.length >= 1
+                        ? "text-yellow-400"
+                        : "text-emerald-400"
+                  }`}
+                />
               </div>
               <div className="flex items-baseline gap-2">
                 <p className="text-4xl font-semibold tracking-tight">
-                  {disciplinasEmRisco.length}
+                  {carregando ? "…" : disciplinasEmRisco.length}
                 </p>
-                <span className="text-sm text-zinc-400">
-                  {disciplinasEmRisco.length === 1
-                    ? "disciplina"
-                    : "disciplinas"}
-                </span>
+                {!carregando && (
+                  <span className="text-sm text-zinc-400">
+                    {disciplinasEmRisco.length === 1
+                      ? "disciplina"
+                      : "disciplinas"}
+                  </span>
+                )}
               </div>
             </div>
           </div>
 
           {/* ── Detalhamento por Disciplina ── */}
           <div className="flex flex-col gap-4">
-            {frequencias.length === 0 ? (
+            {carregando ? (
+              <div className="p-8 rounded-xl border border-zinc-800 bg-zinc-950 text-center">
+                <p className="text-sm text-zinc-500 animate-pulse">
+                  Carregando frequência...
+                </p>
+              </div>
+            ) : frequencias.length === 0 ? (
               <div className="p-8 rounded-xl border border-zinc-800 bg-zinc-950 text-center">
                 <p className="text-sm text-zinc-500">
                   Nenhuma disciplina vinculada para acompanhamento de
@@ -358,41 +557,37 @@ export default function AlunoFrequenciaPage() {
                 </p>
               </div>
             ) : (
-              frequencias.map((item) => {
-                const porcentagemUso = Math.min(
-                  Math.round((item.faltas / item.limite) * 100),
-                  100
-                );
-                const estilo = estiloBarra(porcentagemUso);
-
-                return (
-                  <div
-                    key={item.id}
-                    className={`p-5 rounded-xl border ${estilo.cardClasses}`}
-                  >
-                    <div className="flex items-start justify-between gap-4">
-                      <div className="min-w-0">
-                        <p className="text-sm font-semibold text-white">
-                          {item.disciplina}
-                        </p>
-                        <p className="text-xs text-zinc-400 mt-1">
-                          Faltas: {item.faltas} / Limite: {item.limite}
-                        </p>
-                      </div>
-                      <span className="text-xs text-zinc-500 whitespace-nowrap">
-                        {porcentagemUso}%
-                      </span>
+              frequencias.map((item) => (
+                <div
+                  key={item.id}
+                  className={`p-5 rounded-xl border ${estiloCard(
+                    item.percentualFalta
+                  )}`}
+                >
+                  <div className="flex items-start justify-between gap-4">
+                    <div className="min-w-0">
+                      <p className="text-sm font-semibold text-white">
+                        {item.disciplina} - Prof. {item.professor}
+                      </p>
+                      <p className="text-xs text-zinc-400 mt-1">
+                        Faltas: {item.faltas} / Limite: {item.limiteFaltas}
+                      </p>
                     </div>
-
-                    <div className="mt-4 w-full h-2 rounded-full overflow-hidden bg-zinc-800">
-                      <div
-                        className={`${estilo.fillClasses} h-full rounded-full transition-all`}
-                        style={{ width: `${porcentagemUso}%` }}
-                      />
-                    </div>
+                    <span className="text-xs text-zinc-500 whitespace-nowrap">
+                      {item.percentualFalta}%
+                    </span>
                   </div>
-                );
-              })
+
+                  <div className="mt-4 w-full h-2 rounded-full overflow-hidden bg-zinc-800">
+                    <div
+                      className={`${corBarra(
+                        item.percentualFalta
+                      )} h-full rounded-full transition-all`}
+                      style={{ width: `${item.percentualFalta}%` }}
+                    />
+                  </div>
+                </div>
+              ))
             )}
           </div>
         </div>

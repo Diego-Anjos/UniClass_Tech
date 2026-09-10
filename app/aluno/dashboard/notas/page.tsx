@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { Fragment, useEffect, useState } from "react";
 import Link from "next/link";
 import {
   LayoutDashboard,
@@ -15,6 +15,7 @@ import {
   GraduationCap,
   MessageSquare,
   Settings,
+  ChevronDown,
 } from "lucide-react";
 import { supabase } from "@/lib/supabase";
 import { ModalFeedback } from "@/components/ModalFeedback";
@@ -32,36 +33,142 @@ type AlunoInfo = {
   nome: string;
   ra: string;
   curso: string;
+  professor?: string;
 };
 
-type Disciplina = {
+type Criterios = {
+  ativ1: number;
+  ativ2: number;
+  ativ3: number;
+  ativ4: number;
+  prova: number;
+};
+
+type DatasAvaliacoes = {
+  ativ1: string;
+  ativ2: string;
+  ativ3: string;
+  ativ4: string;
+  prova: string;
+};
+
+type BoletimItem = {
   id: string;
-  nome: string;
-  n1: number | null;
-  n2: number | null;
-  atividades: number | null;
-  media: number | null;
-  faltas: number;
+  turmaId: string;
+  disciplina: string;
+  professor: string;
+  mediaParcial: number | null;
+  faltasPct: number;
   status: string;
+  ativ1: number | null;
+  ativ2: number | null;
+  ativ3: number | null;
+  ativ4: number | null;
+  prova: number | null;
+  criterios: Criterios;
+  datas: DatasAvaliacoes;
 };
 
-const statusConfig: Record<string, { label: string; classes: string }> = {
-  Aprovado: {
-    label: "Aprovado",
-    classes: "bg-emerald-950/40 text-emerald-400 border border-emerald-800",
-  },
-  Cursando: {
-    label: "Cursando",
-    classes: "bg-amber-950/40 text-amber-400 border border-amber-800",
-  },
-  Reprovado: {
-    label: "Reprovado",
-    classes: "bg-rose-950/40 text-rose-400 border border-rose-800",
-  },
+const CRITERIOS_PADRAO: Criterios = {
+  ativ1: 1,
+  ativ2: 1,
+  ativ3: 1,
+  ativ4: 1,
+  prova: 6,
 };
 
-function fmt(val: number | null) {
-  return val !== null ? val.toFixed(1) : <span className="text-zinc-700">—</span>;
+const DATAS_PADRAO: DatasAvaliacoes = {
+  ativ1: "",
+  ativ2: "",
+  ativ3: "",
+  ativ4: "",
+  prova: "",
+};
+
+const COMPOSICAO = [
+  { key: "ativ1" as const, label: "Atividade 1", criterioKey: "ativ1" as const },
+  { key: "ativ2" as const, label: "Atividade 2", criterioKey: "ativ2" as const },
+  { key: "ativ3" as const, label: "Atividade 3", criterioKey: "ativ3" as const },
+  { key: "ativ4" as const, label: "Atividade 4", criterioKey: "ativ4" as const },
+  { key: "prova" as const, label: "Prova Semestral", criterioKey: "prova" as const },
+];
+
+function statusBadgeClasses(status: string) {
+  const s = status.toLowerCase();
+  if (s === "aprovado") return "bg-emerald-900 text-emerald-300";
+  if (s === "reprovado") return "bg-red-900 text-red-300";
+  return "bg-gray-800 text-gray-300";
+}
+
+function statusLabel(status: string) {
+  const s = status.trim();
+  if (!s || s.toLowerCase() === "pendente") return "Pendente";
+  if (s.toLowerCase() === "exame final") return "Cursando";
+  return s;
+}
+
+function fmtNota(val: number | null) {
+  if (val === null || Number.isNaN(val)) {
+    return <span className="text-zinc-600">—</span>;
+  }
+  return val.toFixed(1);
+}
+
+function formatarData(iso: string) {
+  if (!iso) return "—";
+  const [ano, mes, dia] = iso.split("-");
+  if (!mes || !dia) return iso;
+  return `${dia}/${mes}${ano ? `/${ano}` : ""}`;
+}
+
+function toNum(val: unknown): number | null {
+  if (val === null || val === undefined || val === "") return null;
+  const n = Number(val);
+  return Number.isNaN(n) ? null : n;
+}
+
+function normalizarCriterios(raw: unknown): Criterios {
+  if (!raw || typeof raw !== "object") return { ...CRITERIOS_PADRAO };
+  const c = raw as Partial<Record<keyof Criterios, unknown>>;
+  const ativ1 = Number(c.ativ1);
+  const ativ2 = Number(c.ativ2);
+  const ativ3 = Number(c.ativ3);
+  const ativ4 = Number(c.ativ4);
+  const prova = Number(c.prova);
+  const temAlgum = [ativ1, ativ2, ativ3, ativ4, prova].some((v) => !Number.isNaN(v));
+  if (!temAlgum) return { ...CRITERIOS_PADRAO };
+  return {
+    ativ1: Number.isNaN(ativ1) ? CRITERIOS_PADRAO.ativ1 : ativ1,
+    ativ2: Number.isNaN(ativ2) ? CRITERIOS_PADRAO.ativ2 : ativ2,
+    ativ3: Number.isNaN(ativ3) ? CRITERIOS_PADRAO.ativ3 : ativ3,
+    ativ4: Number.isNaN(ativ4) ? CRITERIOS_PADRAO.ativ4 : ativ4,
+    prova: Number.isNaN(prova) ? CRITERIOS_PADRAO.prova : prova,
+  };
+}
+
+function normalizarDatas(raw: unknown): DatasAvaliacoes {
+  if (!raw || typeof raw !== "object") return { ...DATAS_PADRAO };
+  const d = raw as Partial<Record<keyof DatasAvaliacoes, unknown>>;
+  return {
+    ativ1: typeof d.ativ1 === "string" ? d.ativ1 : "",
+    ativ2: typeof d.ativ2 === "string" ? d.ativ2 : "",
+    ativ3: typeof d.ativ3 === "string" ? d.ativ3 : "",
+    ativ4: typeof d.ativ4 === "string" ? d.ativ4 : "",
+    prova: typeof d.prova === "string" ? d.prova : "",
+  };
+}
+
+function calcularFaltasPct(
+  registros: { turma: string; status: string }[],
+  turmaId: string
+) {
+  const daTurma = registros.filter((r) => r.turma === turmaId);
+  if (daTurma.length === 0) return 0;
+  const faltas = daTurma.filter((r) => {
+    const s = r.status.toLowerCase();
+    return s === "falta" || s === "ausente" || s === "absent";
+  }).length;
+  return Math.round((faltas / daTurma.length) * 100);
 }
 
 function iniciaisDe(nome: string) {
@@ -77,7 +184,9 @@ function iniciaisDe(nome: string) {
 
 export default function AlunoNotasPage() {
   const [aluno, setAluno] = useState<AlunoInfo | null>(null);
-  const [disciplinas, setDisciplinas] = useState<Disciplina[]>([]);
+  const [boletim, setBoletim] = useState<BoletimItem[]>([]);
+  const [expandidoId, setExpandidoId] = useState<string | null>(null);
+  const [carregando, setCarregando] = useState(true);
   const [semestreSelecionado, setSemestreSelecionado] = useState(
     "4º Semestre (Atual)"
   );
@@ -97,13 +206,21 @@ export default function AlunoNotasPage() {
 
   async function fetchAiBoletimInsight(
     alunoNome: string,
-    listaDisciplinas: Disciplina[]
+    lista: BoletimItem[]
   ) {
     setIsLoadingAi(true);
     try {
-      const pendentes = listaDisciplinas
-        .filter((d) => d.status === "Cursando" || d.media === null)
-        .map((d) => d.nome)
+      const pendentes = lista
+        .filter((d) => {
+          const s = d.status.toLowerCase();
+          return (
+            s === "cursando" ||
+            s === "pendente" ||
+            s === "exame final" ||
+            d.mediaParcial === null
+          );
+        })
+        .map((d) => d.disciplina)
         .join(", ");
 
       const response = await fetch("/api/insights/boletim", {
@@ -111,11 +228,11 @@ export default function AlunoNotasPage() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           alunoNome: alunoNome || "Estudante",
-          totalDisciplinas: listaDisciplinas.length,
+          totalDisciplinas: lista.length,
           disciplinasPendentes:
             pendentes ||
-            (listaDisciplinas.length > 0
-              ? listaDisciplinas.map((d) => d.nome).join(", ")
+            (lista.length > 0
+              ? lista.map((d) => d.disciplina).join(", ")
               : "nenhuma disciplina cadastrada"),
         }),
       });
@@ -135,53 +252,178 @@ export default function AlunoNotasPage() {
 
   useEffect(() => {
     async function carregarBoletim() {
-      const { data: alunoData, error: alunoError } = await supabase
-        .from("alunos")
-        .select("*")
-        .limit(1)
-        .maybeSingle();
+      setCarregando(true);
 
-      let alunoNome = "Estudante";
-      if (alunoError || !alunoData) {
-        if (alunoError) {
-          console.error("Erro ao buscar aluno:", alunoError.message);
+      try {
+        // 1) Aluno logado (RA)
+        const { data: alunoData, error: alunoError } = await supabase
+          .from("alunos")
+          .select("*")
+          .limit(1)
+          .maybeSingle();
+
+        if (alunoError || !alunoData) {
+          if (alunoError) {
+            console.error("Erro ao buscar aluno:", alunoError.message);
+          }
+          setAluno(null);
+          setBoletim([]);
+          setIsLoadingAi(false);
+          return;
         }
-        setAluno(null);
-      } else {
-        const info: AlunoInfo = {
+
+        const alunoLogado: AlunoInfo = {
           nome: String(alunoData.nome ?? "Estudante"),
-          ra: String(alunoData.ra || alunoData.matricula || "RA-0000"),
+          ra: String(alunoData.ra || alunoData.matricula || ""),
           curso: String(alunoData.curso || "Tecnologia da Informação"),
+          professor: alunoData.professor
+            ? String(alunoData.professor)
+            : undefined,
         };
-        setAluno(info);
-        alunoNome = info.nome;
-      }
+        setAluno(alunoLogado);
 
-      const { data: turmasData, error: turmasError } = await supabase
-        .from("turmas")
-        .select("id, codigo, curso, turno");
+        if (!alunoLogado.ra) {
+          setBoletim([]);
+          setIsLoadingAi(false);
+          return;
+        }
 
-      let lista: Disciplina[] = [];
-      if (turmasError) {
-        console.error("Erro ao buscar turmas:", turmasError.message);
-        setDisciplinas([]);
-      } else if (turmasData && turmasData.length > 0) {
-        lista = turmasData.map((turma) => ({
-          id: String(turma.id),
-          nome: String(turma.curso ?? "Disciplina"),
-          n1: null,
-          n2: null,
-          atividades: null,
-          media: null,
-          faltas: 0,
-          status: "Cursando",
+        // 2) Notas + detalhes da turma
+        let notasRows: Record<string, unknown>[] = [];
+
+        const { data: notasComJoin, error: notasJoinError } = await supabase
+          .from("notas")
+          .select(
+            "*, turmas(curso, professor, criterios_notas, datas_avaliacoes)"
+          )
+          .eq("ra_aluno", alunoLogado.ra);
+
+        if (notasJoinError) {
+          console.warn(
+            "Join notas→turmas falhou, buscando em separado:",
+            notasJoinError.message
+          );
+
+          const { data: notasSimples, error: notasError } = await supabase
+            .from("notas")
+            .select("*")
+            .eq("ra_aluno", alunoLogado.ra);
+
+          if (notasError) {
+            console.error("Erro ao buscar notas:", notasError.message);
+            setBoletim([]);
+            await fetchAiBoletimInsight(alunoLogado.nome, []);
+            return;
+          }
+
+          notasRows = (notasSimples ?? []) as Record<string, unknown>[];
+
+          const turmaIds = [
+            ...new Set(
+              notasRows
+                .map((n) => String(n.turma ?? ""))
+                .filter(Boolean)
+            ),
+          ];
+
+          if (turmaIds.length > 0) {
+            const { data: turmasData } = await supabase
+              .from("turmas")
+              .select(
+                "id, curso, professor, criterios_notas, datas_avaliacoes"
+              )
+              .in("id", turmaIds);
+
+            const mapaTurmas = new Map(
+              (turmasData ?? []).map((t) => [String(t.id), t])
+            );
+
+            notasRows = notasRows.map((n) => ({
+              ...n,
+              turmas: mapaTurmas.get(String(n.turma ?? "")) ?? null,
+            }));
+          }
+        } else {
+          notasRows = (notasComJoin ?? []) as Record<string, unknown>[];
+        }
+
+        // 3) Faltas (schema real: registro_chamada)
+        const { data: faltasData, error: faltasError } = await supabase
+          .from("registro_chamada")
+          .select("turma_curso, status")
+          .eq("aluno_ra", alunoLogado.ra);
+
+        if (faltasError) {
+          console.error("Erro ao buscar faltas:", faltasError.message);
+        }
+
+        const registrosFaltas = (faltasData ?? []).map((r) => ({
+          turma: String(r.turma_curso ?? ""),
+          status: String(r.status ?? ""),
         }));
-        setDisciplinas(lista);
-      } else {
-        setDisciplinas([]);
-      }
 
-      await fetchAiBoletimInsight(alunoNome, lista);
+        // 4) Combinar em boletim
+        const lista: BoletimItem[] = notasRows.map((row, idx) => {
+          const turmasRaw = row.turmas;
+          const turmaObj =
+            turmasRaw && typeof turmasRaw === "object" && !Array.isArray(turmasRaw)
+              ? (turmasRaw as Record<string, unknown>)
+              : Array.isArray(turmasRaw) && turmasRaw[0]
+                ? (turmasRaw[0] as Record<string, unknown>)
+                : null;
+
+          const turmaId = String(row.turma ?? "");
+          const disciplina =
+            (typeof turmaObj?.curso === "string" && turmaObj.curso.trim()
+              ? turmaObj.curso
+              : null) || "Disciplina sem nome";
+          const professor =
+            (typeof turmaObj?.professor === "string" &&
+            turmaObj.professor.trim()
+              ? turmaObj.professor
+              : null) || "Professor não atribuído";
+
+          const mediaParcial =
+            toNum(row.media_final) ??
+            (() => {
+              const vals = [
+                toNum(row.ativ1),
+                toNum(row.ativ2),
+                toNum(row.ativ3),
+                toNum(row.ativ4),
+                toNum(row.prova),
+              ].filter((v): v is number => v !== null);
+              if (vals.length === 0) return null;
+              return Number(
+                vals.reduce((a, b) => a + b, 0).toFixed(1)
+              );
+            })();
+
+          const statusRaw = String(row.status ?? "Pendente");
+
+          return {
+            id: String(row.id ?? `${turmaId}-${idx}`),
+            turmaId,
+            disciplina,
+            professor,
+            mediaParcial,
+            faltasPct: calcularFaltasPct(registrosFaltas, turmaId),
+            status: statusRaw,
+            ativ1: toNum(row.ativ1),
+            ativ2: toNum(row.ativ2),
+            ativ3: toNum(row.ativ3),
+            ativ4: toNum(row.ativ4),
+            prova: toNum(row.prova),
+            criterios: normalizarCriterios(turmaObj?.criterios_notas),
+            datas: normalizarDatas(turmaObj?.datas_avaliacoes),
+          };
+        });
+
+        setBoletim(lista);
+        await fetchAiBoletimInsight(alunoLogado.nome, lista);
+      } finally {
+        setCarregando(false);
+      }
     }
 
     void carregarBoletim();
@@ -199,6 +441,10 @@ export default function AlunoNotasPage() {
 
   function fecharFeedback() {
     setModalFeedback((prev) => ({ ...prev, aberto: false }));
+  }
+
+  function toggleExpandido(id: string) {
+    setExpandidoId((prev) => (prev === id ? null : id));
   }
 
   return (
@@ -248,33 +494,18 @@ export default function AlunoNotasPage() {
         {/* Nav */}
         <nav className="flex flex-col gap-0.5 px-2 py-4 flex-1">
           {navItems.map(({ icon: Icon, label, href, active }) => (
-            href === "/aluno/dashboard/frequencia" ? (
-              <Link
-                key={label}
-                href={href}
-                className={`flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm transition-colors ${
-                  active
-                    ? "bg-zinc-800 text-white font-medium"
-                    : "text-zinc-400 hover:bg-zinc-900 hover:text-white"
-                }`}
-              >
-                <Icon className="w-4 h-4 shrink-0" />
-                {label}
-              </Link>
-            ) : (
-              <a
-                key={label}
-                href={href}
-                className={`flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm transition-colors ${
-                  active
-                    ? "bg-zinc-800 text-white font-medium"
-                    : "text-zinc-400 hover:bg-zinc-900 hover:text-white"
-                }`}
-              >
-                <Icon className="w-4 h-4 shrink-0" />
-                {label}
-              </a>
-            )
+            <Link
+              key={label}
+              href={href}
+              className={`flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm transition-colors ${
+                active
+                  ? "bg-zinc-800 text-white font-medium"
+                  : "text-zinc-400 hover:bg-zinc-900 hover:text-white"
+              }`}
+            >
+              <Icon className="w-4 h-4 shrink-0" />
+              {label}
+            </Link>
           ))}
         </nav>
 
@@ -347,12 +578,12 @@ export default function AlunoNotasPage() {
             </div>
           </div>
 
-          {/* ── Tabela de Notas ── */}
+          {/* ── Tabela de Notas (linhas expansíveis) ── */}
           <div className="rounded-xl border border-zinc-800 overflow-hidden">
             <div className="px-6 py-4 border-b border-zinc-800 flex items-center justify-between">
               <h2 className="text-sm font-semibold">Notas do Semestre</h2>
               <span className="text-xs text-zinc-600">
-                {disciplinas.length} disciplinas
+                {carregando ? "…" : `${boletim.length} disciplinas`}
               </span>
             </div>
 
@@ -360,60 +591,121 @@ export default function AlunoNotasPage() {
               <table className="w-full text-sm">
                 <thead>
                   <tr className="text-xs text-zinc-500 uppercase bg-zinc-950 border-b border-zinc-800">
-                    <th className="px-6 py-3 text-left font-medium tracking-wider">Disciplina</th>
-                    <th className="px-4 py-3 text-center font-medium tracking-wider">N1</th>
-                    <th className="px-4 py-3 text-center font-medium tracking-wider">N2</th>
-                    <th className="px-4 py-3 text-center font-medium tracking-wider">Atividades</th>
-                    <th className="px-4 py-3 text-center font-medium tracking-wider">Média</th>
-                    <th className="px-4 py-3 text-center font-medium tracking-wider">Faltas</th>
+                    <th className="px-6 py-3 text-left font-medium tracking-wider w-8" />
+                    <th className="px-4 py-3 text-left font-medium tracking-wider">Disciplina</th>
+                    <th className="px-4 py-3 text-left font-medium tracking-wider">Professor</th>
+                    <th className="px-4 py-3 text-center font-medium tracking-wider">Média Parcial</th>
+                    <th className="px-4 py-3 text-center font-medium tracking-wider">Faltas (%)</th>
                     <th className="px-6 py-3 text-left font-medium tracking-wider">Status</th>
                   </tr>
                 </thead>
-                <tbody className="divide-y divide-zinc-800">
-                  {disciplinas.length === 0 ? (
+                <tbody>
+                  {carregando ? (
                     <tr>
                       <td
-                        colSpan={7}
+                        colSpan={6}
                         className="px-6 py-10 text-center text-sm text-zinc-500"
                       >
-                        Nenhuma disciplina cadastrada neste semestre.
+                        Carregando boletim...
+                      </td>
+                    </tr>
+                  ) : boletim.length === 0 ? (
+                    <tr>
+                      <td
+                        colSpan={6}
+                        className="px-6 py-10 text-center text-sm text-zinc-500"
+                      >
+                        Nenhuma disciplina ou nota lançada para este semestre.
                       </td>
                     </tr>
                   ) : (
-                    disciplinas.map((d) => {
-                      const s =
-                        statusConfig[d.status] ?? statusConfig.Cursando;
+                    boletim.map((item) => {
+                      const aberto = expandidoId === item.id;
+                      const label = statusLabel(item.status);
                       return (
-                        <tr
-                          key={d.id}
-                          className="hover:bg-zinc-900/40 transition-colors"
-                        >
-                          <td className="px-6 py-4 font-medium text-white">
-                            {d.nome}
-                          </td>
-                          <td className="px-4 py-4 text-center text-zinc-300">
-                            {fmt(d.n1)}
-                          </td>
-                          <td className="px-4 py-4 text-center text-zinc-300">
-                            {fmt(d.n2)}
-                          </td>
-                          <td className="px-4 py-4 text-center text-zinc-300">
-                            {fmt(d.atividades)}
-                          </td>
-                          <td className="px-4 py-4 text-center font-semibold text-white">
-                            {fmt(d.media)}
-                          </td>
-                          <td className="px-4 py-4 text-center text-zinc-400">
-                            {d.faltas}
-                          </td>
-                          <td className="px-6 py-4">
-                            <span
-                              className={`text-xs font-medium px-2.5 py-0.5 rounded-full ${s.classes}`}
-                            >
-                              {s.label}
-                            </span>
-                          </td>
-                        </tr>
+                        <Fragment key={item.id}>
+                          <tr
+                            onClick={() => toggleExpandido(item.id)}
+                            className={`cursor-pointer transition-colors border-b border-zinc-800/80 ${
+                              aberto
+                                ? "bg-zinc-900/60"
+                                : "hover:bg-zinc-900/40"
+                            }`}
+                          >
+                            <td className="pl-6 pr-2 py-4">
+                              <ChevronDown
+                                className={`w-4 h-4 text-zinc-500 transition-transform duration-200 ${
+                                  aberto ? "rotate-180" : ""
+                                }`}
+                              />
+                            </td>
+                            <td className="px-4 py-4 font-medium text-white">
+                              {item.disciplina}
+                            </td>
+                            <td className="px-4 py-4 text-zinc-400">
+                              {item.professor}
+                            </td>
+                            <td className="px-4 py-4 text-center font-semibold text-white">
+                              {fmtNota(item.mediaParcial)}
+                            </td>
+                            <td className="px-4 py-4 text-center text-zinc-400">
+                              {item.faltasPct}%
+                            </td>
+                            <td className="px-6 py-4">
+                              <span
+                                className={`text-xs font-medium px-2.5 py-0.5 rounded-full ${statusBadgeClasses(
+                                  label
+                                )}`}
+                              >
+                                {label}
+                              </span>
+                            </td>
+                          </tr>
+                          {aberto && (
+                            <tr className="border-b border-zinc-800">
+                              <td colSpan={6} className="p-0">
+                                <div className="bg-[#13151a] p-4 rounded-b-lg mx-2 mb-2">
+                                  <p className="text-xs font-semibold text-zinc-500 uppercase tracking-wider mb-3">
+                                    Composição da nota
+                                  </p>
+                                  <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-3">
+                                    {COMPOSICAO.map(
+                                      ({ key, label: itemLabel, criterioKey }) => {
+                                        const tirada = item[key];
+                                        const maximo =
+                                          item.criterios[criterioKey];
+                                        const data =
+                                          item.datas[criterioKey];
+                                        return (
+                                          <div
+                                            key={key}
+                                            className="rounded-lg border border-zinc-800/80 bg-zinc-950/40 px-3 py-3"
+                                          >
+                                            <p className="text-xs text-zinc-500 mb-1.5">
+                                              {itemLabel}
+                                            </p>
+                                            <p className="text-sm font-medium text-white">
+                                              {tirada !== null
+                                                ? tirada.toFixed(1)
+                                                : "—"}
+                                              <span className="text-zinc-600 font-normal">
+                                                {" "}
+                                                / {maximo}
+                                              </span>
+                                            </p>
+                                            <p className="text-[11px] text-zinc-600 mt-1.5">
+                                              Data: {formatarData(data)}
+                                            </p>
+                                          </div>
+                                        );
+                                      }
+                                    )}
+                                  </div>
+                                </div>
+                              </td>
+                            </tr>
+                          )}
+                        </Fragment>
                       );
                     })
                   )}
