@@ -11,7 +11,7 @@ export async function POST(req: NextRequest) {
       {
         role: "system" as const,
         content:
-          "Você é um orientador acadêmico virtual da UniClassTech. Com base nos dados de presença do estudante, gere um alerta objetivo e preventivo de até duas frases sobre frequência escolar e risco de reprovação. Não utilize formatação markdown.",
+          "Aja como um orientador acadêmico empático e humano. Escreva exatamente uma ou duas frases curtas. Fale diretamente com o aluno de forma natural, amigável e encorajadora. Nunca use linguagem engessada, clichês institucionais ou pareça um script automático. Vá direto ao ponto.",
       },
       {
         role: "user" as const,
@@ -29,15 +29,15 @@ export async function POST(req: NextRequest) {
         messages: mensagens,
         model: "openai/gpt-oss-20b",
         temperature: 0.6,
-        max_tokens: 120,
+        max_tokens: 150,
       });
     } catch (err) {
       console.warn("Falha no modelo primário (openai/gpt-oss-20b):", err);
       completion = await groq.chat.completions.create({
         messages: mensagens,
-        model: "llama-3.1-8b-instant",
+        model: "llama3-8b-8192",
         temperature: 0.6,
-        max_tokens: 120,
+        max_tokens: 150,
       });
     }
 

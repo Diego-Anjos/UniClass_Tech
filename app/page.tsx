@@ -1,86 +1,248 @@
+"use client";
+
+import { FormEvent, useState } from "react";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { GraduationCap, Shield } from "lucide-react";
+import { supabase } from "@/lib/supabase";
+import { salvarSessaoAluno, limparSessaoAluno } from "@/lib/aluno-session";
+import { limparSessaoProfessor } from "@/lib/professor-session";
+
+type TipoLogin = "Aluno" | "Professor";
+
+const SENHA_PADRAO_ALUNO = "aluno123";
 
 export default function LoginPage() {
+  const router = useRouter();
+  const [tipoLogin, setTipoLogin] = useState<TipoLogin>("Aluno");
+  const [usuario, setUsuario] = useState("");
+  const [senha, setSenha] = useState("");
+  const [erro, setErro] = useState("");
+  const [carregando, setCarregando] = useState(false);
+
+  function trocarTipo(tipo: TipoLogin) {
+    setTipoLogin(tipo);
+    setUsuario("");
+    setSenha("");
+    setErro("");
+  }
+
+  async function handleLoginAluno(usuarioInput: string, senhaInput: string) {
+    const { data: aluno, error } = await supabase
+      .from("alunos")
+      .select("*")
+      .eq("ra", usuarioInput)
+      .single();
+
+    if (error || !aluno) {
+      setErro("RA não encontrado no sistema.");
+      return;
+    }
+
+    if (senhaInput !== SENHA_PADRAO_ALUNO) {
+      setErro("Senha incorreta.");
+      return;
+    }
+
+    limparSessaoProfessor();
+    salvarSessaoAluno({
+      ra: String(aluno.ra ?? usuarioInput),
+      nome: String(aluno.nome ?? "Estudante"),
+      curso: String(aluno.curso ?? ""),
+      semestreAtual:
+        aluno.semestre_atual ?? aluno.semestre ?? aluno.SemestreAtual ?? "",
+    });
+
+    router.push("/aluno/dashboard");
+  }
+
+  async function handleLoginProfessor(usuarioInput: string, senhaInput: string) {
+    const emailCompleto = `${usuarioInput}@uniclasstech.edu.br`;
+
+    const { data, error } = await supabase
+      .from("professores")
+      .select("*")
+      .eq("email_institucional", emailCompleto)
+      .eq("senha", senhaInput)
+      .single();
+
+    if (error || !data) {
+      setErro("Credenciais inválidas. Verifique seu e-mail e senha.");
+      return;
+    }
+
+    limparSessaoAluno();
+    localStorage.setItem(
+      "uniclass_prof_session",
+      JSON.stringify({
+        id: data.id,
+        nome: data.nome,
+        titulacao: data.titulacao,
+        area_atuacao: data.area_atuacao,
+        nomeCompletoTitulo: `${data.titulacao} ${data.nome}`,
+        turno_aula: data.turno_aula ?? "Noite",
+        dias_aula: Array.isArray(data.dias_aula) ? data.dias_aula : [],
+      })
+    );
+
+    router.push("/professor/dashboard");
+  }
+
+  async function handleLogin(e: FormEvent<HTMLFormElement>) {
+    e.preventDefault();
+    setErro("");
+    setCarregando(true);
+
+    const usuarioInput = usuario.trim();
+    const senhaInput = senha;
+
+    try {
+      if (tipoLogin === "Aluno") {
+        await handleLoginAluno(usuarioInput, senhaInput);
+      } else {
+        await handleLoginProfessor(usuarioInput, senhaInput);
+      }
+    } catch {
+      setErro(
+        tipoLogin === "Aluno"
+          ? "Não foi possível autenticar. Tente novamente."
+          : "Credenciais inválidas. Verifique seu e-mail e senha."
+      );
+    } finally {
+      setCarregando(false);
+    }
+  }
+
+  const isAluno = tipoLogin === "Aluno";
+
   return (
     <main className="min-h-screen grid grid-cols-1 md:grid-cols-2 bg-black text-white">
-      {/* LADO ESQUERDO: Formulário Clean Dark Mode */}
       <div className="flex flex-col justify-center px-8 sm:px-16 lg:px-24 py-12 bg-black">
         <div className="w-full max-w-sm mx-auto">
           <div className="flex items-center justify-center gap-2 mb-8">
             <div className="w-8 h-8 flex items-center justify-center rounded-lg bg-gradient-to-br from-zinc-800 to-zinc-950 border border-zinc-700/50 shadow-[0_0_15px_rgba(255,255,255,0.05)]">
               <GraduationCap className="w-5 h-5 text-white" />
             </div>
-            <span className="text-xl tracking-tight"><span className="text-white font-bold">UniClass</span><span className="text-zinc-400 font-light">Tech</span></span>
+            <span className="text-xl tracking-tight">
+              <span className="text-white font-bold">UniClass</span>
+              <span className="text-zinc-400 font-light">Tech</span>
+            </span>
           </div>
 
-          <div className="text-center mb-8">
-            <h1 className="text-3xl font-semibold tracking-tight mb-2">Acesse sua conta</h1>
+          <div className="text-center mb-6">
+            <h1 className="text-3xl font-semibold tracking-tight mb-2">
+              Acesse sua conta
+            </h1>
             <p className="text-sm text-zinc-400">
-              Portal do Aluno
+              {isAluno ? "Portal do Aluno" : "Portal do Docente"}
             </p>
           </div>
 
-          <div className="flex flex-col gap-4">
-            <Link href="/aluno/dashboard" className="flex items-center justify-center gap-2 w-full py-2.5 border border-zinc-800 rounded-md hover:bg-zinc-900 transition-colors text-sm font-medium">
-              <svg className="w-4 h-4" viewBox="0 0 24 24">
-                <path fill="currentColor" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z" />
-                <path fill="#34A853" d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z" />
-                <path fill="#FBBC05" d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l2.85-2.22.81-.62z" />
-                <path fill="#EA4335" d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z" />
-              </svg>
-              Continuar com Google
-            </Link>
+          <div
+            className="grid grid-cols-2 gap-1 p-1 mb-6 rounded-lg border border-zinc-800 bg-zinc-950"
+            role="tablist"
+            aria-label="Tipo de acesso"
+          >
+            <button
+              type="button"
+              role="tab"
+              aria-selected={isAluno}
+              onClick={() => trocarTipo("Aluno")}
+              className={`rounded-md py-2 text-sm font-medium transition-colors ${
+                isAluno
+                  ? "bg-zinc-800 text-white"
+                  : "text-zinc-500 hover:text-zinc-300"
+              }`}
+            >
+              Aluno
+            </button>
+            <button
+              type="button"
+              role="tab"
+              aria-selected={!isAluno}
+              onClick={() => trocarTipo("Professor")}
+              className={`rounded-md py-2 text-sm font-medium transition-colors ${
+                !isAluno
+                  ? "bg-zinc-800 text-white"
+                  : "text-zinc-500 hover:text-zinc-300"
+              }`}
+            >
+              Professor
+            </button>
+          </div>
 
-            <div className="relative flex items-center py-2">
-              <div className="flex-grow border-t border-zinc-800"></div>
-              <span className="flex-shrink-0 mx-4 text-xs text-zinc-500 uppercase">Ou</span>
-              <div className="flex-grow border-t border-zinc-800"></div>
-            </div>
+          <form onSubmit={handleLogin} className="flex flex-col gap-4">
+            {isAluno ? (
+              <input
+                type="text"
+                required
+                value={usuario}
+                onChange={(e) => setUsuario(e.target.value)}
+                placeholder="Digite seu RA"
+                autoComplete="username"
+                className="w-full bg-transparent border border-zinc-800 rounded-md px-4 py-2.5 text-sm outline-none focus:border-zinc-500 transition-colors placeholder:text-zinc-600"
+              />
+            ) : (
+              <div className="flex">
+                <input
+                  type="text"
+                  required
+                  value={usuario}
+                  onChange={(e) => setUsuario(e.target.value)}
+                  placeholder="ex: seu.nome"
+                  autoComplete="username"
+                  className="flex-1 rounded-l-md rounded-r-none border-r-0 bg-transparent border border-zinc-800 px-4 py-2.5 text-sm outline-none focus:border-zinc-500 transition-colors placeholder:text-zinc-600"
+                />
+                <span className="inline-flex items-center px-3 rounded-r-md border border-l-0 border-zinc-800 bg-zinc-900 text-zinc-500 text-sm">
+                  @uniclasstech.edu.br
+                </span>
+              </div>
+            )}
 
-            <input 
-              type="email" 
-              placeholder="Digite seu e-mail de aluno" 
+            <input
+              type="password"
+              required
+              value={senha}
+              onChange={(e) => setSenha(e.target.value)}
+              placeholder={isAluno ? "Senha" : "Insira sua senha"}
+              autoComplete="current-password"
               className="w-full bg-transparent border border-zinc-800 rounded-md px-4 py-2.5 text-sm outline-none focus:border-zinc-500 transition-colors placeholder:text-zinc-600"
             />
-            
-            <Link href="/aluno/dashboard" className="flex items-center justify-center w-full bg-white text-black font-medium py-2.5 rounded-md hover:bg-zinc-200 transition-colors text-sm">
-              Continuar
-            </Link>
-            
-            {/* NOVO: Link para Portal do Professor */}
-            <div className="mt-2 text-center">
-              <p className="text-sm text-zinc-400">
-                É professor?{" "}
-                <Link href="/professor" className="text-white hover:underline font-medium transition-colors">
-                  Acesse o portal docente
-                </Link>
-              </p>
-            </div>
-          </div>
+
+            {erro ? <p className="text-red-400 text-sm">{erro}</p> : null}
+
+            <button
+              type="submit"
+              disabled={carregando}
+              className="flex items-center justify-center w-full bg-white text-black font-medium py-2.5 rounded-md hover:bg-zinc-200 disabled:opacity-60 disabled:cursor-not-allowed transition-colors text-sm"
+            >
+              {carregando ? "Autenticando..." : "Continuar"}
+            </button>
+          </form>
 
           <p className="text-center text-xs text-zinc-600 mt-8">
             Ao continuar, você concorda com nossos{" "}
-            <Link href="#" className="underline hover:text-zinc-400">Termos de Serviço</Link> e{" "}
-            <Link href="#" className="underline hover:text-zinc-400">Política de Privacidade</Link>.
+            <Link href="#" className="underline hover:text-zinc-400">
+              Termos de Serviço
+            </Link>{" "}
+            e{" "}
+            <Link href="#" className="underline hover:text-zinc-400">
+              Política de Privacidade
+            </Link>
+            .
           </p>
         </div>
       </div>
 
-      {/* LADO DIREITO: Apresentação com Imagem de Código */}
       <div className="relative hidden md:flex flex-col justify-center px-12 lg:px-24 border-l border-zinc-800 overflow-hidden">
-        
-        {/* Imagem de Fundo (Código) */}
-        <img 
-          src="https://images.unsplash.com/photo-1542831371-29b0f74f9713?q=80&w=1000&auto=format&fit=crop" 
-          alt="Code Background" 
+        <img
+          src="https://images.unsplash.com/photo-1542831371-29b0f74f9713?q=80&w=1000&auto=format&fit=crop"
+          alt="Code Background"
           className="absolute inset-0 w-full h-full object-cover z-0"
         />
-        
-        {/* Overlay Escuro para não perder a leitura */}
+
         <div className="absolute inset-0 bg-zinc-950/85 z-0"></div>
 
-        {/* Conteúdo sobre a imagem */}
         <div className="relative z-10 max-w-md">
           <p className="text-xs font-semibold tracking-widest text-zinc-400 mb-4 uppercase">
             UniClassTech
@@ -89,18 +251,27 @@ export default function LoginPage() {
             Infraestrutura de ensino impulsionada por IA.
           </h2>
           <p className="text-zinc-300 mb-12 leading-relaxed">
-            Lançamento de notas, gestão de faltas e insights de desempenho em tempo real — tudo em uma plataforma construída para a educação moderna.
+            Lançamento de notas, gestão de faltas e insights de desempenho em
+            tempo real — tudo em uma plataforma construída para a educação
+            moderna.
           </p>
 
           <div className="space-y-4">
             <div className="p-5 rounded-xl border border-zinc-700/50 bg-black/50 backdrop-blur-md">
-              <h3 className="font-medium text-white mb-1">Insights de IA do Groq</h3>
-              <p className="text-sm text-zinc-300">Análise automática de engajamento e risco de reprovação das turmas.</p>
+              <h3 className="font-medium text-white mb-1">
+                Insights de IA do Groq
+              </h3>
+              <p className="text-sm text-zinc-300">
+                Análise automática de engajamento e risco de reprovação das
+                turmas.
+              </p>
             </div>
-            
+
             <div className="p-5 rounded-xl border border-zinc-700/50 bg-black/50 backdrop-blur-md">
               <h3 className="font-medium text-white mb-1">Gestão Simplificada</h3>
-              <p className="text-sm text-zinc-300">Controle total de notas, feedbacks e presença em poucos cliques.</p>
+              <p className="text-sm text-zinc-300">
+                Controle total de notas, feedbacks e presença em poucos cliques.
+              </p>
             </div>
           </div>
         </div>

@@ -100,6 +100,17 @@ Uniclass@2026
 
 Portal do docente: [`/professor`](http://localhost:3000/professor)
 
+### 🎓 Acesso Aluno (Ambiente de Testes)
+
+Para testar o portal do aluno, o sistema está configurado com uma senha padrão universal. O painel se adapta dinamicamente às disciplinas, professores e notas do RA logado.
+
+| Campo | Valor |
+| :--- | :--- |
+| Usuário (RA) | `20261001` (Ex: Gabriel Menezes - Banco de Dados) |
+| Senha Padrão | `aluno123` |
+
+Portal do aluno: [`/`](http://localhost:3000/)
+
 ---
 
 <div align="center">

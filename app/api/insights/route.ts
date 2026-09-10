@@ -36,7 +36,7 @@ export async function POST(req: NextRequest) {
       // Tentativa 2: Modelo de Redundância
       completion = await groq.chat.completions.create({
         messages: mensagens,
-        model: "llama-3.1-8b-instant",
+        model: "llama3-8b-8192",
         temperature: 0.7,
         max_tokens: 150,
       });

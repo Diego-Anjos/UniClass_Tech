@@ -30,7 +30,7 @@ Professor Responsável: ${professor || "Corpo Docente"}`;
           { role: "system", content: systemPrompt },
           { role: "user", content: userPrompt },
         ],
-        model: "llama-3.1-8b-instant",
+        model: "llama3-8b-8192",
         temperature: 0.6,
         response_format: { type: "json_object" },
       });

@@ -29,7 +29,7 @@ export async function POST(req: NextRequest) {
     } catch (err) {
       completion = await groq.chat.completions.create({
         messages: mensagens,
-        model: "llama-3.1-8b-instant",
+        model: "llama3-8b-8192",
         temperature: 0.6,
         max_tokens: 140,
       });

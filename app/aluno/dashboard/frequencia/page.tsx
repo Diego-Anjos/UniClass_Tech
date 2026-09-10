@@ -18,6 +18,10 @@ import {
   Settings,
 } from "lucide-react";
 import { supabase } from "@/lib/supabase";
+import {
+  limparSessaoAluno,
+  useAlunoSession,
+} from "@/lib/aluno-session";
 
 const navItems = [
   { icon: LayoutDashboard, label: "Visão Geral", href: "/aluno/dashboard", active: false },
@@ -111,6 +115,7 @@ function toCargaHoraria(raw: unknown): number {
 }
 
 export default function AlunoFrequenciaPage() {
+  const { alunoLogado, carregandoSessao } = useAlunoSession();
   const [aluno, setAluno] = useState<AlunoInfo | null>(null);
   const [frequencias, setFrequencias] = useState<FrequenciaItem[]>([]);
   const [carregando, setCarregando] = useState(true);
@@ -169,6 +174,8 @@ export default function AlunoFrequenciaPage() {
   }
 
   useEffect(() => {
+    if (carregandoSessao || !alunoLogado) return;
+
     async function carregarFrequencia() {
       setCarregando(true);
 
@@ -177,29 +184,32 @@ export default function AlunoFrequenciaPage() {
         const { data: alunoData, error: alunoError } = await supabase
           .from("alunos")
           .select("*")
-          .limit(1)
-          .maybeSingle();
+          .eq("ra", alunoLogado!.ra)
+          .single();
 
         if (alunoError || !alunoData) {
           if (alunoError) {
             console.error("Erro ao buscar aluno:", alunoError.message);
           }
-          setAluno(null);
+          setAluno({
+            nome: alunoLogado!.nome,
+            ra: alunoLogado!.ra,
+          });
           setFrequencias([]);
           setIsLoadingAi(false);
           return;
         }
 
-        const alunoLogado: AlunoInfo = {
-          nome: String(alunoData.nome ?? "Estudante"),
-          ra: String(alunoData.ra || alunoData.matricula || ""),
+        const alunoSessao: AlunoInfo = {
+          nome: String(alunoData.nome ?? alunoLogado!.nome ?? "Estudante"),
+          ra: String(alunoData.ra || alunoData.matricula || alunoLogado!.ra),
           professor: alunoData.professor
             ? String(alunoData.professor)
             : undefined,
         };
-        setAluno(alunoLogado);
+        setAluno(alunoSessao);
 
-        if (!alunoLogado.ra) {
+        if (!alunoSessao.ra) {
           setFrequencias([]);
           setIsLoadingAi(false);
           return;
@@ -209,7 +219,7 @@ export default function AlunoFrequenciaPage() {
         const { data: notasData, error: notasError } = await supabase
           .from("notas")
           .select("turma")
-          .eq("ra_aluno", alunoLogado.ra);
+          .eq("ra_aluno", alunoSessao.ra);
 
         if (notasError) {
           console.error("Erro ao buscar matrículas (notas):", notasError.message);
@@ -261,7 +271,7 @@ export default function AlunoFrequenciaPage() {
         const { data: registrosAluno, error: faltasError } = await supabase
           .from("registro_chamada")
           .select("turma_curso, status, data_aula")
-          .eq("aluno_ra", alunoLogado.ra);
+          .eq("aluno_ra", alunoSessao.ra);
 
         if (faltasError) {
           console.error("Erro ao buscar registro_chamada:", faltasError.message);
@@ -309,7 +319,7 @@ export default function AlunoFrequenciaPage() {
             turma.nome ?? turma.curso ?? turma.codigo ?? "Disciplina"
           );
           const professor = String(
-            turma.professor ?? alunoLogado.professor ?? "—"
+            turma.professor ?? alunoSessao.professor ?? "—"
           );
           const cargaHoraria = toCargaHoraria(turma.carga_horaria);
           const limiteFaltas = Math.max(1, Math.floor(cargaHoraria * 0.25));
@@ -368,14 +378,14 @@ export default function AlunoFrequenciaPage() {
                   lista.length
               );
 
-        await fetchAiFrequencia(alunoLogado.nome, presenca, emRisco);
+        await fetchAiFrequencia(alunoSessao.nome, presenca, emRisco);
       } finally {
         setCarregando(false);
       }
     }
 
     void carregarFrequencia();
-  }, []);
+  }, [alunoLogado, carregandoSessao]);
 
   return (
     <div className="flex h-screen bg-black text-white overflow-hidden">
@@ -444,6 +454,7 @@ export default function AlunoFrequenciaPage() {
         <div className="px-2 py-4 border-t border-zinc-800">
           <a
             href="/"
+            onClick={() => limparSessaoAluno()}
             className="flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm text-zinc-500 hover:bg-zinc-900 hover:text-white transition-colors"
           >
             <LogOut className="w-4 h-4 shrink-0" />
@@ -479,14 +490,14 @@ export default function AlunoFrequenciaPage() {
             >
               <Sparkles className={`w-4 h-4 ${alertaRisco.icon}`} />
             </div>
-            <div>
+            <div className="min-w-0 flex-1">
               <p
                 className={`text-xs font-semibold uppercase tracking-widest mb-1 ${alertaRisco.label}`}
               >
                 Alerta de Risco
               </p>
               <p
-                className={`text-sm text-zinc-300 leading-relaxed ${
+                className={`text-sm text-zinc-300 leading-relaxed break-words whitespace-normal ${
                   isLoadingAi ? "animate-pulse" : ""
                 }`}
               >

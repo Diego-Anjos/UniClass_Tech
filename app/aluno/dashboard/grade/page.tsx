@@ -7,7 +7,7 @@ import {
   ClipboardList,
   CalendarCheck,
   BookOpen,
-  Map,
+  Map as MapIcon,
   LogOut,
   Camera,
   Sparkles,
@@ -20,31 +20,45 @@ import {
 } from "lucide-react";
 import { supabase } from "@/lib/supabase";
 import { ModalFeedback } from "@/components/ModalFeedback";
+import {
+  limparSessaoAluno,
+  useAlunoSession,
+} from "@/lib/aluno-session";
 
 const navItems = [
   { icon: LayoutDashboard, label: "Visão Geral", href: "/aluno/dashboard", active: false },
   { icon: ClipboardList, label: "Boletim e Notas", href: "/aluno/dashboard/notas", active: false },
   { icon: CalendarCheck, label: "Frequência", href: "/aluno/dashboard/frequencia", active: false },
   { icon: BookOpen, label: "Grade e Matérias", href: "/aluno/dashboard/grade", active: true },
-  { icon: Map, label: "Mapa de Salas e Labs", href: "/aluno/dashboard/mapa", active: false },
+  { icon: MapIcon, label: "Mapa de Salas e Labs", href: "/aluno/dashboard/mapa", active: false },
   { icon: MessageSquare, label: "Contato", href: "/aluno/dashboard/contato", active: false },
 ];
 
-const CARGA_TOTAL = 2400;
-const HORAS_CURSADAS_COM_DISCIPLINAS = 1560;
+const CARGA_TOTAL_PADRAO = 2400;
+const CARGA_HORARIA_DISCIPLINA_PADRAO = 80;
+const SEMESTRE_PADRAO = 4;
+const SEMESTRE_LIMITE_CURSO = 8;
+const HORAS_POR_SEMESTRE_SIMULADO = 300;
 
 type AlunoInfo = {
   nome: string;
   ra: string;
   curso: string;
+  semestreAtual: number;
+  cargaHorariaTotal: number;
 };
 
-type Disciplina = {
+type TurmaVinculo = {
+  id?: string;
+  curso?: string | null;
+  professor?: string | null;
+  carga_horaria?: number | null;
+};
+
+type HistoricoDisciplina = {
   id: string;
-  nome: string;
-  cargaHoraria: number;
-  creditos: number;
   status: string;
+  turmas: TurmaVinculo | null;
 };
 
 function iniciaisDe(nome: string) {
@@ -58,9 +72,62 @@ function iniciaisDe(nome: string) {
   );
 }
 
+function extrairNumeroSemestre(raw: unknown): number {
+  if (typeof raw === "number" && Number.isFinite(raw) && raw > 0) {
+    return Math.min(Math.floor(raw), SEMESTRE_LIMITE_CURSO);
+  }
+  if (typeof raw === "string") {
+    const match = raw.match(/(\d+)/);
+    if (match) {
+      const n = Number(match[1]);
+      if (Number.isFinite(n) && n > 0) {
+        return Math.min(n, SEMESTRE_LIMITE_CURSO);
+      }
+    }
+  }
+  return SEMESTRE_PADRAO;
+}
+
+function cargaDe(turma: TurmaVinculo | null): number {
+  const n = Number(turma?.carga_horaria);
+  if (!Number.isFinite(n) || n <= 0) return CARGA_HORARIA_DISCIPLINA_PADRAO;
+  return n;
+}
+
+function normalizarTurma(raw: unknown): TurmaVinculo | null {
+  if (!raw) return null;
+  if (Array.isArray(raw)) {
+    return raw[0] ? normalizarTurma(raw[0]) : null;
+  }
+  if (typeof raw !== "object") return null;
+  const t = raw as Record<string, unknown>;
+  return {
+    id: t.id != null ? String(t.id) : undefined,
+    curso: t.curso != null ? String(t.curso) : null,
+    professor: t.professor != null ? String(t.professor) : null,
+    carga_horaria:
+      t.carga_horaria != null && !Number.isNaN(Number(t.carga_horaria))
+        ? Number(t.carga_horaria)
+        : null,
+  };
+}
+
+function isConcluida(status: string) {
+  return status.trim().toLowerCase() === "aprovado";
+}
+
+function isEmAndamento(status: string) {
+  const s = status.trim().toLowerCase();
+  return s === "cursando" || s === "pendente" || s === "exame final";
+}
+
 export default function AlunoGradePage() {
+  const { alunoLogado, carregandoSessao } = useAlunoSession();
   const [aluno, setAluno] = useState<AlunoInfo | null>(null);
-  const [disciplinas, setDisciplinas] = useState<Disciplina[]>([]);
+  const [historicoDisciplinas, setHistoricoDisciplinas] = useState<
+    HistoricoDisciplina[]
+  >([]);
+  const [carregando, setCarregando] = useState(true);
   const [aiInsight, setAiInsight] = useState("");
   const [isLoadingAi, setIsLoadingAi] = useState(true);
   const [modalFeedback, setModalFeedback] = useState<{
@@ -75,25 +142,70 @@ export default function AlunoGradePage() {
     mensagem: "",
   });
 
-  const { horasCursadas, horasRestantes, progresso } = useMemo(() => {
-    if (disciplinas.length === 0) {
+  const semestreAtual = aluno?.semestreAtual ?? SEMESTRE_PADRAO;
+  const cargaHorariaTotalCurso =
+    aluno?.cargaHorariaTotal ?? CARGA_TOTAL_PADRAO;
+
+  const concluidas = useMemo(
+    () => historicoDisciplinas.filter((d) => isConcluida(d.status)),
+    [historicoDisciplinas]
+  );
+
+  const emAndamento = useMemo(
+    () => historicoDisciplinas.filter((d) => isEmAndamento(d.status)),
+    [historicoDisciplinas]
+  );
+
+  const { horasCursadas, horasRestantes, progresso, horasEmAndamento } =
+    useMemo(() => {
+      const horasConcluidasReais = concluidas.reduce(
+        (acc, d) => acc + cargaDe(d.turmas),
+        0
+      );
+      const horasAndamento = emAndamento.reduce(
+        (acc, d) => acc + cargaDe(d.turmas),
+        0
+      );
+
+      const horasBaseSimuladas = (semestreAtual - 1) * HORAS_POR_SEMESTRE_SIMULADO;
+      // Simulação inteligente quando o histórico real ainda é baixo para o protótipo
+      const horasSimuladas =
+        horasConcluidasReais < horasBaseSimuladas
+          ? horasBaseSimuladas + horasConcluidasReais
+          : Math.max(horasConcluidasReais, horasBaseSimuladas);
+
+      const cursadas = Math.min(horasSimuladas, cargaHorariaTotalCurso);
+      const restantes = Math.max(cargaHorariaTotalCurso - cursadas, 0);
+      const pct = Math.round((cursadas / cargaHorariaTotalCurso) * 100);
+
       return {
-        horasCursadas: 0,
-        horasRestantes: CARGA_TOTAL,
-        progresso: 0,
+        horasCursadas: cursadas,
+        horasRestantes: restantes,
+        progresso: pct,
+        horasEmAndamento: horasAndamento,
       };
-    }
+    }, [
+      concluidas,
+      emAndamento,
+      semestreAtual,
+      cargaHorariaTotalCurso,
+    ]);
 
-    const cursadas = HORAS_CURSADAS_COM_DISCIPLINAS;
-    const restantes = Math.max(CARGA_TOTAL - cursadas, 0);
-    return {
-      horasCursadas: cursadas,
-      horasRestantes: restantes,
-      progresso: Math.round((cursadas / CARGA_TOTAL) * 100),
-    };
-  }, [disciplinas.length]);
+  const labelSemestresConcluidos =
+    semestreAtual <= 1
+      ? "Nenhum semestre concluído"
+      : semestreAtual === 2
+        ? "1º Semestre"
+        : `1º ao ${semestreAtual - 1}º Semestre`;
 
-  async function fetchAiGrade(cursoNome: string, lista: Disciplina[]) {
+  const labelSemestresPendentes =
+    semestreAtual >= SEMESTRE_LIMITE_CURSO
+      ? "Curso em fase final"
+      : semestreAtual + 1 === SEMESTRE_LIMITE_CURSO
+        ? `${SEMESTRE_LIMITE_CURSO}º Semestre`
+        : `${semestreAtual + 1}º ao ${SEMESTRE_LIMITE_CURSO}º Semestre`;
+
+  async function fetchAiGrade(cursoNome: string, nomes: string[]) {
     setIsLoadingAi(true);
     try {
       const response = await fetch("/api/insights/grade-curricular", {
@@ -101,7 +213,7 @@ export default function AlunoGradePage() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           cursoNome: cursoNome || "Tecnologia da Informação",
-          disciplinasAtuais: lista.map((d) => d.nome),
+          disciplinasAtuais: nomes,
         }),
       });
 
@@ -121,55 +233,142 @@ export default function AlunoGradePage() {
   }
 
   useEffect(() => {
+    if (carregandoSessao || !alunoLogado) return;
+
     async function carregarGrade() {
-      const { data: alunoData, error: alunoError } = await supabase
-        .from("alunos")
-        .select("*")
-        .limit(1)
-        .maybeSingle();
+      setCarregando(true);
 
-      let cursoNome = "Tecnologia da Informação";
-      if (alunoError || !alunoData) {
-        if (alunoError) {
-          console.error("Erro ao buscar aluno:", alunoError.message);
+      try {
+        const { data: alunoData, error: alunoError } = await supabase
+          .from("alunos")
+          .select("*")
+          .eq("ra", alunoLogado!.ra)
+          .single();
+
+        if (alunoError || !alunoData) {
+          if (alunoError) {
+            console.error("Erro ao buscar aluno:", alunoError.message);
+          }
+          setAluno({
+            nome: alunoLogado!.nome,
+            ra: alunoLogado!.ra,
+            curso: alunoLogado!.curso || "Tecnologia da Informação",
+            semestreAtual: extrairNumeroSemestre(alunoLogado!.semestreAtual),
+            cargaHorariaTotal: CARGA_TOTAL_PADRAO,
+          });
+          setHistoricoDisciplinas([]);
+          setIsLoadingAi(false);
+          return;
         }
-        setAluno(null);
-      } else {
-        const info: AlunoInfo = {
-          nome: String(alunoData.nome ?? "Estudante"),
-          ra: String(alunoData.ra || alunoData.matricula || "RA-0000"),
-          curso: String(alunoData.curso || "Tecnologia da Informação"),
+
+        const alunoSessao: AlunoInfo = {
+          nome: String(alunoData.nome ?? alunoLogado!.nome ?? "Estudante"),
+          ra: String(alunoData.ra || alunoData.matricula || alunoLogado!.ra),
+          curso: String(
+            alunoData.curso || alunoLogado!.curso || "Tecnologia da Informação"
+          ),
+          semestreAtual: extrairNumeroSemestre(
+            alunoData.semestre_atual ??
+              alunoData.semestre ??
+              alunoLogado!.semestreAtual
+          ),
+          cargaHorariaTotal: (() => {
+            const n = Number(
+              alunoData.carga_horaria_total ??
+                alunoData.carga_horaria_curso ??
+                alunoData.carga_horaria
+            );
+            return Number.isFinite(n) && n > 0 ? n : CARGA_TOTAL_PADRAO;
+          })(),
         };
-        setAluno(info);
-        cursoNome = info.curso;
+        setAluno(alunoSessao);
+
+        if (!alunoSessao.ra) {
+          setHistoricoDisciplinas([]);
+          setIsLoadingAi(false);
+          return;
+        }
+
+        let historico: HistoricoDisciplina[] = [];
+
+        const { data: notasJoin, error: notasJoinError } = await supabase
+          .from("notas")
+          .select("id, status, turmas(id, curso, professor, carga_horaria)")
+          .eq("ra_aluno", alunoSessao.ra);
+
+        if (notasJoinError) {
+          console.warn(
+            "Join notas→turmas falhou, buscando em separado:",
+            notasJoinError.message
+          );
+
+          const { data: notasSimples, error: notasError } = await supabase
+            .from("notas")
+            .select("id, status, turma")
+            .eq("ra_aluno", alunoSessao.ra);
+
+          if (notasError) {
+            console.error("Erro ao buscar histórico:", notasError.message);
+            setHistoricoDisciplinas([]);
+            await fetchAiGrade(alunoSessao.curso, []);
+            return;
+          }
+
+          const turmaIds = [
+            ...new Set(
+              (notasSimples ?? [])
+                .map((n) => String(n.turma ?? ""))
+                .filter(Boolean)
+            ),
+          ];
+
+          const mapaTurmas = new Map<string, TurmaVinculo>();
+          if (turmaIds.length > 0) {
+            const { data: turmasData } = await supabase
+              .from("turmas")
+              .select("id, curso, professor, carga_horaria")
+              .in("id", turmaIds);
+
+            for (const t of turmasData ?? []) {
+              mapaTurmas.set(String(t.id), {
+                id: String(t.id),
+                curso: t.curso != null ? String(t.curso) : null,
+                professor: t.professor != null ? String(t.professor) : null,
+                carga_horaria:
+                  t.carga_horaria != null
+                    ? Number(t.carga_horaria)
+                    : null,
+              });
+            }
+          }
+
+          historico = (notasSimples ?? []).map((n, idx) => ({
+            id: String(n.id ?? `nota-${idx}`),
+            status: String(n.status ?? "Pendente"),
+            turmas: mapaTurmas.get(String(n.turma ?? "")) ?? null,
+          }));
+        } else {
+          historico = (notasJoin ?? []).map((n, idx) => ({
+            id: String(n.id ?? `nota-${idx}`),
+            status: String(n.status ?? "Pendente"),
+            turmas: normalizarTurma(n.turmas),
+          }));
+        }
+
+        setHistoricoDisciplinas(historico);
+
+        const nomesEmAndamento = historico
+          .filter((d) => isEmAndamento(d.status))
+          .map((d) => d.turmas?.curso || "Disciplina sem nome");
+
+        await fetchAiGrade(alunoSessao.curso, nomesEmAndamento);
+      } finally {
+        setCarregando(false);
       }
-
-      const { data: turmasData, error: turmasError } = await supabase
-        .from("turmas")
-        .select("id, codigo, curso, turno");
-
-      let lista: Disciplina[] = [];
-      if (turmasError) {
-        console.error("Erro ao buscar turmas:", turmasError.message);
-        setDisciplinas([]);
-      } else if (turmasData && turmasData.length > 0) {
-        lista = turmasData.map((turma) => ({
-          id: String(turma.id),
-          nome: String(turma.curso ?? "Disciplina"),
-          cargaHoraria: 80,
-          creditos: 4,
-          status: "Em andamento",
-        }));
-        setDisciplinas(lista);
-      } else {
-        setDisciplinas([]);
-      }
-
-      await fetchAiGrade(cursoNome, lista);
     }
 
     void carregarGrade();
-  }, []);
+  }, [alunoLogado, carregandoSessao]);
 
   function handleBaixarEmenta() {
     setModalFeedback({
@@ -233,7 +432,7 @@ export default function AlunoGradePage() {
         {/* Nav */}
         <nav className="flex flex-col gap-0.5 px-2 py-4 flex-1">
           {navItems.map(({ icon: Icon, label, href, active }) => (
-            <a
+            <Link
               key={label}
               href={href}
               className={`flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm transition-colors ${
@@ -244,7 +443,7 @@ export default function AlunoGradePage() {
             >
               <Icon className="w-4 h-4 shrink-0" />
               {label}
-            </a>
+            </Link>
           ))}
         </nav>
 
@@ -252,6 +451,7 @@ export default function AlunoGradePage() {
         <div className="px-2 py-4 border-t border-zinc-800">
           <a
             href="/"
+            onClick={() => limparSessaoAluno()}
             className="flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm text-zinc-500 hover:bg-zinc-900 hover:text-white transition-colors"
           >
             <LogOut className="w-4 h-4 shrink-0" />
@@ -290,12 +490,12 @@ export default function AlunoGradePage() {
             <div className="shrink-0 mt-0.5 w-8 h-8 rounded-lg bg-zinc-800 border border-zinc-700/50 flex items-center justify-center">
               <Sparkles className="w-4 h-4 text-zinc-300" />
             </div>
-            <div>
+            <div className="min-w-0 flex-1">
               <p className="text-xs font-semibold text-zinc-400 uppercase tracking-widest mb-1">
                 Insight da IA
               </p>
               <p
-                className={`text-sm text-zinc-300 leading-relaxed ${
+                className={`text-sm text-zinc-300 leading-relaxed break-words whitespace-normal ${
                   isLoadingAi ? "animate-pulse" : ""
                 }`}
               >
@@ -311,22 +511,24 @@ export default function AlunoGradePage() {
             <div className="flex items-center justify-between mb-4">
               <h2 className="text-sm font-semibold">Progresso Geral do Curso</h2>
               <span className="text-3xl font-semibold tracking-tight">
-                {progresso}%
+                {carregando ? "…" : `${progresso}%`}
               </span>
             </div>
             <div className="w-full h-3 bg-zinc-800 rounded-full overflow-hidden">
               <div
                 className="h-full bg-white rounded-full transition-all"
-                style={{ width: `${progresso}%` }}
+                style={{ width: `${carregando ? 0 : progresso}%` }}
               />
             </div>
-            <div className="grid grid-cols-2 gap-4 mt-4">
+            <div className="grid grid-cols-2 sm:grid-cols-3 gap-4 mt-4">
               <div>
                 <p className="text-xs text-zinc-500 uppercase tracking-widest">
                   Horas Cursadas
                 </p>
                 <p className="text-lg font-semibold mt-1">
-                  {horasCursadas.toLocaleString("pt-BR")}h
+                  {carregando
+                    ? "…"
+                    : `${horasCursadas.toLocaleString("pt-BR")}h`}
                 </p>
               </div>
               <div>
@@ -334,7 +536,19 @@ export default function AlunoGradePage() {
                   Horas Restantes
                 </p>
                 <p className="text-lg font-semibold mt-1">
-                  {horasRestantes.toLocaleString("pt-BR")}h
+                  {carregando
+                    ? "…"
+                    : `${horasRestantes.toLocaleString("pt-BR")}h`}
+                </p>
+              </div>
+              <div>
+                <p className="text-xs text-zinc-500 uppercase tracking-widest">
+                  Em Andamento
+                </p>
+                <p className="text-lg font-semibold mt-1">
+                  {carregando
+                    ? "…"
+                    : `${horasEmAndamento.toLocaleString("pt-BR")}h`}
                 </p>
               </div>
             </div>
@@ -346,37 +560,44 @@ export default function AlunoGradePage() {
             <div className="lg:col-span-2 rounded-xl bg-zinc-950 border border-zinc-800 overflow-hidden">
               <div className="px-6 py-4 border-b border-zinc-800 flex items-center justify-between">
                 <h2 className="text-sm font-semibold">
-                  Semestre Atual (4º Semestre)
+                  Semestre Atual ({semestreAtual}º Semestre)
                 </h2>
                 <span className="text-xs text-zinc-600">
-                  {disciplinas.length} disciplinas
+                  {carregando ? "…" : `${emAndamento.length} disciplinas`}
                 </span>
               </div>
               <div className="flex flex-col divide-y divide-zinc-800">
-                {disciplinas.length === 0 ? (
+                {carregando ? (
+                  <p className="px-6 py-10 text-sm text-zinc-500 text-center animate-pulse">
+                    Carregando disciplinas...
+                  </p>
+                ) : emAndamento.length === 0 ? (
                   <p className="px-6 py-10 text-sm text-zinc-500 text-center">
                     Nenhuma disciplina em andamento neste semestre.
                   </p>
                 ) : (
-                  disciplinas.map((d) => (
-                    <div
-                      key={d.id}
-                      className="px-6 py-4 hover:bg-zinc-900/50 transition-colors"
-                    >
-                      <div className="flex items-center justify-between gap-3 mb-2">
-                        <p className="text-sm font-medium text-white">
-                          {d.nome}
+                  emAndamento.map((disciplina) => {
+                    const carga = cargaDe(disciplina.turmas);
+                    const creditos = Math.round(carga / 20);
+                    return (
+                      <div
+                        key={disciplina.id}
+                        className="px-6 py-4 hover:bg-zinc-900/50 transition-colors"
+                      >
+                        <div className="flex items-center justify-between gap-3 mb-2">
+                          <p className="text-sm font-medium text-white">
+                            {disciplina.turmas?.curso || "Disciplina sem nome"}
+                          </p>
+                          <span className="text-[10px] font-semibold px-2 py-0.5 rounded-full bg-blue-950/60 text-blue-400 border border-blue-800 whitespace-nowrap">
+                            Em andamento
+                          </span>
+                        </div>
+                        <p className="text-xs text-zinc-500">
+                          Carga Horária: {carga}h | Créditos: {creditos}
                         </p>
-                        <span className="text-[10px] font-semibold px-2 py-0.5 rounded-full bg-blue-950/60 text-blue-400 border border-blue-800 whitespace-nowrap">
-                          Em andamento
-                        </span>
                       </div>
-                      <p className="text-xs text-zinc-500">
-                        Carga Horária: {d.cargaHoraria}h &nbsp;|&nbsp; Créditos:{" "}
-                        {d.creditos}
-                      </p>
-                    </div>
-                  ))
+                    );
+                  })
                 )}
               </div>
             </div>
@@ -394,7 +615,7 @@ export default function AlunoGradePage() {
                     </div>
                     <div className="min-w-0 flex-1">
                       <p className="text-sm font-medium text-white">
-                        1º ao 3º Semestre
+                        {labelSemestresConcluidos}
                       </p>
                     </div>
                     <span className="text-[10px] font-semibold px-2 py-0.5 rounded-full bg-emerald-950 text-emerald-400 border border-emerald-900 whitespace-nowrap">
@@ -402,28 +623,34 @@ export default function AlunoGradePage() {
                     </span>
                   </div>
                   <p className="text-xs text-zinc-500 ml-10">
-                    12 disciplinas concluídas
+                    {concluidas.length}{" "}
+                    {concluidas.length === 1
+                      ? "disciplina concluída"
+                      : "disciplinas concluídas"}
                   </p>
                 </div>
 
-                <div className="px-5 py-4 hover:bg-zinc-900/50 transition-colors">
-                  <div className="flex items-center gap-3 mb-1.5">
-                    <div className="w-7 h-7 rounded-lg bg-zinc-900 border border-zinc-800 flex items-center justify-center shrink-0">
-                      <Lock className="w-3.5 h-3.5 text-zinc-500" />
+                {semestreAtual < SEMESTRE_LIMITE_CURSO && (
+                  <div className="px-5 py-4 hover:bg-zinc-900/50 transition-colors">
+                    <div className="flex items-center gap-3 mb-1.5">
+                      <div className="w-7 h-7 rounded-lg bg-zinc-900 border border-zinc-800 flex items-center justify-center shrink-0">
+                        <Lock className="w-3.5 h-3.5 text-zinc-500" />
+                      </div>
+                      <div className="min-w-0 flex-1">
+                        <p className="text-sm font-medium text-white">
+                          {labelSemestresPendentes}
+                        </p>
+                      </div>
+                      <span className="text-[10px] font-semibold px-2 py-0.5 rounded-full bg-zinc-900 text-zinc-400 border border-zinc-800 whitespace-nowrap">
+                        Pendente
+                      </span>
                     </div>
-                    <div className="min-w-0 flex-1">
-                      <p className="text-sm font-medium text-white">
-                        5º ao 8º Semestre
-                      </p>
-                    </div>
-                    <span className="text-[10px] font-semibold px-2 py-0.5 rounded-full bg-zinc-900 text-zinc-400 border border-zinc-800 whitespace-nowrap">
-                      Pendente
-                    </span>
+                    <p className="text-xs text-zinc-500 ml-10">
+                      {horasRestantes.toLocaleString("pt-BR")}h restantes no
+                      curso
+                    </p>
                   </div>
-                  <p className="text-xs text-zinc-500 ml-10">
-                    16 disciplinas restantes
-                  </p>
-                </div>
+                )}
               </div>
             </div>
           </div>

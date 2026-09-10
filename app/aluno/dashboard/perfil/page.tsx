@@ -16,6 +16,7 @@ import {
   MessageSquare,
   Pencil,
 } from "lucide-react";
+import { limparSessaoAluno } from "@/lib/aluno-session";
 
 const navItems = [
   { icon: LayoutDashboard, label: "Visão Geral",         href: "/aluno/dashboard",            active: false },
@@ -110,6 +111,7 @@ export default function AlunoPerfilPage() {
         <div className="px-2 py-4 border-t border-zinc-800">
           <a
             href="/"
+            onClick={() => limparSessaoAluno()}
             className="flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm text-zinc-500 hover:bg-zinc-900 hover:text-white transition-colors"
           >
             <LogOut className="w-4 h-4 shrink-0" />

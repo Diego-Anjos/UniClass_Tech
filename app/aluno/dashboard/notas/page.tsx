@@ -19,6 +19,10 @@ import {
 } from "lucide-react";
 import { supabase } from "@/lib/supabase";
 import { ModalFeedback } from "@/components/ModalFeedback";
+import {
+  limparSessaoAluno,
+  useAlunoSession,
+} from "@/lib/aluno-session";
 
 const navItems = [
   { icon: LayoutDashboard, label: "Visão Geral",         href: "/aluno/dashboard",        active: false },
@@ -183,6 +187,7 @@ function iniciaisDe(nome: string) {
 }
 
 export default function AlunoNotasPage() {
+  const { alunoLogado, carregandoSessao } = useAlunoSession();
   const [aluno, setAluno] = useState<AlunoInfo | null>(null);
   const [boletim, setBoletim] = useState<BoletimItem[]>([]);
   const [expandidoId, setExpandidoId] = useState<string | null>(null);
@@ -251,6 +256,8 @@ export default function AlunoNotasPage() {
   }
 
   useEffect(() => {
+    if (carregandoSessao || !alunoLogado) return;
+
     async function carregarBoletim() {
       setCarregando(true);
 
@@ -259,30 +266,36 @@ export default function AlunoNotasPage() {
         const { data: alunoData, error: alunoError } = await supabase
           .from("alunos")
           .select("*")
-          .limit(1)
-          .maybeSingle();
+          .eq("ra", alunoLogado!.ra)
+          .single();
 
         if (alunoError || !alunoData) {
           if (alunoError) {
             console.error("Erro ao buscar aluno:", alunoError.message);
           }
-          setAluno(null);
+          setAluno({
+            nome: alunoLogado!.nome,
+            ra: alunoLogado!.ra,
+            curso: alunoLogado!.curso || "Tecnologia da Informação",
+          });
           setBoletim([]);
           setIsLoadingAi(false);
           return;
         }
 
-        const alunoLogado: AlunoInfo = {
-          nome: String(alunoData.nome ?? "Estudante"),
-          ra: String(alunoData.ra || alunoData.matricula || ""),
-          curso: String(alunoData.curso || "Tecnologia da Informação"),
+        const alunoSessao: AlunoInfo = {
+          nome: String(alunoData.nome ?? alunoLogado!.nome ?? "Estudante"),
+          ra: String(alunoData.ra || alunoData.matricula || alunoLogado!.ra),
+          curso: String(
+            alunoData.curso || alunoLogado!.curso || "Tecnologia da Informação"
+          ),
           professor: alunoData.professor
             ? String(alunoData.professor)
             : undefined,
         };
-        setAluno(alunoLogado);
+        setAluno(alunoSessao);
 
-        if (!alunoLogado.ra) {
+        if (!alunoSessao.ra) {
           setBoletim([]);
           setIsLoadingAi(false);
           return;
@@ -296,7 +309,7 @@ export default function AlunoNotasPage() {
           .select(
             "*, turmas(curso, professor, criterios_notas, datas_avaliacoes)"
           )
-          .eq("ra_aluno", alunoLogado.ra);
+          .eq("ra_aluno", alunoSessao.ra);
 
         if (notasJoinError) {
           console.warn(
@@ -307,12 +320,12 @@ export default function AlunoNotasPage() {
           const { data: notasSimples, error: notasError } = await supabase
             .from("notas")
             .select("*")
-            .eq("ra_aluno", alunoLogado.ra);
+            .eq("ra_aluno", alunoSessao.ra);
 
           if (notasError) {
             console.error("Erro ao buscar notas:", notasError.message);
             setBoletim([]);
-            await fetchAiBoletimInsight(alunoLogado.nome, []);
+            await fetchAiBoletimInsight(alunoSessao.nome, []);
             return;
           }
 
@@ -351,7 +364,7 @@ export default function AlunoNotasPage() {
         const { data: faltasData, error: faltasError } = await supabase
           .from("registro_chamada")
           .select("turma_curso, status")
-          .eq("aluno_ra", alunoLogado.ra);
+          .eq("aluno_ra", alunoSessao.ra);
 
         if (faltasError) {
           console.error("Erro ao buscar faltas:", faltasError.message);
@@ -420,14 +433,14 @@ export default function AlunoNotasPage() {
         });
 
         setBoletim(lista);
-        await fetchAiBoletimInsight(alunoLogado.nome, lista);
+        await fetchAiBoletimInsight(alunoSessao.nome, lista);
       } finally {
         setCarregando(false);
       }
     }
 
     void carregarBoletim();
-  }, []);
+  }, [alunoLogado, carregandoSessao]);
 
   function handleBaixarPdf() {
     setModalFeedback({
@@ -513,6 +526,7 @@ export default function AlunoNotasPage() {
         <div className="px-2 py-4 border-t border-zinc-800">
           <a
             href="/"
+            onClick={() => limparSessaoAluno()}
             className="flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm text-zinc-500 hover:bg-zinc-900 hover:text-white transition-colors"
           >
             <LogOut className="w-4 h-4 shrink-0" />

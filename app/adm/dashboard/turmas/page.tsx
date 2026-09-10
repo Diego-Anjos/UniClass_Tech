@@ -49,6 +49,8 @@ type Turma = {
   semestre: string;
   matriculados: number;
   percentual: number;
+  sala: string;
+  andar: string;
 };
 
 type FormDataTurma = {
@@ -60,6 +62,23 @@ type FormDataTurma = {
 };
 
 const SEMESTRES = Array.from({ length: 10 }, (_, i) => `${i + 1}º Semestre`);
+
+const ANDARES = [
+  "Térreo",
+  "1º Andar",
+  "2º Andar",
+  "3º Andar",
+  "4º Andar",
+] as const;
+
+const SALAS_LABS = [
+  "Sala 101",
+  "Sala 102",
+  "Lab 1",
+  "Lab 2",
+  "Lab 3",
+  "Auditório",
+] as const;
 
 const formInicial: FormDataTurma = {
   codigo: "",
@@ -153,6 +172,8 @@ function mapTurma(
     semestre: String(row.semestre ?? "1º Semestre"),
     matriculados,
     percentual,
+    sala: String(row.sala ?? ""),
+    andar: String(row.andar ?? ""),
   };
 }
 
@@ -163,6 +184,8 @@ export default function TurmasMatriculasPage() {
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [formError, setFormError] = useState<string | null>(null);
   const [formData, setFormData] = useState<FormDataTurma>(formInicial);
+  const [andarSelecionado, setAndarSelecionado] = useState("");
+  const [salaSelecionada, setSalaSelecionada] = useState("");
   const [editingId, setEditingId] = useState<string | null>(null);
   const [itemToDelete, setItemToDelete] = useState<string | null>(null);
   const [modalFeedback, setModalFeedback] = useState<{
@@ -464,6 +487,8 @@ export default function TurmasMatriculasPage() {
   function fecharModal() {
     setIsModalOpen(false);
     setFormData(formInicial);
+    setAndarSelecionado("");
+    setSalaSelecionada("");
     setFormError(null);
     setEditingId(null);
   }
@@ -491,8 +516,38 @@ export default function TurmasMatriculasPage() {
           : "1º Semestre",
       capacidade: String(turma.capacidade),
     });
+    setAndarSelecionado(turma.andar || "");
+    setSalaSelecionada(turma.sala || "");
     setEditingId(turma.id);
     setIsModalOpen(true);
+  }
+
+  async function verificarConflitoSalaTurma(): Promise<string | null> {
+    if (!salaSelecionada || !formData.turno) return null;
+
+    let query = supabase
+      .from("turmas")
+      .select("id, professor, dias_aula, curso, codigo")
+      .eq("sala", salaSelecionada)
+      .eq("turno", formData.turno);
+
+    if (editingId) {
+      query = query.neq("id", editingId);
+    }
+
+    const { data: registros, error } = await query;
+    if (error) {
+      console.error("Erro ao verificar conflito de sala:", error.message);
+      return null;
+    }
+    if (!registros || registros.length === 0) return null;
+
+    // Sem dias no formulário de turma: qualquer ocupação da sala no turno é conflito
+    const conflito = registros[0];
+    return (
+      String(conflito.professor ?? "").trim() ||
+      String(conflito.curso ?? conflito.codigo ?? "outra turma")
+    );
   }
 
   async function salvarTurma() {
@@ -508,6 +563,19 @@ export default function TurmasMatriculasPage() {
       return;
     }
 
+    const professorConflito = await verificarConflitoSalaTurma();
+    if (professorConflito) {
+      const mensagem = `Atenção: A sala/laboratório selecionado já está ocupado por ${professorConflito} neste mesmo turno e dia(s). Por favor, escolha outro local.`;
+      setFormError(mensagem);
+      setModalFeedback({
+        aberto: true,
+        tipo: "erro",
+        titulo: "Conflito de Sala",
+        mensagem,
+      });
+      return;
+    }
+
     setIsSubmitting(true);
     const payload = {
       codigo,
@@ -515,6 +583,8 @@ export default function TurmasMatriculasPage() {
       turno: formData.turno,
       semestre,
       capacidade,
+      andar: andarSelecionado || null,
+      sala: salaSelecionada || null,
     };
     const { error } = editingId
       ? await supabase.from("turmas").update(payload).eq("id", editingId)
@@ -559,7 +629,14 @@ export default function TurmasMatriculasPage() {
             </div>
             <button
               type="button"
-              onClick={() => setIsModalOpen(true)}
+              onClick={() => {
+                setFormData(formInicial);
+                setAndarSelecionado("");
+                setSalaSelecionada("");
+                setEditingId(null);
+                setFormError(null);
+                setIsModalOpen(true);
+              }}
               className="inline-flex items-center justify-center gap-2 px-4 py-2.5 rounded-lg bg-white text-black text-sm font-medium hover:bg-zinc-200 transition-colors shrink-0"
             >
               <UserPlus className="w-4 h-4" />
@@ -821,6 +898,14 @@ export default function TurmasMatriculasPage() {
                   <div className="space-y-4">
                     <div className="rounded-xl bg-zinc-900 border border-gray-800 p-4 space-y-3">
                       <Campo label="Turno" valor={turmaSelecionada.turno} />
+                      <Campo
+                        label="Andar"
+                        valor={turmaSelecionada.andar || "Não definido"}
+                      />
+                      <Campo
+                        label="Sala / Laboratório"
+                        valor={turmaSelecionada.sala || "Não definida"}
+                      />
                       <Campo
                         label="Semestre"
                         valor={
@@ -1130,6 +1215,44 @@ export default function TurmasMatriculasPage() {
                   >
                     <option value="Manhã">Manhã</option>
                     <option value="Noite">Noite</option>
+                  </select>
+                </div>
+
+                <div>
+                  <label className={labelClass} htmlFor="turma-andar">
+                    Andar
+                  </label>
+                  <select
+                    id="turma-andar"
+                    value={andarSelecionado}
+                    onChange={(e) => setAndarSelecionado(e.target.value)}
+                    className={inputClass}
+                  >
+                    <option value="">Selecione o andar</option>
+                    {ANDARES.map((andar) => (
+                      <option key={andar} value={andar}>
+                        {andar}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
+                <div>
+                  <label className={labelClass} htmlFor="turma-sala">
+                    Sala / Laboratório
+                  </label>
+                  <select
+                    id="turma-sala"
+                    value={salaSelecionada}
+                    onChange={(e) => setSalaSelecionada(e.target.value)}
+                    className={inputClass}
+                  >
+                    <option value="">Selecione a sala ou laboratório</option>
+                    {SALAS_LABS.map((sala) => (
+                      <option key={sala} value={sala}>
+                        {sala}
+                      </option>
+                    ))}
                   </select>
                 </div>
 

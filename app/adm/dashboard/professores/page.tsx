@@ -100,6 +100,23 @@ const formInicial: FormDataProfessor = {
   telefone: "",
 };
 
+const ANDARES = [
+  "Térreo",
+  "1º Andar",
+  "2º Andar",
+  "3º Andar",
+  "4º Andar",
+] as const;
+
+const SALAS_LABS = [
+  "Sala 101",
+  "Sala 102",
+  "Lab 1",
+  "Lab 2",
+  "Lab 3",
+  "Auditório",
+] as const;
+
 const statusBadge: Record<StatusProfessor, string> = {
   Ativo: "bg-green-950 text-green-400 border-green-900/50",
   Licença: "bg-amber-950 text-amber-400 border-amber-900/50",
@@ -245,6 +262,9 @@ export default function GestaoProfessoresPage() {
   const [formData, setFormData] = useState<FormDataProfessor>(formInicial);
   const [turnoAula, setTurnoAula] = useState("Noite");
   const [diasAula, setDiasAula] = useState<string[]>([]);
+  const [andarSelecionado, setAndarSelecionado] = useState("");
+  const [salaSelecionada, setSalaSelecionada] = useState("");
+  const [turmaAlocadaId, setTurmaAlocadaId] = useState<string | null>(null);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [itemToDelete, setItemToDelete] = useState<string | null>(null);
   const [turmasDisponiveis, setTurmasDisponiveis] = useState<TurmaDisponivel[]>([]);
@@ -469,6 +489,92 @@ export default function GestaoProfessoresPage() {
   function resetCamposTurnoDias() {
     setTurnoAula("Noite");
     setDiasAula([]);
+    setAndarSelecionado("");
+    setSalaSelecionada("");
+    setTurmaAlocadaId(null);
+  }
+
+  function normalizarDiasRegistro(raw: unknown): string[] {
+    if (!raw) return [];
+    if (Array.isArray(raw)) return raw.map(String);
+    if (typeof raw === "string") {
+      try {
+        const parsed = JSON.parse(raw);
+        if (Array.isArray(parsed)) return parsed.map(String);
+      } catch {
+        return raw
+          .split(",")
+          .map((s) => s.trim())
+          .filter(Boolean);
+      }
+    }
+    return [];
+  }
+
+  /** Retorna o nome do professor em conflito, ou null se a sala estiver livre. */
+  async function verificarConflitoSala(): Promise<string | null> {
+    if (!salaSelecionada || !turnoAula || diasAula.length === 0) {
+      return null;
+    }
+
+    const idRegistroAtual = turmaAlocadaId;
+
+    let query = supabase
+      .from("turmas")
+      .select("id, professor, dias_aula, curso, turno, sala")
+      .eq("sala", salaSelecionada)
+      .eq("turno", turnoAula);
+
+    if (idRegistroAtual) {
+      query = query.neq("id", idRegistroAtual);
+    }
+
+    const { data: registros, error } = await query;
+
+    if (error) {
+      console.error("Erro ao verificar conflito de sala:", error.message);
+      return null;
+    }
+
+    if (!registros || registros.length === 0) return null;
+
+    const nomeAtual = formData.nome.trim().toLowerCase();
+
+    const conflito = registros.find((reg) => {
+      // Ignora registro do próprio docente (mesmo nome)
+      const profReg = String(reg.professor ?? "").trim().toLowerCase();
+      if (nomeAtual && profReg && profReg === nomeAtual) return false;
+
+      const diasSalvos = normalizarDiasRegistro(reg.dias_aula);
+      // Sem dias no banco → trata como ocupação total no turno
+      if (diasSalvos.length === 0) return true;
+
+      return diasAula.some((diaFormulario) =>
+        diasSalvos.some(
+          (diaSalvo) =>
+            diaSalvo.toLowerCase() === diaFormulario.toLowerCase()
+        )
+      );
+    });
+
+    if (!conflito) return null;
+
+    return (
+      String(conflito.professor ?? "").trim() ||
+      String(conflito.curso ?? "outro docente")
+    );
+  }
+
+  async function avancarParaDocumentos() {
+    setFormError(null);
+    const professorConflito = await verificarConflitoSala();
+    if (professorConflito) {
+      const mensagem = `Atenção: A sala/laboratório selecionado já está ocupado por ${professorConflito} neste mesmo turno e dia(s). Por favor, escolha outro local.`;
+      setFormError(mensagem);
+      abrirFeedback("erro", "Conflito de Sala", mensagem);
+      return;
+    }
+    setAbaAtiva("documentos");
   }
 
   function fecharModal() {
@@ -551,10 +657,33 @@ export default function GestaoProfessoresPage() {
     });
     setTurnoAula(prof.turno_aula || "Noite");
     setDiasAula(prof.dias_aula ?? []);
+    setAndarSelecionado("");
+    setSalaSelecionada("");
+    setTurmaAlocadaId(null);
     setEditingId(prof.id);
     setAbaAtiva("docente");
     void fetchTurmasDisponiveis();
     setIsModalOpen(true);
+
+    const area =
+      prof.area_atuacao && prof.area_atuacao !== "—"
+        ? prof.area_atuacao
+        : "";
+    if (area) {
+      void (async () => {
+        const { data } = await supabase
+          .from("turmas")
+          .select("id, sala, andar")
+          .ilike("curso", `%${area}%`)
+          .limit(1)
+          .maybeSingle();
+        if (data) {
+          setTurmaAlocadaId(String(data.id));
+          setAndarSelecionado(String(data.andar ?? ""));
+          setSalaSelecionada(String(data.sala ?? ""));
+        }
+      })();
+    }
   }
 
   async function salvarProfessor() {
@@ -573,6 +702,15 @@ export default function GestaoProfessoresPage() {
         "Preencha os campos essenciais: Nome, Matrícula, Titulação e Área."
       );
       setAbaAtiva("docente");
+      return;
+    }
+
+    const professorConflito = await verificarConflitoSala();
+    if (professorConflito) {
+      const mensagem = `Atenção: A sala/laboratório selecionado já está ocupado por ${professorConflito} neste mesmo turno e dia(s). Por favor, escolha outro local.`;
+      setFormError(mensagem);
+      setAbaAtiva("docente");
+      abrirFeedback("erro", "Conflito de Sala", mensagem);
       return;
     }
 
@@ -597,13 +735,39 @@ export default function GestaoProfessoresPage() {
     const { error } = editingId
       ? await supabase.from("professores").update(payload).eq("id", editingId)
       : await supabase.from("professores").insert(payload);
-    setIsSubmitting(false);
 
     if (error) {
+      setIsSubmitting(false);
       console.error("Erro ao cadastrar professor:", error.message);
       setFormError(error.message);
       return;
     }
+
+    // Alocação física: persiste sala/andar/turno/dias e professor na turma
+    if (area && (andarSelecionado || salaSelecionada || diasAula.length > 0)) {
+      const alocacao: Record<string, unknown> = {
+        professor: nome,
+        turno: turnoAula,
+        dias_aula: diasAula,
+      };
+      if (andarSelecionado) alocacao.andar = andarSelecionado;
+      if (salaSelecionada) alocacao.sala = salaSelecionada;
+
+      const updateQuery = turmaAlocadaId
+        ? supabase.from("turmas").update(alocacao).eq("id", turmaAlocadaId)
+        : supabase.from("turmas").update(alocacao).ilike("curso", `%${area}%`);
+
+      const { error: turmasError } = await updateQuery;
+
+      if (turmasError) {
+        console.error(
+          "Erro ao atualizar alocação de sala/andar nas turmas:",
+          turmasError.message
+        );
+      }
+    }
+
+    setIsSubmitting(false);
 
     const wasEditing = !!editingId;
     fecharModal();
@@ -1256,7 +1420,17 @@ export default function GestaoProfessoresPage() {
                       <select
                         id="prof-area"
                         value={formData.area}
-                        onChange={(e) => atualizarCampo("area", e.target.value)}
+                        onChange={(e) => {
+                          const curso = e.target.value;
+                          atualizarCampo("area", curso);
+                          const turma = turmasDisponiveis.find(
+                            (t) => t.curso === curso
+                          );
+                          setTurmaAlocadaId(turma?.id ?? null);
+                          if (turma?.turno && turnosAula.includes(turma.turno as (typeof turnosAula)[number])) {
+                            setTurnoAula(turma.turno);
+                          }
+                        }}
                         className={inputClass}
                       >
                         <option value="">
@@ -1315,6 +1489,44 @@ export default function GestaoProfessoresPage() {
                         {turnosAula.map((turno) => (
                           <option key={turno} value={turno}>
                             {turno}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+
+                    <div>
+                      <label className={labelClass} htmlFor="prof-andar">
+                        Andar
+                      </label>
+                      <select
+                        id="prof-andar"
+                        value={andarSelecionado}
+                        onChange={(e) => setAndarSelecionado(e.target.value)}
+                        className={inputClass}
+                      >
+                        <option value="">Selecione o andar</option>
+                        {ANDARES.map((andar) => (
+                          <option key={andar} value={andar}>
+                            {andar}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+
+                    <div>
+                      <label className={labelClass} htmlFor="prof-sala">
+                        Sala / Laboratório
+                      </label>
+                      <select
+                        id="prof-sala"
+                        value={salaSelecionada}
+                        onChange={(e) => setSalaSelecionada(e.target.value)}
+                        className={inputClass}
+                      >
+                        <option value="">Selecione a sala ou laboratório</option>
+                        {SALAS_LABS.map((sala) => (
+                          <option key={sala} value={sala}>
+                            {sala}
                           </option>
                         ))}
                       </select>
@@ -1476,8 +1688,9 @@ export default function GestaoProfessoresPage() {
                       </button>
                       <button
                         type="button"
-                        onClick={() => setAbaAtiva("documentos")}
-                        className="px-4 py-2.5 rounded-lg bg-white text-black text-sm font-medium hover:bg-zinc-200 transition-colors"
+                        onClick={() => void avancarParaDocumentos()}
+                        disabled={isSubmitting}
+                        className="px-4 py-2.5 rounded-lg bg-white text-black text-sm font-medium hover:bg-zinc-200 transition-colors disabled:opacity-50"
                       >
                         Avançar para Documentos
                       </button>
