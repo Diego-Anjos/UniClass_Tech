@@ -15,6 +15,7 @@ import {
   MessageSquare,
   Headphones,
   User,
+  Ticket,
 } from "lucide-react";
 import { supabase } from "@/lib/supabase";
 import { ModalFeedback } from "@/components/ModalFeedback";
@@ -32,13 +33,54 @@ const navItems = [
 const inputClass =
   "w-full bg-black border border-zinc-800 rounded-md text-sm text-white px-3 py-2.5 placeholder:text-zinc-600 focus:outline-none focus:border-zinc-600 transition-colors";
 
+const assuntosSuporte: Record<string, string> = {
+  financeiro: "Financeiro",
+  documentos: "Documentos",
+  tecnico: "Problema Técnico",
+  outros: "Outros",
+};
+
 type DisciplinaContato = {
   id: string;
   nome: string;
   docente: string;
 };
 
+type ChamadoAluno = {
+  id: string;
+  assunto: string;
+  mensagem: string;
+  status: string;
+  resposta: string | null;
+  data_abertura: string;
+};
+
+function normalizarStatusChamado(valor: unknown): "aberto" | "respondido" {
+  const raw = String(valor ?? "").trim().toLowerCase();
+  if (
+    raw === "respondido" ||
+    raw === "respondida" ||
+    raw === "concluido" ||
+    raw === "concluído"
+  ) {
+    return "respondido";
+  }
+  return "aberto";
+}
+
+function formatarDataChamado(iso: string) {
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return "—";
+  const pad = (n: number) => String(n).padStart(2, "0");
+  return `${pad(d.getDate())}/${pad(d.getMonth() + 1)}/${d.getFullYear()} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
+}
+
+function rotuloAssunto(assunto: string) {
+  return assuntosSuporte[assunto] ?? assunto;
+}
+
 export default function AlunoContatoPage() {
+  const [aluno, setAluno] = useState<{ nome: string; ra: string } | null>(null);
   const [assuntoSuporte, setAssuntoSuporte] = useState("");
   const [mensagemSuporte, setMensagemSuporte] = useState("");
   const [enviandoSuporte, setEnviandoSuporte] = useState(false);
@@ -48,6 +90,9 @@ export default function AlunoContatoPage() {
   const [assuntoProfessor, setAssuntoProfessor] = useState("");
   const [mensagemProfessor, setMensagemProfessor] = useState("");
   const [enviandoProfessor, setEnviandoProfessor] = useState(false);
+
+  const [meusChamados, setMeusChamados] = useState<ChamadoAluno[]>([]);
+  const [carregandoChamados, setCarregandoChamados] = useState(false);
 
   const [modalFeedback, setModalFeedback] = useState<{
     aberto: boolean;
@@ -60,6 +105,18 @@ export default function AlunoContatoPage() {
     titulo: "",
     mensagem: "",
   });
+
+  useEffect(() => {
+    const raw = localStorage.getItem("alunoLogado");
+    if (raw) {
+      try {
+        const dadosParseados = JSON.parse(raw) as { nome: string; ra: string };
+        setAluno(dadosParseados);
+      } catch {
+        setAluno(null);
+      }
+    }
+  }, []);
 
   useEffect(() => {
     async function carregarDisciplinas() {
@@ -89,6 +146,45 @@ export default function AlunoContatoPage() {
     void carregarDisciplinas();
   }, []);
 
+  useEffect(() => {
+    if (!aluno?.ra) return;
+
+    async function carregarMeusChamados() {
+      setCarregandoChamados(true);
+      try {
+        const { data, error } = await supabase
+          .from("chamados")
+          .select("*")
+          .eq("ra_aluno", aluno!.ra)
+          .order("data_abertura", { ascending: false });
+
+        if (error) {
+          console.error("Erro ao buscar chamados:", error.message);
+          setMeusChamados([]);
+          return;
+        }
+
+        setMeusChamados(
+          ((data ?? []) as Record<string, unknown>[]).map((row) => ({
+            id: String(row.id),
+            assunto: String(row.assunto ?? "Sem assunto"),
+            mensagem: String(row.mensagem ?? ""),
+            status: String(row.status ?? "Aberto"),
+            resposta: row.resposta != null ? String(row.resposta) : null,
+            data_abertura: String(row.data_abertura ?? row.created_at ?? ""),
+          }))
+        );
+      } catch (err) {
+        console.error("Falha ao carregar chamados:", err);
+        setMeusChamados([]);
+      } finally {
+        setCarregandoChamados(false);
+      }
+    }
+
+    void carregarMeusChamados();
+  }, [aluno]);
+
   function abrirFeedback(
     tipo: "sucesso" | "erro" | "atencao",
     titulo: string,
@@ -104,6 +200,15 @@ export default function AlunoContatoPage() {
   async function handleEnviarSuporte(e: React.FormEvent) {
     e.preventDefault();
 
+    if (!aluno?.ra || !aluno?.nome) {
+      abrirFeedback(
+        "atencao",
+        "Sessão inválida",
+        "Não foi possível identificar o aluno logado. Faça login novamente."
+      );
+      return;
+    }
+
     if (!assuntoSuporte || !mensagemSuporte.trim()) {
       abrirFeedback(
         "atencao",
@@ -113,9 +218,31 @@ export default function AlunoContatoPage() {
       return;
     }
 
+    const assuntoSelecionado =
+      assuntosSuporte[assuntoSuporte] ?? assuntoSuporte;
+    const textoMensagem = mensagemSuporte.trim();
+
     setEnviandoSuporte(true);
     try {
-      await new Promise((resolve) => setTimeout(resolve, 600));
+      const { error } = await supabase.from("chamados").insert([
+        {
+          ra_aluno: aluno.ra,
+          nome_aluno: aluno.nome,
+          assunto: assuntoSelecionado,
+          mensagem: textoMensagem,
+        },
+      ]);
+
+      if (error) {
+        console.error("Erro ao inserir chamado:", error.message);
+        abrirFeedback(
+          "erro",
+          "Falha no envio",
+          "Não foi possível protocolar sua solicitação. Tente novamente em instantes."
+        );
+        return;
+      }
+
       setAssuntoSuporte("");
       setMensagemSuporte("");
       abrirFeedback(
@@ -123,6 +250,25 @@ export default function AlunoContatoPage() {
         "Ticket Criado",
         "Sua solicitação foi protocolada junto à secretaria acadêmica. O prazo de resposta é de até 48 horas úteis."
       );
+
+      const { data, error: erroLista } = await supabase
+        .from("chamados")
+        .select("*")
+        .eq("ra_aluno", aluno.ra)
+        .order("data_abertura", { ascending: false });
+
+      if (!erroLista && data) {
+        setMeusChamados(
+          (data as Record<string, unknown>[]).map((row) => ({
+            id: String(row.id),
+            assunto: String(row.assunto ?? "Sem assunto"),
+            mensagem: String(row.mensagem ?? ""),
+            status: String(row.status ?? "Aberto"),
+            resposta: row.resposta != null ? String(row.resposta) : null,
+            data_abertura: String(row.data_abertura ?? row.created_at ?? ""),
+          }))
+        );
+      }
     } catch (err) {
       console.error("Erro ao enviar suporte:", err);
       abrirFeedback(
@@ -208,15 +354,19 @@ export default function AlunoContatoPage() {
             <div className="flex items-center gap-3 min-w-0">
               <div className="relative shrink-0">
                 <div className="w-10 h-10 rounded-full bg-zinc-800 flex items-center justify-center text-base font-semibold text-white">
-                  JS
+                  {aluno?.nome ? aluno.nome.substring(0, 2).toUpperCase() : "UN"}
                 </div>
                 <div className="absolute -bottom-0.5 -right-0.5 w-4 h-4 bg-zinc-700 border border-zinc-900 rounded-full flex items-center justify-center cursor-pointer hover:bg-zinc-600 transition-colors">
                   <Camera className="w-2.5 h-2.5 text-zinc-300" />
                 </div>
               </div>
               <div className="min-w-0">
-                <p className="text-sm font-medium truncate">João Silva</p>
-                <p className="text-xs text-zinc-500">RA: 12345678</p>
+                <p className="text-sm font-medium truncate">
+                  {aluno?.nome || "Carregando..."}
+                </p>
+                <p className="text-xs text-zinc-500">
+                  RA: {aluno?.ra || "---"}
+                </p>
               </div>
             </div>
             <Link
@@ -414,6 +564,81 @@ export default function AlunoContatoPage() {
               </form>
             </div>
           </div>
+
+          <section className="mt-8">
+            <div className="flex items-center gap-2.5 mb-4">
+              <div className="w-8 h-8 rounded-lg bg-zinc-800 border border-zinc-700/50 flex items-center justify-center shrink-0">
+                <Ticket className="w-4 h-4 text-zinc-300" />
+              </div>
+              <div>
+                <h2 className="text-sm font-semibold">Meus Chamados</h2>
+                <p className="text-xs text-zinc-500">
+                  Acompanhe o status das solicitações enviadas à secretaria.
+                </p>
+              </div>
+            </div>
+
+            {carregandoChamados ? (
+              <p className="text-sm text-zinc-500 py-6">Carregando chamados...</p>
+            ) : meusChamados.length === 0 ? (
+              <div className="bg-zinc-900/50 border border-zinc-800 rounded-xl px-6 py-8 text-center">
+                <p className="text-sm text-zinc-400">
+                  Você ainda não abriu nenhum chamado de suporte.
+                </p>
+              </div>
+            ) : (
+              <ul className="flex flex-col gap-3">
+                {meusChamados.map((chamado) => {
+                  const statusNorm = normalizarStatusChamado(chamado.status);
+                  const respondido = statusNorm === "respondido";
+
+                  return (
+                    <li
+                      key={chamado.id}
+                      className="bg-zinc-900/50 border border-zinc-800 rounded-xl p-5"
+                    >
+                      <div className="flex flex-wrap items-start justify-between gap-3 mb-3">
+                        <div className="min-w-0">
+                          <p className="text-sm font-medium text-white">
+                            {rotuloAssunto(chamado.assunto)}
+                          </p>
+                          <p className="text-xs text-zinc-500 mt-0.5">
+                            Aberto em {formatarDataChamado(chamado.data_abertura)}
+                          </p>
+                        </div>
+                        <span
+                          className={`inline-flex items-center rounded-md px-2 py-0.5 text-xs font-medium border ${
+                            respondido
+                              ? "bg-emerald-950/50 text-emerald-400 border-emerald-800"
+                              : "bg-rose-950/50 text-rose-400 border-rose-800"
+                          }`}
+                        >
+                          {respondido ? "Respondido" : "Aberto"}
+                        </span>
+                      </div>
+
+                      {chamado.mensagem ? (
+                        <p className="text-sm text-zinc-300 whitespace-pre-wrap">
+                          {chamado.mensagem}
+                        </p>
+                      ) : null}
+
+                      {respondido && chamado.resposta ? (
+                        <div className="mt-4 pt-4 border-t border-zinc-800">
+                          <p className="text-xs text-zinc-500 uppercase tracking-widest mb-1.5">
+                            Resposta da faculdade
+                          </p>
+                          <p className="text-sm text-zinc-200 whitespace-pre-wrap">
+                            {chamado.resposta}
+                          </p>
+                        </div>
+                      ) : null}
+                    </li>
+                  );
+                })}
+              </ul>
+            )}
+          </section>
         </div>
       </main>
 

@@ -7,6 +7,7 @@ import { GraduationCap, Shield } from "lucide-react";
 import { supabase } from "@/lib/supabase";
 import { salvarSessaoAluno, limparSessaoAluno } from "@/lib/aluno-session";
 import { limparSessaoProfessor } from "@/lib/professor-session";
+import { limparSessaoAdmin } from "@/lib/admin-session";
 
 type TipoLogin = "Aluno" | "Professor";
 
@@ -45,6 +46,7 @@ export default function LoginPage() {
     }
 
     limparSessaoProfessor();
+    limparSessaoAdmin();
     salvarSessaoAluno({
       ra: String(aluno.ra ?? usuarioInput),
       nome: String(aluno.nome ?? "Estudante"),
@@ -72,6 +74,7 @@ export default function LoginPage() {
     }
 
     limparSessaoAluno();
+    limparSessaoAdmin();
     localStorage.setItem(
       "uniclass_prof_session",
       JSON.stringify({
@@ -114,6 +117,9 @@ export default function LoginPage() {
   }
 
   const isAluno = tipoLogin === "Aluno";
+  const isProfessor = tipoLogin === "Professor";
+
+  const portalLabel = isAluno ? "Portal do Aluno" : "Portal do Docente";
 
   return (
     <main className="min-h-screen grid grid-cols-1 md:grid-cols-2 bg-black text-white">
@@ -133,9 +139,7 @@ export default function LoginPage() {
             <h1 className="text-3xl font-semibold tracking-tight mb-2">
               Acesse sua conta
             </h1>
-            <p className="text-sm text-zinc-400">
-              {isAluno ? "Portal do Aluno" : "Portal do Docente"}
-            </p>
+            <p className="text-sm text-zinc-400">{portalLabel}</p>
           </div>
 
           <div
@@ -143,32 +147,27 @@ export default function LoginPage() {
             role="tablist"
             aria-label="Tipo de acesso"
           >
-            <button
-              type="button"
-              role="tab"
-              aria-selected={isAluno}
-              onClick={() => trocarTipo("Aluno")}
-              className={`rounded-md py-2 text-sm font-medium transition-colors ${
-                isAluno
-                  ? "bg-zinc-800 text-white"
-                  : "text-zinc-500 hover:text-zinc-300"
-              }`}
-            >
-              Aluno
-            </button>
-            <button
-              type="button"
-              role="tab"
-              aria-selected={!isAluno}
-              onClick={() => trocarTipo("Professor")}
-              className={`rounded-md py-2 text-sm font-medium transition-colors ${
-                !isAluno
-                  ? "bg-zinc-800 text-white"
-                  : "text-zinc-500 hover:text-zinc-300"
-              }`}
-            >
-              Professor
-            </button>
+            {(
+              [
+                ["Aluno", "Aluno"],
+                ["Professor", "Professor"],
+              ] as const
+            ).map(([tipo, label]) => (
+              <button
+                key={tipo}
+                type="button"
+                role="tab"
+                aria-selected={tipoLogin === tipo}
+                onClick={() => trocarTipo(tipo)}
+                className={`rounded-md py-2 text-xs sm:text-sm font-medium transition-colors ${
+                  tipoLogin === tipo
+                    ? "bg-zinc-800 text-white"
+                    : "text-zinc-500 hover:text-zinc-300"
+                }`}
+              >
+                {label}
+              </button>
+            ))}
           </div>
 
           <form onSubmit={handleLogin} className="flex flex-col gap-4">
@@ -204,7 +203,7 @@ export default function LoginPage() {
               required
               value={senha}
               onChange={(e) => setSenha(e.target.value)}
-              placeholder={isAluno ? "Senha" : "Insira sua senha"}
+              placeholder={isProfessor ? "Insira sua senha" : "Senha"}
               autoComplete="current-password"
               className="w-full bg-transparent border border-zinc-800 rounded-md px-4 py-2.5 text-sm outline-none focus:border-zinc-500 transition-colors placeholder:text-zinc-600"
             />

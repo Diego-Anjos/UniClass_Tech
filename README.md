@@ -111,6 +111,17 @@ Para testar o portal do aluno, o sistema está configurado com uma senha padrão
 
 Portal do aluno: [`/`](http://localhost:3000/)
 
+### ⚙️ Acesso Administrativo (Secretaria/Root)
+
+Para testar o painel de controle global, gestão de alunos, professores e turmas, utilize o acesso de administrador. Este perfil possui visão completa da infraestrutura acadêmica.
+
+| Campo | Valor |
+| :--- | :--- |
+| E-mail | `admin@uniclass.com` |
+| Senha Padrão | `admin123` |
+
+Portal administrativo: [`/adm/login`](http://localhost:3000/adm/login)
+
 ---
 
 <div align="center">

@@ -1,5 +1,6 @@
 "use client";
 
+import { useEffect, useState } from "react";
 import Link from "next/link";
 import {
   LayoutDashboard,
@@ -49,6 +50,20 @@ const dadosContato = [
 ];
 
 export default function AlunoPerfilPage() {
+  const [aluno, setAluno] = useState<{ nome: string; ra: string } | null>(null);
+
+  useEffect(() => {
+    const raw = localStorage.getItem("alunoLogado");
+    if (raw) {
+      try {
+        const dadosParseados = JSON.parse(raw) as { nome: string; ra: string };
+        setAluno(dadosParseados);
+      } catch {
+        setAluno(null);
+      }
+    }
+  }, []);
+
   return (
     <div className="flex h-screen bg-black text-white overflow-hidden">
       {/* ══════════════════════════════
@@ -72,15 +87,19 @@ export default function AlunoPerfilPage() {
             <div className="flex items-center gap-3 min-w-0">
               <div className="relative shrink-0">
                 <div className="w-10 h-10 rounded-full bg-zinc-800 flex items-center justify-center text-base font-semibold text-white">
-                  JS
+                  {aluno?.nome ? aluno.nome.substring(0, 2).toUpperCase() : "UN"}
                 </div>
                 <div className="absolute -bottom-0.5 -right-0.5 w-4 h-4 bg-zinc-700 border border-zinc-900 rounded-full flex items-center justify-center cursor-pointer hover:bg-zinc-600 transition-colors">
                   <Camera className="w-2.5 h-2.5 text-zinc-300" />
                 </div>
               </div>
               <div className="min-w-0">
-                <p className="text-sm font-medium truncate">João Silva</p>
-                <p className="text-xs text-zinc-500">RA: 12345678</p>
+                <p className="text-sm font-medium truncate">
+                  {aluno?.nome || "Carregando..."}
+                </p>
+                <p className="text-xs text-zinc-500">
+                  RA: {aluno?.ra || "---"}
+                </p>
               </div>
             </div>
             <Link href="/aluno/dashboard/perfil" className="text-zinc-500 hover:text-white transition-colors shrink-0">

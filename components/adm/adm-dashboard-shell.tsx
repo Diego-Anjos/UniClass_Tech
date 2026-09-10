@@ -16,6 +16,7 @@ import {
   Menu,
   X,
 } from "lucide-react";
+import { limparSessaoAdmin } from "@/lib/admin-session";
 
 const navItems = [
   { icon: LayoutDashboard, label: "Visão Geral", href: "/adm/dashboard" },
@@ -144,7 +145,10 @@ export function AdmDashboardShell({ children }: { children: React.ReactNode }) {
         <div className="px-2 py-4 border-t border-zinc-800">
           <Link
             href="/adm/login"
-            onClick={fecharSidebarMobile}
+            onClick={() => {
+              limparSessaoAdmin();
+              fecharSidebarMobile();
+            }}
             className="flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm text-zinc-500 hover:bg-zinc-900 hover:text-white transition-colors"
           >
             <LogOut className="w-4 h-4 shrink-0" />
