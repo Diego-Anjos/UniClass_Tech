@@ -32,17 +32,70 @@ const navItems = [
   { icon: MessageSquare,   label: "Mensagens",      href: "/professor/dashboard/mensagens", active: false },
 ];
 
+const diasMapa: Record<string, number> = {
+  Domingo: 0,
+  Segunda: 1,
+  Terça: 2,
+  Quarta: 3,
+  Quinta: 4,
+  Sexta: 5,
+  Sábado: 6,
+};
+
+type TurmaResumo = {
+  id: string;
+  codigo: string;
+  curso: string;
+  turno?: string;
+};
+
+type AgendaItem = {
+  horario: string;
+  titulo: string;
+  local: string;
+  extra?: string;
+};
+
+type PendenciaItem = {
+  id: string;
+  titulo: string;
+  href?: string;
+};
+
+function horarioDoTurno(turno?: string) {
+  const t = (turno ?? "").toLowerCase();
+  if (t.includes("manhã") || t.includes("manha")) return "08:00";
+  if (t.includes("tarde")) return "14:00";
+  if (t.includes("noite")) return "19:00";
+  if (t.includes("integral")) return "08:00";
+  return turno || "—";
+}
+
+function capitalizar(texto: string) {
+  if (!texto) return texto;
+  return texto.charAt(0).toUpperCase() + texto.slice(1);
+}
+
 export default function ProfessorDashboardPage() {
   const { professorLogado, carregandoSessao } = useProfessorSession();
+  const [carregando, setCarregando] = useState(true);
   const [turmasAtivas, setTurmasAtivas] = useState(0);
   const [aiInsight, setAiInsight] = useState("");
   const [isLoadingAi, setIsLoadingAi] = useState(true);
   const [mediaGlobal, setMediaGlobal] = useState<number | null>(null);
-  const [alunosRisco, setAlunosRisco] = useState<number>(0);
-  const [agenda, setAgenda] = useState<any[]>([]);
-  const [pendencias, setPendencias] = useState<any[]>([]);
+  const [alunosRisco, setAlunosRisco] = useState(0);
+  const [agenda, setAgenda] = useState<AgendaItem[]>([]);
+  const [pendencias, setPendencias] = useState<PendenciaItem[]>([]);
 
-  async function fetchAiInsight(turmasAtivas: number, nomeContexto: string) {
+  const dataHoje = capitalizar(
+    new Intl.DateTimeFormat("pt-BR", {
+      weekday: "long",
+      day: "numeric",
+      month: "short",
+    }).format(new Date())
+  );
+
+  async function fetchAiInsight(qtdTurmas: number, nomeContexto: string) {
     setIsLoadingAi(true);
     try {
       const response = await fetch("/api/insights", {
@@ -52,7 +105,7 @@ export default function ProfessorDashboardPage() {
         },
         body: JSON.stringify({
           context: nomeContexto || "Professor",
-          turmasAtivas,
+          turmasAtivas: qtdTurmas,
         }),
       });
 
@@ -73,24 +126,136 @@ export default function ProfessorDashboardPage() {
     if (!professorLogado) return;
 
     async function fetchDadosBase() {
-      const { count, error } = await supabase
-        .from("turmas")
-        .select("*", { count: "exact", head: true })
-        .eq("status", "Aberta");
+      setCarregando(true);
 
+      const areaAtuacao = professorLogado!.area_atuacao?.trim() ?? "";
       const nomeContexto =
         professorLogado!.nomeCompletoTitulo || professorLogado!.nome;
 
-      if (error) {
-        console.error("Erro ao buscar turmas ativas:", error.message);
-        setTurmasAtivas(0);
-        await fetchAiInsight(0, nomeContexto);
-        return;
-      }
+      try {
+        const { data: turmasData, error: turmasError } = await supabase
+          .from("turmas")
+          .select("*")
+          .ilike("curso", `%${areaAtuacao}%`);
 
-      const total = count ?? 0;
-      setTurmasAtivas(total);
-      await fetchAiInsight(total, nomeContexto);
+        if (turmasError) {
+          console.error("Erro ao buscar turmas:", turmasError.message);
+        }
+
+        const turmas: TurmaResumo[] = ((turmasData ?? []) as Record<string, unknown>[]).map(
+          (turma) => ({
+            id: String(turma.id),
+            codigo: String(turma.codigo ?? ""),
+            curso: String(turma.curso ?? ""),
+            turno: turma.turno ? String(turma.turno) : undefined,
+          })
+        );
+
+        setTurmasAtivas(turmas.length);
+
+        // Agenda de hoje: cruza dia da semana com dias_aula do professor
+        const diaSemanaHoje = new Date().getDay();
+        const diasPermitidos = (professorLogado!.dias_aula ?? [])
+          .map((dia) => diasMapa[dia])
+          .filter((n): n is number => typeof n === "number");
+        const daAulaHoje =
+          diasPermitidos.length === 0
+            ? false
+            : diasPermitidos.includes(diaSemanaHoje);
+
+        if (daAulaHoje && turmas.length > 0) {
+          setAgenda(
+            turmas.map((turma) => ({
+              horario: horarioDoTurno(turma.turno),
+              titulo: turma.curso,
+              local: `Turma ${turma.codigo}`,
+              extra: turma.turno,
+            }))
+          );
+        } else {
+          setAgenda([]);
+        }
+
+        // Notas das turmas do professor
+        const turmaIds = turmas.map((t) => t.id);
+        let notas: { media_final: unknown; status: unknown }[] = [];
+
+        if (turmaIds.length > 0) {
+          const { data: notasData, error: notasError } = await supabase
+            .from("notas")
+            .select("media_final, status, turma")
+            .in("turma", turmaIds);
+
+          if (notasError) {
+            console.error("Erro ao buscar notas:", notasError.message);
+          } else {
+            notas = (notasData ?? []) as {
+              media_final: unknown;
+              status: unknown;
+            }[];
+          }
+        }
+
+        const mediasValidas = notas
+          .map((n) => Number(n.media_final))
+          .filter((n) => !Number.isNaN(n));
+
+        if (mediasValidas.length > 0) {
+          const soma = mediasValidas.reduce((acc, n) => acc + n, 0);
+          setMediaGlobal(soma / mediasValidas.length);
+        } else {
+          setMediaGlobal(null);
+        }
+
+        const emRisco = notas.filter((n) => {
+          const status = String(n.status ?? "");
+          return status === "Reprovado" || status === "Exame Final";
+        }).length;
+        setAlunosRisco(emRisco);
+
+        // Mensagens não lidas
+        const listaPendencias: PendenciaItem[] = [];
+
+        const { data: msgsData, error: msgsError } = await supabase
+          .from("mensagens")
+          .select("id, assunto")
+          .eq("destinatario", professorLogado!.nomeCompletoTitulo)
+          .eq("lida", false);
+
+        if (msgsError) {
+          console.error("Erro ao buscar mensagens:", msgsError.message);
+        } else if (msgsData && msgsData.length > 0) {
+          for (const msg of msgsData) {
+            const assunto = String(msg.assunto ?? "Sem assunto");
+            listaPendencias.push({
+              id: String(msg.id),
+              titulo: `Nova mensagem da Secretaria: ${assunto}`,
+              href: "/professor/dashboard/mensagens",
+            });
+          }
+        }
+
+        if (notas.length === 0) {
+          listaPendencias.push({
+            id: "lembrete-notas",
+            titulo: "Lançamento de notas pendente para este bimestre.",
+            href: "/professor/dashboard/notas",
+          });
+        }
+
+        setPendencias(listaPendencias);
+        await fetchAiInsight(turmas.length, nomeContexto);
+      } catch (err) {
+        console.error("Erro ao carregar dashboard:", err);
+        setTurmasAtivas(0);
+        setMediaGlobal(null);
+        setAlunosRisco(0);
+        setAgenda([]);
+        setPendencias([]);
+        await fetchAiInsight(0, nomeContexto);
+      } finally {
+        setCarregando(false);
+      }
     }
 
     void fetchDadosBase();
@@ -237,7 +402,13 @@ export default function ProfessorDashboardPage() {
                 <p className="text-xs text-zinc-500 uppercase tracking-widest">Turmas Ativas</p>
                 <Users className="w-4 h-4 text-zinc-600" />
               </div>
-              <p className="text-4xl font-semibold tracking-tight text-white">{turmasAtivas}</p>
+              {carregando ? (
+                <div className="h-10 w-16 rounded bg-zinc-800 animate-pulse" />
+              ) : (
+                <p className="text-4xl font-semibold tracking-tight text-white">
+                  {turmasAtivas}
+                </p>
+              )}
               <p className="text-xs text-zinc-400">Disciplinas neste semestre</p>
             </div>
 
@@ -246,9 +417,13 @@ export default function ProfessorDashboardPage() {
                 <p className="text-xs text-zinc-500 uppercase tracking-widest">Média Global (Suas Turmas)</p>
                 <LineChart className="w-4 h-4 text-zinc-600" />
               </div>
-              <p className="text-4xl font-semibold tracking-tight text-white">
-                {mediaGlobal !== null ? mediaGlobal.toFixed(1) : "—"}
-              </p>
+              {carregando ? (
+                <div className="h-10 w-20 rounded bg-zinc-800 animate-pulse" />
+              ) : (
+                <p className="text-4xl font-semibold tracking-tight text-white">
+                  {mediaGlobal !== null ? mediaGlobal.toFixed(1) : "---"}
+                </p>
+              )}
               <p className="text-xs text-zinc-400">Média ponderada das turmas</p>
             </div>
 
@@ -257,7 +432,13 @@ export default function ProfessorDashboardPage() {
                 <p className="text-xs text-zinc-500 uppercase tracking-widest">Alunos em Risco</p>
                 <AlertTriangle className="w-4 h-4 text-amber-500/80" />
               </div>
-              <p className="text-4xl font-semibold tracking-tight text-white">{alunosRisco}</p>
+              {carregando ? (
+                <div className="h-10 w-16 rounded bg-zinc-800 animate-pulse" />
+              ) : (
+                <p className="text-4xl font-semibold tracking-tight text-white">
+                  {alunosRisco}
+                </p>
+              )}
               <p className="text-xs text-amber-500/70">Reprovação por falta ou nota</p>
             </div>
           </div>
@@ -268,15 +449,21 @@ export default function ProfessorDashboardPage() {
             <div className="lg:col-span-2 rounded-xl bg-zinc-950 border border-zinc-800 overflow-hidden">
               <div className="px-6 py-4 border-b border-zinc-800 flex items-center justify-between">
                 <h2 className="text-sm font-semibold text-white">Agenda de Hoje</h2>
-                <span className="text-xs text-zinc-500">Quinta-feira, 3 set</span>
+                <span className="text-xs text-zinc-500">{dataHoje}</span>
               </div>
               <div className="p-4 flex flex-col gap-3">
-                {agenda.length === 0 ? (
-                  <p className="text-sm text-zinc-500 px-1 py-2">Nenhum compromisso na agenda.</p>
+                {carregando ? (
+                  <p className="text-sm text-zinc-500 px-1 py-2 animate-pulse">
+                    Carregando dados...
+                  </p>
+                ) : agenda.length === 0 ? (
+                  <p className="text-sm text-zinc-500 px-1 py-2">
+                    Nenhum compromisso na agenda.
+                  </p>
                 ) : (
                   agenda.map((item) => (
                     <div
-                      key={`${item.horario}-${item.titulo}`}
+                      key={`${item.horario}-${item.titulo}-${item.local}`}
                       className="flex items-start gap-4 rounded-lg border border-zinc-800 bg-black/40 px-4 py-3.5 hover:bg-zinc-900/50 transition-colors"
                     >
                       <div className="flex items-center gap-1.5 shrink-0 mt-0.5 text-xs font-medium text-zinc-500 w-14">
@@ -301,21 +488,39 @@ export default function ProfessorDashboardPage() {
                 <h2 className="text-sm font-semibold text-white">Pendências &amp; Lembretes</h2>
               </div>
               <div className="flex flex-col divide-y divide-zinc-800">
-                {pendencias.length === 0 ? (
-                  <p className="text-sm text-zinc-500 px-5 py-4">Nenhuma pendência no momento.</p>
+                {carregando ? (
+                  <p className="text-sm text-zinc-500 px-5 py-4 animate-pulse">
+                    Carregando dados...
+                  </p>
+                ) : pendencias.length === 0 ? (
+                  <p className="text-sm text-zinc-500 px-5 py-4">
+                    Nenhuma pendência no momento.
+                  </p>
                 ) : (
-                  pendencias.map((tarefa) => (
-                    <button
-                      key={typeof tarefa === "string" ? tarefa : tarefa.id ?? tarefa.titulo}
-                      type="button"
-                      className="flex items-start gap-3 px-5 py-4 text-left hover:bg-zinc-900/50 transition-colors w-full"
-                    >
-                      <Square className="w-4 h-4 text-zinc-500 shrink-0 mt-0.5" />
-                      <span className="text-sm text-zinc-300 leading-relaxed">
-                        {typeof tarefa === "string" ? tarefa : tarefa.titulo}
-                      </span>
-                    </button>
-                  ))
+                  pendencias.map((tarefa) =>
+                    tarefa.href ? (
+                      <Link
+                        key={tarefa.id}
+                        href={tarefa.href}
+                        className="flex items-start gap-3 px-5 py-4 text-left hover:bg-zinc-900/50 transition-colors w-full"
+                      >
+                        <Square className="w-4 h-4 text-zinc-500 shrink-0 mt-0.5" />
+                        <span className="text-sm text-zinc-300 leading-relaxed">
+                          {tarefa.titulo}
+                        </span>
+                      </Link>
+                    ) : (
+                      <div
+                        key={tarefa.id}
+                        className="flex items-start gap-3 px-5 py-4"
+                      >
+                        <Square className="w-4 h-4 text-zinc-500 shrink-0 mt-0.5" />
+                        <span className="text-sm text-zinc-300 leading-relaxed">
+                          {tarefa.titulo}
+                        </span>
+                      </div>
+                    )
+                  )
                 )}
               </div>
             </div>

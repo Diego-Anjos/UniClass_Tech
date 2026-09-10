@@ -48,6 +48,14 @@ type Criterios = {
   prova: number;
 };
 
+type DatasAvaliacoes = {
+  ativ1: string;
+  ativ2: string;
+  ativ3: string;
+  ativ4: string;
+  prova: string;
+};
+
 type TurmaOption = {
   id: string;
   codigo: string;
@@ -55,6 +63,7 @@ type TurmaOption = {
   turno?: string;
   status?: string;
   criterios_notas?: Criterios | null;
+  datas_avaliacoes?: DatasAvaliacoes | null;
 };
 
 type NotasParciais = {
@@ -86,6 +95,24 @@ const CRITERIOS_PADRAO: Criterios = {
   ativ4: 1,
   prova: 6,
 };
+
+const DATAS_AVALIACOES_PADRAO: DatasAvaliacoes = {
+  ativ1: "",
+  ativ2: "",
+  ativ3: "",
+  ativ4: "",
+  prova: "",
+};
+
+const hoje = new Date();
+const anoAtual = hoje.getFullYear();
+const isPrimeiroSemestre = hoje.getMonth() < 6;
+const minDate = isPrimeiroSemestre
+  ? `${anoAtual}-01-01`
+  : `${anoAtual}-07-01`;
+const maxDate = isPrimeiroSemestre
+  ? `${anoAtual}-06-30`
+  : `${anoAtual}-12-31`;
 
 const NOTAS_VAZIAS: NotasParciais = {
   a1: "",
@@ -210,6 +237,27 @@ function normalizarCriterios(raw: unknown): Criterios {
   };
 }
 
+function normalizarDatasAvaliacoes(raw: unknown): DatasAvaliacoes {
+  if (!raw || typeof raw !== "object") {
+    return { ...DATAS_AVALIACOES_PADRAO };
+  }
+
+  const d = raw as Partial<Record<keyof DatasAvaliacoes, unknown>>;
+  return {
+    ativ1: typeof d.ativ1 === "string" ? d.ativ1 : "",
+    ativ2: typeof d.ativ2 === "string" ? d.ativ2 : "",
+    ativ3: typeof d.ativ3 === "string" ? d.ativ3 : "",
+    ativ4: typeof d.ativ4 === "string" ? d.ativ4 : "",
+    prova: typeof d.prova === "string" ? d.prova : "",
+  };
+}
+
+function formatarData(iso: string): string {
+  const [, mes, dia] = iso.split("-");
+  if (!mes || !dia) return iso;
+  return `${dia}/${mes}`;
+}
+
 function limitarNotaAoMaximo(valor: string, maximo: number): string {
   if (valor.trim() === "") return "";
   const num = parseNota(valor);
@@ -225,6 +273,9 @@ export default function ProfessorNotasPage() {
   const [turmaSelecionada, setTurmaSelecionada] = useState("");
   const [alunosTurma, setAlunosTurma] = useState<AlunoLinha[]>([]);
   const [criterios, setCriterios] = useState<Criterios>(CRITERIOS_PADRAO);
+  const [datasAvaliacoes, setDatasAvaliacoes] = useState<DatasAvaliacoes>(
+    DATAS_AVALIACOES_PADRAO
+  );
   const [notasAlunos, setNotasAlunos] = useState<Record<string, NotasParciais>>(
     {}
   );
@@ -355,7 +406,10 @@ export default function ProfessorNotasPage() {
     try {
       const { error } = await supabase
         .from("turmas")
-        .update({ criterios_notas: criterios })
+        .update({
+          criterios_notas: criterios,
+          datas_avaliacoes: datasAvaliacoes,
+        })
         .eq("id", turmaSelecionada);
 
       if (error) {
@@ -365,7 +419,11 @@ export default function ProfessorNotasPage() {
       setTurmas((prev) =>
         prev.map((turma) =>
           turma.id === turmaSelecionada
-            ? { ...turma, criterios_notas: { ...criterios } }
+            ? {
+                ...turma,
+                criterios_notas: { ...criterios },
+                datas_avaliacoes: { ...datasAvaliacoes },
+              }
             : turma
         )
       );
@@ -645,6 +703,7 @@ export default function ProfessorNotasPage() {
           turno: turma.turno ? String(turma.turno) : undefined,
           status: turma.status ? String(turma.status) : undefined,
           criterios_notas: normalizarCriterios(turma.criterios_notas),
+          datas_avaliacoes: normalizarDatasAvaliacoes(turma.datas_avaliacoes),
         })
       );
 
@@ -654,9 +713,13 @@ export default function ProfessorNotasPage() {
       if (lista.length === 1) {
         setTurmaSelecionada(lista[0].id);
         setCriterios(lista[0].criterios_notas ?? { ...CRITERIOS_PADRAO });
+        setDatasAvaliacoes(
+          lista[0].datas_avaliacoes ?? { ...DATAS_AVALIACOES_PADRAO }
+        );
       } else {
         setTurmaSelecionada("");
         setCriterios({ ...CRITERIOS_PADRAO });
+        setDatasAvaliacoes({ ...DATAS_AVALIACOES_PADRAO });
       }
     }
 
@@ -666,6 +729,7 @@ export default function ProfessorNotasPage() {
   useEffect(() => {
     if (!turmaSelecionada) {
       setCriterios({ ...CRITERIOS_PADRAO });
+      setDatasAvaliacoes({ ...DATAS_AVALIACOES_PADRAO });
       return;
     }
 
@@ -673,6 +737,7 @@ export default function ProfessorNotasPage() {
     if (!turma) return;
 
     setCriterios(normalizarCriterios(turma.criterios_notas));
+    setDatasAvaliacoes(normalizarDatasAvaliacoes(turma.datas_avaliacoes));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [turmaSelecionada]);
 
@@ -1001,7 +1066,7 @@ export default function ProfessorNotasPage() {
                   { key: "prova", label: "Prova Semestral" },
                 ] as const
               ).map((item) => (
-                <label key={item.key} className="flex flex-col gap-1.5">
+                <div key={item.key} className="flex flex-col gap-1.5">
                   <span className="text-xs text-zinc-400">{item.label}</span>
                   <input
                     type="number"
@@ -1014,7 +1079,20 @@ export default function ProfessorNotasPage() {
                     }
                     className="w-full bg-[#1a1d24] border border-gray-700 rounded-md text-sm text-white text-center px-2 py-2 focus:outline-none focus:ring-1 focus:ring-zinc-500 [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
                   />
-                </label>
+                  <input
+                    type="date"
+                    min={minDate}
+                    max={maxDate}
+                    value={datasAvaliacoes[item.key]}
+                    onChange={(e) =>
+                      setDatasAvaliacoes((prev) => ({
+                        ...prev,
+                        [item.key]: e.target.value,
+                      }))
+                    }
+                    className="w-full mt-2 bg-[#1a1d24] border border-gray-700 text-gray-400 text-xs rounded p-1.5 focus:border-purple-500 focus:ring-1 focus:ring-purple-500 outline-none"
+                  />
+                </div>
               ))}
             </div>
 
@@ -1054,7 +1132,14 @@ export default function ProfessorNotasPage() {
                         key={key}
                         className="px-3 py-3.5 text-xs font-medium text-zinc-500 uppercase tracking-widest text-center whitespace-nowrap"
                       >
-                        {label} (Máx: {criterios[criterioKey]})
+                        <div>
+                          {label} (Máx: {criterios[criterioKey]})
+                        </div>
+                        <div className="text-[10px] text-gray-500 font-normal mt-0.5 normal-case tracking-normal">
+                          {datasAvaliacoes[criterioKey]
+                            ? formatarData(datasAvaliacoes[criterioKey])
+                            : "Data não definida"}
+                        </div>
                       </th>
                     ))}
                     <th className="px-4 py-3.5 text-xs font-medium text-zinc-500 uppercase tracking-widest text-center">

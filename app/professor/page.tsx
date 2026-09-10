@@ -8,7 +8,7 @@ import { supabase } from "@/lib/supabase";
 
 export default function LoginProfessorPage() {
   const router = useRouter();
-  const [email, setEmail] = useState("");
+  const [usuario, setUsuario] = useState("");
   const [senha, setSenha] = useState("");
   const [erro, setErro] = useState("");
   const [carregando, setCarregando] = useState(false);
@@ -18,11 +18,13 @@ export default function LoginProfessorPage() {
     setErro("");
     setCarregando(true);
 
+    const emailCompleto = `${usuario.trim()}@uniclasstech.edu.br`;
+
     try {
       const { data, error } = await supabase
         .from("professores")
         .select("*")
-        .eq("email_institucional", email.trim())
+        .eq("email_institucional", emailCompleto)
         .eq("senha", senha)
         .single();
 
@@ -69,18 +71,23 @@ export default function LoginProfessorPage() {
 
         <form onSubmit={handleLogin} className="flex flex-col gap-4">
           <div className="flex flex-col gap-1.5">
-            <label htmlFor="email" className="text-sm text-zinc-300">
-              E-mail Institucional
+            <label htmlFor="usuario" className="text-sm text-zinc-300">
+              Usuário Institucional
             </label>
-            <input
-              id="email"
-              type="email"
-              required
-              value={email}
-              onChange={(e) => setEmail(e.target.value)}
-              placeholder="ex: roberto.lima@uniclasstech.edu.br"
-              className="w-full bg-[#0a0c12] border border-gray-800 rounded-md px-4 py-2.5 text-sm outline-none focus:border-purple-500 transition-colors placeholder:text-zinc-600"
-            />
+            <div className="flex">
+              <input
+                id="usuario"
+                type="text"
+                required
+                value={usuario}
+                onChange={(e) => setUsuario(e.target.value)}
+                placeholder="ex: seu.nome"
+                className="flex-1 rounded-l-md rounded-r-none border-r-0 bg-[#0a0c12] border border-gray-800 px-4 py-2.5 text-sm outline-none focus:border-purple-500 transition-colors placeholder:text-zinc-600"
+              />
+              <span className="inline-flex items-center px-3 rounded-r-md border border-l-0 border-gray-700 bg-gray-800 text-gray-400 text-sm">
+                @uniclasstech.edu.br
+              </span>
+            </div>
           </div>
 
           <div className="flex flex-col gap-1.5">

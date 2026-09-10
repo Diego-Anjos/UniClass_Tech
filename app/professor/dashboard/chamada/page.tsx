@@ -48,19 +48,20 @@ type AlunoChamada = {
   id: string;
   nome: string;
   ra: string;
-  porcentagemFaltas: number;
 };
 
 type StatusChamada = "presente" | "falta";
+
+type RegistroHistorico = {
+  aluno_ra: string;
+  status: string;
+  data_aula: string;
+};
 
 type AiInsightChamada = {
   tipoAlerta: string;
   mensagem: string;
 };
-
-function hojeISO() {
-  return new Date().toISOString().split("T")[0];
-}
 
 function formatarDataBR(iso: string) {
   const [yyyy, mm, dd] = iso.split("-");
@@ -77,48 +78,33 @@ function paraISOLocal(date: Date) {
 
 const DIAS_SEMANA_LABEL = ["DOM", "SEG", "TER", "QUA", "QUI", "SEX", "SAB"] as const;
 
-const DIAS_AULA_PARA_INDICE: Record<string, number> = {
+const diasMapa: Record<string, number> = {
   Domingo: 0,
   Segunda: 1,
   Terça: 2,
-  Terca: 2,
   Quarta: 3,
   Quinta: 4,
   Sexta: 5,
   Sábado: 6,
-  Sabado: 6,
 };
 
-/** Converte nomes salvos (ex: "Segunda") para índices JS getDay(). */
-function indicesDiasPermitidos(diasAula: string[] | undefined): number[] {
-  if (!diasAula || diasAula.length === 0) {
-    return [0, 1, 2, 3, 4, 5, 6];
+/** Último dia de aula permitido até hoje (inclusive). */
+function getUltimoDiaDeAula(diasPermitidos: number[]): Date {
+  const cursor = new Date();
+  cursor.setHours(0, 0, 0, 0);
+
+  for (let i = 0; i < 366; i++) {
+    if (diasPermitidos.includes(cursor.getDay())) {
+      return cursor;
+    }
+    cursor.setDate(cursor.getDate() - 1);
   }
 
-  const indices = diasAula
-    .map((dia) => {
-      const chave = dia.trim();
-      if (chave in DIAS_AULA_PARA_INDICE) return DIAS_AULA_PARA_INDICE[chave];
-      const normalizado = chave
-        .normalize("NFD")
-        .replace(/[\u0300-\u036f]/g, "")
-        .toLowerCase()
-        .split("-")[0]
-        ?.trim();
-      const mapa: Record<string, number> = {
-        domingo: 0,
-        segunda: 1,
-        terca: 2,
-        quarta: 3,
-        quinta: 4,
-        sexta: 5,
-        sabado: 6,
-      };
-      return normalizado ? mapa[normalizado] : undefined;
-    })
-    .filter((n): n is number => typeof n === "number");
+  return new Date();
+}
 
-  return indices.length > 0 ? indices : [0, 1, 2, 3, 4, 5, 6];
+function dataDesabilitada(date: Date, diasPermitidos: number[]) {
+  return !diasPermitidos.includes(date.getDay()) || date > new Date();
 }
 
 function cellsDoMes(ano: number, mes: number) {
@@ -149,29 +135,23 @@ function iniciaisDoNome(nome: string) {
     .join("");
 }
 
-/** Gera % de faltas estável (5–30) a partir do id do aluno. */
-function porcentagemFaltasDeId(id: string) {
-  let hash = 0;
-  for (let i = 0; i < id.length; i++) {
-    hash = (hash * 31 + id.charCodeAt(i)) >>> 0;
-  }
-  return 5 + (hash % 26);
-}
-
 export default function ProfessorChamadaPage() {
   const { professorLogado, carregandoSessao } = useProfessorSession();
   const [turmas, setTurmas] = useState<TurmaOption[]>([]);
   const [turmaSelecionada, setTurmaSelecionada] = useState("");
-  const [dataChamada, setDataChamada] = useState(hojeISO());
+  const [dataChamada, setDataChamada] = useState(() =>
+    paraISOLocal(getUltimoDiaDeAula([1, 2, 3, 4, 5]))
+  );
   const [mostrarCalendario, setMostrarCalendario] = useState(false);
   const [mesCalendario, setMesCalendario] = useState(() => {
-    const hoje = new Date();
-    return new Date(hoje.getFullYear(), hoje.getMonth(), 1);
+    const inicial = getUltimoDiaDeAula([1, 2, 3, 4, 5]);
+    return new Date(inicial.getFullYear(), inicial.getMonth(), 1);
   });
   const [chamadaStatus, setChamadaStatus] = useState<
     Record<string, StatusChamada>
   >({});
   const [alunosTurma, setAlunosTurma] = useState<AlunoChamada[]>([]);
+  const [historicoTurma, setHistoricoTurma] = useState<RegistroHistorico[]>([]);
   const [termoBusca, setTermoBusca] = useState("");
   const [paginaAtual, setPaginaAtual] = useState(1);
   const [itensPorPagina, setItensPorPagina] = useState(10);
@@ -217,10 +197,20 @@ export default function ProfessorChamadaPage() {
   const engajamentoAlto =
     aiInsight?.tipoAlerta?.toUpperCase().includes("ENGAJAMENTO") ?? false;
 
-  const diasPermitidos = useMemo(
-    () => indicesDiasPermitidos(professorLogado?.dias_aula),
-    [professorLogado?.dias_aula]
-  );
+  const diasMapeados = (professorLogado?.dias_aula ?? [])
+    .map((dia: string) => diasMapa[dia])
+    .filter((n): n is number => typeof n === "number");
+  const diasPermitidos =
+    diasMapeados.length > 0 ? diasMapeados : [1, 2, 3, 4, 5];
+
+  // Quando a sessão carrega, posiciona no último dia de aula válido
+  useEffect(() => {
+    if (!professorLogado) return;
+    const ultimo = getUltimoDiaDeAula(diasPermitidos);
+    setDataChamada(paraISOLocal(ultimo));
+    setMesCalendario(new Date(ultimo.getFullYear(), ultimo.getMonth(), 1));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [professorLogado?.id, JSON.stringify(professorLogado?.dias_aula ?? [])]);
 
   const celulasCalendario = useMemo(
     () =>
@@ -254,7 +244,7 @@ export default function ProfessorChamadaPage() {
   }
 
   function selecionarDataCalendario(dia: Date) {
-    if (!diasPermitidos.includes(dia.getDay())) return;
+    if (dataDesabilitada(dia, diasPermitidos)) return;
     setDataChamada(paraISOLocal(dia));
     setMostrarCalendario(false);
   }
@@ -263,6 +253,40 @@ export default function ProfessorChamadaPage() {
     setMesCalendario(
       (prev) => new Date(prev.getFullYear(), prev.getMonth() + delta, 1)
     );
+  }
+
+  async function carregarHistoricoTurma(turmaId: string) {
+    const { data, error } = await supabase
+      .from("registro_chamada")
+      .select("aluno_ra, status, data_aula")
+      .eq("turma_curso", turmaId);
+
+    if (error) {
+      console.error("Erro ao buscar histórico de chamadas:", error.message);
+      setHistoricoTurma([]);
+      return;
+    }
+
+    setHistoricoTurma(
+      (data ?? []).map((row) => ({
+        aluno_ra: String(row.aluno_ra ?? ""),
+        status: String(row.status ?? ""),
+        data_aula: String(row.data_aula ?? ""),
+      }))
+    );
+  }
+
+  function calcularFrequencia(ra: string): number {
+    const totalAulas = new Set(
+      historicoTurma.map((c) => c.data_aula).filter(Boolean)
+    ).size;
+    const faltasAluno = historicoTurma.filter(
+      (c) =>
+        c.aluno_ra === ra && c.status.toLowerCase() === "falta"
+    ).length;
+    return totalAulas > 0
+      ? Math.round((faltasAluno / totalAulas) * 100)
+      : 0;
   }
 
   async function salvarChamada() {
@@ -308,6 +332,8 @@ export default function ProfessorChamadaPage() {
         );
         return;
       }
+
+      await carregarHistoricoTurma(turmaSelecionada);
 
       mostrarFeedback(
         "sucesso",
@@ -367,12 +393,14 @@ export default function ProfessorChamadaPage() {
   useEffect(() => {
     if (!turmaSelecionada || !professorLogado) {
       setAlunosTurma([]);
+      setHistoricoTurma([]);
       return;
     }
 
     const turma = turmas.find((t) => t.id === turmaSelecionada);
     if (!turma) {
       setAlunosTurma([]);
+      setHistoricoTurma([]);
       return;
     }
 
@@ -401,11 +429,15 @@ export default function ProfessorChamadaPage() {
             error?.message ?? porProfessor.error.message
           );
           setAlunosTurma([]);
+          setHistoricoTurma([]);
           return;
         }
 
         data = porProfessor.data;
       }
+
+      // Histórico completo de chamadas da turma (frequência real)
+      await carregarHistoricoTurma(turmaSelecionada);
 
       if (!data || data.length === 0) {
         setAlunosTurma([]);
@@ -422,7 +454,6 @@ export default function ProfessorChamadaPage() {
               (aluno as { matricula?: string }).matricula ||
               "RA-"
           ),
-          porcentagemFaltas: porcentagemFaltasDeId(id),
         };
       });
 
@@ -735,8 +766,9 @@ export default function ProfessorChamadaPage() {
                             return <div key={`empty-${idx}`} className="h-9" />;
                           }
 
-                          const permitido = diasPermitidos.includes(
-                            dia.getDay()
+                          const desabilitado = dataDesabilitada(
+                            dia,
+                            diasPermitidos
                           );
                           const iso = paraISOLocal(dia);
                           const selecionado = iso === dataChamada;
@@ -745,10 +777,10 @@ export default function ProfessorChamadaPage() {
                             <button
                               key={iso}
                               type="button"
-                              disabled={!permitido}
+                              disabled={desabilitado}
                               onClick={() => selecionarDataCalendario(dia)}
                               className={`h-9 rounded-md text-sm transition-colors ${
-                                !permitido
+                                desabilitado
                                   ? "opacity-30 cursor-not-allowed text-gray-500 bg-transparent"
                                   : selecionado
                                     ? "bg-purple-600 text-white cursor-pointer"
@@ -877,7 +909,9 @@ export default function ProfessorChamadaPage() {
                     </tr>
                   ) : (
                     alunosExibidos.map((aluno) => {
-                      const alerta = aluno.porcentagemFaltas >= 25;
+                      const percFaltas = calcularFrequencia(aluno.ra);
+                      const alertaCritico = percFaltas > 25;
+                      const alertaMedio = percFaltas > 15 && percFaltas <= 25;
                       const status = chamadaStatus[aluno.ra] ?? "presente";
                       const estaPresente = status === "presente";
                       return (
@@ -893,8 +927,8 @@ export default function ProfessorChamadaPage() {
                               <div className="min-w-0">
                                 <p className="text-sm font-medium text-white truncate flex items-center gap-1.5">
                                   {aluno.nome}
-                                  {alerta && (
-                                    <AlertTriangle className="w-3.5 h-3.5 text-amber-400 shrink-0" />
+                                  {alertaCritico && (
+                                    <AlertTriangle className="w-3.5 h-3.5 text-red-500 shrink-0" />
                                   )}
                                 </p>
                                 <p className="text-xs text-zinc-500">
@@ -906,12 +940,14 @@ export default function ProfessorChamadaPage() {
                           <td className="px-4 py-4">
                             <span
                               className={`text-sm ${
-                                alerta
-                                  ? "text-red-400 font-medium"
-                                  : "text-zinc-400"
+                                alertaCritico
+                                  ? "text-red-500 font-medium"
+                                  : alertaMedio
+                                    ? "text-yellow-500 font-medium"
+                                    : "text-gray-400"
                               }`}
                             >
-                              {aluno.porcentagemFaltas}% de faltas
+                              {percFaltas}% de faltas
                             </span>
                           </td>
                           <td className="px-6 py-4">
