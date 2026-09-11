@@ -8,6 +8,7 @@ import {
   UserCheck,
   Sparkles,
   MessageSquare,
+  Map as MapIcon,
   LogOut,
   GraduationCap,
   ChevronDown,
@@ -38,6 +39,7 @@ const navItems = [
   { icon: LayoutDashboard, label: "Visão Geral",    href: "/professor/dashboard",           active: false },
   { icon: BookOpen,        label: "Turmas e Notas", href: "/professor/dashboard/notas",     active: false },
   { icon: UserCheck,       label: "Chamada Rápida", href: "/professor/dashboard/chamada",   active: false },
+  { icon: MapIcon, label: "Mapa de Salas", href: "/professor/dashboard/mapa", active: false },
   { icon: Sparkles,        label: "Insights IA",    href: "/professor/dashboard/insights",  active: true  },
   { icon: MessageSquare,   label: "Mensagens",      href: "/professor/dashboard/mensagens",  active: false },
 ];

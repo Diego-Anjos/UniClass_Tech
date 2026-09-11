@@ -18,6 +18,14 @@ import {
 } from "lucide-react";
 import { supabase } from "@/lib/supabase";
 import { ModalFeedback } from "@/components/ModalFeedback";
+import {
+  ANDARES,
+  chaveAlocacao,
+  diaHoje,
+  normalizarTurma,
+  ocorreHoje,
+  salasDoAndar,
+} from "@/lib/mapa-catalogo";
 
 type Turno = "Manhã" | "Noite";
 type StatusTurma = "Aberta" | "Em andamento" | "Fechada";
@@ -62,23 +70,6 @@ type FormDataTurma = {
 };
 
 const SEMESTRES = Array.from({ length: 10 }, (_, i) => `${i + 1}º Semestre`);
-
-const ANDARES = [
-  "Térreo",
-  "1º Andar",
-  "2º Andar",
-  "3º Andar",
-  "4º Andar",
-] as const;
-
-const SALAS_LABS = [
-  "Sala 101",
-  "Sala 102",
-  "Lab 1",
-  "Lab 2",
-  "Lab 3",
-  "Auditório",
-] as const;
 
 const formInicial: FormDataTurma = {
   codigo: "",
@@ -186,6 +177,13 @@ export default function TurmasMatriculasPage() {
   const [formData, setFormData] = useState<FormDataTurma>(formInicial);
   const [andarSelecionado, setAndarSelecionado] = useState("");
   const [salaSelecionada, setSalaSelecionada] = useState("");
+  const salasDisponiveis = useMemo(
+    () => salasDoAndar(andarSelecionado),
+    [andarSelecionado]
+  );
+  const [salasOcupadasKeys, setSalasOcupadasKeys] = useState<Set<string>>(
+    new Set()
+  );
   const [editingId, setEditingId] = useState<string | null>(null);
   const [itemToDelete, setItemToDelete] = useState<string | null>(null);
   const [modalFeedback, setModalFeedback] = useState<{
@@ -249,6 +247,17 @@ export default function TurmasMatriculasPage() {
     });
 
     setTurmas(turmasComOcupacao);
+
+    const hoje = diaHoje();
+    const ocupadas = new Set<string>();
+    for (const raw of turmasData || []) {
+      const t = normalizarTurma(raw);
+      if (!t?.professor?.trim() || !t.sala?.trim()) continue;
+      if (!ocorreHoje(t, hoje)) continue;
+      ocupadas.add(chaveAlocacao(t.andar, t.sala));
+    }
+    setSalasOcupadasKeys(ocupadas);
+
     setIsLoading(false);
   }
 
@@ -1225,7 +1234,10 @@ export default function TurmasMatriculasPage() {
                   <select
                     id="turma-andar"
                     value={andarSelecionado}
-                    onChange={(e) => setAndarSelecionado(e.target.value)}
+                    onChange={(e) => {
+                      setAndarSelecionado(e.target.value);
+                      setSalaSelecionada("");
+                    }}
                     className={inputClass}
                   >
                     <option value="">Selecione o andar</option>
@@ -1245,14 +1257,30 @@ export default function TurmasMatriculasPage() {
                     id="turma-sala"
                     value={salaSelecionada}
                     onChange={(e) => setSalaSelecionada(e.target.value)}
+                    disabled={!andarSelecionado}
                     className={inputClass}
                   >
-                    <option value="">Selecione a sala ou laboratório</option>
-                    {SALAS_LABS.map((sala) => (
-                      <option key={sala} value={sala}>
-                        {sala}
-                      </option>
-                    ))}
+                    <option value="">
+                      {andarSelecionado
+                        ? "Selecione a sala ou laboratório"
+                        : "Selecione o andar primeiro"}
+                    </option>
+                    {salasDisponiveis.map((sala) => {
+                      const desabilitar =
+                        salasOcupadasKeys.has(
+                          chaveAlocacao(andarSelecionado, sala)
+                        ) && sala !== salaSelecionada;
+
+                      return (
+                        <option
+                          key={sala}
+                          value={sala}
+                          disabled={desabilitar}
+                        >
+                          {desabilitar ? `${sala} (Ocupada)` : sala}
+                        </option>
+                      );
+                    })}
                   </select>
                 </div>
 

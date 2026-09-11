@@ -32,7 +32,7 @@ Turmas Atribuídas: ${turmasCount}`;
           { role: "system", content: systemPrompt },
           { role: "user", content: userPrompt },
         ],
-        model: "llama-3.3-70b-versatile",
+        model: "llama-3.1-70b-versatile",
         temperature: 0.5,
         response_format: { type: "json_object" },
       });
@@ -42,7 +42,7 @@ Turmas Atribuídas: ${turmasCount}`;
           { role: "system", content: systemPrompt },
           { role: "user", content: userPrompt },
         ],
-        model: "llama-3.2-3b-preview",
+        model: "llama-3.1-8b-instant",
         temperature: 0.5,
         response_format: { type: "json_object" },
       });

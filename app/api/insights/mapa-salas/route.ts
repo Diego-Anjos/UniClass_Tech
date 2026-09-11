@@ -37,26 +37,26 @@ export async function POST(req: NextRequest) {
     try {
       const completion = await groq.chat.completions.create({
         messages: mensagens,
-        model: "llama-3.3-70b-versatile",
+        model: "llama-3.1-70b-versatile",
         temperature: 0.6,
         max_tokens: 100,
       });
       dica = extrairTexto(completion);
     } catch (err) {
-      console.warn("Falha no modelo primário (llama-3.3-70b-versatile):", err);
+      console.warn("Falha no modelo primário (llama-3.1-70b-versatile):", err);
     }
 
     if (!dica) {
       try {
         const completion = await groq.chat.completions.create({
           messages: mensagens,
-          model: "llama-3.2-3b-preview",
+          model: "llama-3.1-8b-instant",
           temperature: 0.6,
           max_tokens: 100,
         });
         dica = extrairTexto(completion);
       } catch (err) {
-        console.warn("Falha no modelo secundário (llama-3.2-3b-preview):", err);
+        console.warn("Falha no modelo secundário (llama-3.1-8b-instant):", err);
       }
     }
 

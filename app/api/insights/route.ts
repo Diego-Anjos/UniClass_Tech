@@ -26,17 +26,17 @@ export async function POST(req: NextRequest) {
       // Tentativa 1: Modelo Primário
       completion = await groq.chat.completions.create({
         messages: mensagens,
-        model: "llama-3.3-70b-versatile",
+        model: "llama-3.1-70b-versatile",
         temperature: 0.7,
         max_tokens: 150,
       });
     } catch (erroPrimario: any) {
-      console.warn("Falha no modelo primário (llama-3.3-70b-versatile):", erroPrimario.message || erroPrimario);
+      console.warn("Falha no modelo primário (llama-3.1-70b-versatile):", erroPrimario.message || erroPrimario);
       
       // Tentativa 2: Modelo de Redundância
       completion = await groq.chat.completions.create({
         messages: mensagens,
-        model: "llama-3.2-3b-preview",
+        model: "llama-3.1-8b-instant",
         temperature: 0.7,
         max_tokens: 150,
       });

@@ -27,6 +27,7 @@ type Aluno = {
   ra: string;
   nome: string;
   curso: string;
+  turma: string;
   semestre: number;
   professor: string;
   status: StatusAluno;
@@ -194,6 +195,77 @@ function valorOpcaoProfessor(p: {
   return titulo ? `${titulo} ${nome}` : nome;
 }
 
+/** Extrai siglas de turma (ex: CDIA-4A-N) de texto CSV, JSON ou livre. */
+function extrairSiglasTurma(raw: unknown): string[] {
+  if (!raw) return [];
+  if (Array.isArray(raw)) {
+    return raw
+      .map(String)
+      .map((s) => s.trim())
+      .filter(Boolean)
+      .flatMap((s) => extrairSiglasTurma(s));
+  }
+  if (typeof raw !== "string") return [];
+  const texto = raw.trim();
+  if (!texto || texto === "—") return [];
+
+  try {
+    const parsed = JSON.parse(texto);
+    if (Array.isArray(parsed)) return extrairSiglasTurma(parsed);
+  } catch {
+    // texto simples
+  }
+
+  const regex = /[A-Za-z]{2,}[A-Za-z0-9]*-\d+[A-Za-z]?-[A-Za-z]+/g;
+  const matches = texto.match(regex);
+  if (matches && matches.length > 0) {
+    return [...new Set(matches.map((m) => m.toUpperCase()))];
+  }
+
+  return texto
+    .split(",")
+    .map((s) => s.trim())
+    .filter(Boolean);
+}
+
+function extrairSiglaTurma(raw: unknown): string {
+  return extrairSiglasTurma(raw)[0] ?? "";
+}
+
+type OpcaoVinculoProfessor = {
+  value: string; // apenas a sigla da turma
+  label: string;
+  professorLabel: string;
+  professorId: string;
+};
+
+function construirOpcoesVinculo(
+  lista: ProfessorDisponivel[]
+): OpcaoVinculoProfessor[] {
+  const opcoes: OpcaoVinculoProfessor[] = [];
+  const valoresUsados = new Set<string>();
+
+  for (const p of lista) {
+    const professorLabel = valorOpcaoProfessor(p);
+    const siglas = extrairSiglasTurma(p.area_atuacao);
+
+    if (siglas.length === 0) continue;
+
+    for (const sigla of siglas) {
+      if (valoresUsados.has(sigla)) continue;
+      valoresUsados.add(sigla);
+      opcoes.push({
+        value: sigla,
+        label: `${professorLabel} (${sigla})`,
+        professorLabel,
+        professorId: p.id,
+      });
+    }
+  }
+
+  return opcoes.sort((a, b) => a.value.localeCompare(b.value, "pt-BR"));
+}
+
 function encontrarProfessorNaLista(
   professorSalvo: string,
   lista: ProfessorDisponivel[]
@@ -246,6 +318,7 @@ function mapAluno(row: Record<string, unknown>): Aluno {
     ra: String(row.ra ?? "—"),
     nome,
     curso: String(row.curso ?? "—"),
+    turma: String(row.turma ?? ""),
     semestre: Number(row.semestre ?? 1),
     professor: String(
       row.professor ?? row.professor_vinculado ?? row.orientador ?? ""
@@ -307,6 +380,7 @@ export default function GestaoAlunosPage() {
     ProfessorDisponivel[]
   >([]);
   const [professorVinculado, setProfessorVinculado] = useState("");
+  const [turmaVinculada, setTurmaVinculada] = useState("");
   const [professorSugerido, setProfessorSugerido] = useState<string | null>(null);
   const [buscandoCep, setBuscandoCep] = useState(false);
   const [cepErro, setCepErro] = useState<string | null>(null);
@@ -440,6 +514,11 @@ export default function GestaoAlunosPage() {
     }
     return base.sort();
   }, [cursosAtivos, formData.curso]);
+
+  const opcoesVinculo = useMemo(
+    () => construirOpcoesVinculo(professoresDisponiveis),
+    [professoresDisponiveis]
+  );
 
   const alunosFiltrados = useMemo(() => {
     const termo = searchTerm.trim().toLowerCase();
@@ -633,11 +712,15 @@ export default function GestaoAlunosPage() {
     );
 
     if (professor) {
-      const valor = valorOpcaoProfessor(professor);
-      setProfessorVinculado(valor);
-      setProfessorSugerido(valor);
+      const siglas = extrairSiglasTurma(professor.area_atuacao);
+      const professorLabel = valorOpcaoProfessor(professor);
+      const sigla = siglas[0] ?? "";
+      setProfessorVinculado(professorLabel);
+      setTurmaVinculada(sigla);
+      setProfessorSugerido(sigla || professorLabel);
     } else {
       setProfessorVinculado("");
+      setTurmaVinculada("");
       setProfessorSugerido(null);
     }
   }
@@ -648,6 +731,7 @@ export default function GestaoAlunosPage() {
     setFormError(null);
     setEditingId(null);
     setProfessorVinculado("");
+    setTurmaVinculada("");
     setProfessorSugerido(null);
     setAbaAtiva("academico");
     setCepErro(null);
@@ -687,6 +771,7 @@ export default function GestaoAlunosPage() {
     setFormError(null);
     setEditingId(null);
     setProfessorVinculado("");
+    setTurmaVinculada("");
     setProfessorSugerido(null);
     setAbaAtiva("academico");
     setCepErro(null);
@@ -749,26 +834,42 @@ export default function GestaoAlunosPage() {
     }
 
     const professorSalvo = (aluno.professor || "").trim();
+    const turmaSalva = extrairSiglaTurma(aluno.turma);
     const matchSalvo = encontrarProfessorNaLista(professorSalvo, lista);
+    const opcoes = construirOpcoesVinculo(lista);
 
-    if (matchSalvo) {
+    if (turmaSalva && opcoes.some((o) => o.value === turmaSalva)) {
+      const opcao = opcoes.find((o) => o.value === turmaSalva)!;
+      setTurmaVinculada(turmaSalva);
+      setProfessorVinculado(opcao.professorLabel);
+      setProfessorSugerido(null);
+    } else if (matchSalvo) {
+      const siglas = extrairSiglasTurma(matchSalvo.area_atuacao);
+      const sigla = turmaSalva || siglas[0] || "";
       setProfessorVinculado(valorOpcaoProfessor(matchSalvo));
+      setTurmaVinculada(sigla);
       setProfessorSugerido(null);
     } else if (professorSalvo) {
       setProfessorVinculado(professorSalvo);
+      setTurmaVinculada(turmaSalva);
       setProfessorSugerido(null);
     } else if (curso) {
       const sugerido = sugerirProfessorPorArea(curso, lista);
       if (sugerido) {
-        const valor = valorOpcaoProfessor(sugerido);
-        setProfessorVinculado(valor);
-        setProfessorSugerido(valor);
+        const siglas = extrairSiglasTurma(sugerido.area_atuacao);
+        const professorLabel = valorOpcaoProfessor(sugerido);
+        const sigla = siglas[0] ?? "";
+        setProfessorVinculado(professorLabel);
+        setTurmaVinculada(sigla);
+        setProfessorSugerido(sigla || professorLabel);
       } else {
         setProfessorVinculado("");
+        setTurmaVinculada("");
         setProfessorSugerido(null);
       }
     } else {
       setProfessorVinculado("");
+      setTurmaVinculada("");
       setProfessorSugerido(null);
     }
 
@@ -785,7 +886,12 @@ export default function GestaoAlunosPage() {
     const ra = formData.ra.trim();
     const nome = formData.nome.trim();
     const curso = formData.curso.trim();
-    const professor = professorVinculado.trim();
+    const turma =
+      extrairSiglaTurma(turmaVinculada) ||
+      extrairSiglaTurma(professorVinculado);
+    const opcaoTurma = opcoesVinculo.find((o) => o.value === turma);
+    const professor =
+      opcaoTurma?.professorLabel.trim() || professorVinculado.trim();
     const semestreNum = parseInt(formData.semestre, 10);
     const email_institucional =
       formData.email_institucional.trim() ||
@@ -802,6 +908,7 @@ export default function GestaoAlunosPage() {
       ra,
       nome,
       curso,
+      turma,
       professor,
       semestre: Number.isNaN(semestreNum) ? formData.semestre : semestreNum,
       cpf: formData.cpf.trim(),
@@ -1453,37 +1560,38 @@ export default function GestaoAlunosPage() {
                       </label>
                       <select
                         id="professor-vinculado"
-                        value={professorVinculado}
+                        value={turmaVinculada}
                         onChange={(e) => {
-                          setProfessorVinculado(e.target.value);
-                          if (e.target.value !== professorSugerido) {
+                          const sigla = e.target.value;
+                          setTurmaVinculada(sigla);
+                          const opcao = opcoesVinculo.find(
+                            (o) => o.value === sigla
+                          );
+                          setProfessorVinculado(opcao?.professorLabel ?? "");
+                          if (sigla !== professorSugerido) {
                             setProfessorSugerido(null);
                           }
                         }}
                         className={inputClass}
                       >
                         <option value="">
-                          Selecione ou confirme o docente...
+                          Selecione ou confirme o docente / turma...
                         </option>
-                        {professorVinculado &&
-                          !professoresDisponiveis.some(
-                            (p) =>
-                              valorOpcaoProfessor(p) === professorVinculado ||
-                              p.nome === professorVinculado
+                        {turmaVinculada &&
+                          !opcoesVinculo.some(
+                            (o) => o.value === turmaVinculada
                           ) && (
-                            <option value={professorVinculado}>
-                              {professorVinculado}
+                            <option value={turmaVinculada}>
+                              {professorVinculado
+                                ? `${professorVinculado} (${turmaVinculada})`
+                                : turmaVinculada}
                             </option>
                           )}
-                        {professoresDisponiveis.map((p) => {
-                          const valor = valorOpcaoProfessor(p);
-                          return (
-                            <option key={p.id} value={valor}>
-                              {valor}
-                              {p.area_atuacao ? ` (${p.area_atuacao})` : ""}
-                            </option>
-                          );
-                        })}
+                        {opcoesVinculo.map((opcao) => (
+                          <option key={opcao.value} value={opcao.value}>
+                            {opcao.label}
+                          </option>
+                        ))}
                       </select>
                       {professorSugerido && (
                         <span className="text-[11px] text-purple-400 mt-1 block">

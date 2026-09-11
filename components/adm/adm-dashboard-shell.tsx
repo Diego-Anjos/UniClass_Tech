@@ -15,6 +15,7 @@ import {
   Building2,
   Menu,
   X,
+  Map as MapIcon,
 } from "lucide-react";
 import { limparSessaoAdmin } from "@/lib/admin-session";
 
@@ -27,6 +28,7 @@ const navItems = [
     href: "/adm/dashboard/professores",
   },
   { icon: BookOpen, label: "Turmas e Matrículas", href: "/adm/dashboard/turmas" },
+  { icon: MapIcon, label: "Mapa de Salas", href: "/adm/dashboard/mapa" },
   {
     icon: MessageSquareText,
     label: "Chamados & Suporte",

@@ -93,6 +93,8 @@ export default function LoginPage() {
         nomeCompletoTitulo: `${data.titulacao} ${data.nome}`,
         turno_aula: data.turno_aula ?? "Noite",
         dias_aula: Array.isArray(data.dias_aula) ? data.dias_aula : [],
+        turmas: data.area_atuacao ?? "",
+        disciplina: data.disciplina ?? "",
       })
     );
 

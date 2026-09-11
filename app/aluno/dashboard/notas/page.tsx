@@ -17,12 +17,80 @@ import {
   Settings,
   ChevronDown,
 } from "lucide-react";
+import {
+  BarChart,
+  Bar,
+  XAxis,
+  YAxis,
+  Tooltip,
+  ResponsiveContainer,
+  CartesianGrid,
+} from "recharts";
 import { supabase } from "@/lib/supabase";
 import { ModalFeedback } from "@/components/ModalFeedback";
 import {
   limparSessaoAluno,
   useAlunoSession,
 } from "@/lib/aluno-session";
+
+const mockNotasPorCurso: Record<string, any[]> = {
+  "Banco de Dados": [
+    {
+      disciplina: "Modelagem de Dados",
+      professor: "Roberto Lima",
+      n1: 8.5,
+      n2: 7.0,
+      faltas: 2,
+    },
+    {
+      disciplina: "SQL Avançado",
+      professor: "Sofia Mendes",
+      n1: 9.0,
+      n2: 8.5,
+      faltas: 0,
+    },
+    {
+      disciplina: "Administração de SGBD",
+      professor: "Carlos Silva",
+      n1: 6.0,
+      n2: 7.5,
+      faltas: 4,
+    },
+  ],
+  "Análise e Desenvolvimento de Sistemas (Tecnólogo)": [
+    {
+      disciplina: "Lógica de Programação",
+      professor: "Ana Costa",
+      n1: 7.5,
+      n2: 8.0,
+      faltas: 2,
+    },
+    {
+      disciplina: "Desenvolvimento Web",
+      professor: "Marcos Paulo",
+      n1: 9.0,
+      n2: 9.0,
+      faltas: 0,
+    },
+  ],
+  // Alias do catálogo administrativo (sem sufixo Tecnólogo)
+  "Análise e Desenvolvimento de Sistemas": [
+    {
+      disciplina: "Lógica de Programação",
+      professor: "Ana Costa",
+      n1: 7.5,
+      n2: 8.0,
+      faltas: 2,
+    },
+    {
+      disciplina: "Desenvolvimento Web",
+      professor: "Marcos Paulo",
+      n1: 9.0,
+      n2: 9.0,
+      faltas: 0,
+    },
+  ],
+};
 
 const navItems = [
   { icon: LayoutDashboard, label: "Visão Geral",         href: "/aluno/dashboard",        active: false },
@@ -40,75 +108,28 @@ type AlunoInfo = {
   professor?: string;
 };
 
-type Criterios = {
-  ativ1: number;
-  ativ2: number;
-  ativ3: number;
-  ativ4: number;
-  prova: number;
-};
-
-type DatasAvaliacoes = {
-  ativ1: string;
-  ativ2: string;
-  ativ3: string;
-  ativ4: string;
-  prova: string;
-};
-
-type BoletimItem = {
-  id: string;
-  turmaId: string;
-  disciplina: string;
-  professor: string;
-  mediaParcial: number | null;
-  faltasPct: number;
-  status: string;
-  ativ1: number | null;
-  ativ2: number | null;
-  ativ3: number | null;
-  ativ4: number | null;
-  prova: number | null;
-  criterios: Criterios;
-  datas: DatasAvaliacoes;
-};
-
-const CRITERIOS_PADRAO: Criterios = {
-  ativ1: 1,
-  ativ2: 1,
-  ativ3: 1,
-  ativ4: 1,
-  prova: 6,
-};
-
-const DATAS_PADRAO: DatasAvaliacoes = {
-  ativ1: "",
-  ativ2: "",
-  ativ3: "",
-  ativ4: "",
-  prova: "",
-};
-
-const COMPOSICAO = [
-  { key: "ativ1" as const, label: "Atividade 1", criterioKey: "ativ1" as const },
-  { key: "ativ2" as const, label: "Atividade 2", criterioKey: "ativ2" as const },
-  { key: "ativ3" as const, label: "Atividade 3", criterioKey: "ativ3" as const },
-  { key: "ativ4" as const, label: "Atividade 4", criterioKey: "ativ4" as const },
-  { key: "prova" as const, label: "Prova Semestral", criterioKey: "prova" as const },
+const COMPOSICAO_N1_MOCK = [
+  { label: "Atividade 1", peso: 2.0, nota: 1.5 },
+  { label: "Atividade 2", peso: 1.0, nota: 1.0 },
+  { label: "Atividade 3", peso: 1.0, nota: 0.5 },
+  { label: "Atividade 4", peso: 1.0, nota: 1.0 },
+  { label: "Prova Semestral", peso: 5.0, nota: 4.5 },
 ];
+
+const TOTAL_N1_MOCK = COMPOSICAO_N1_MOCK.reduce((acc, item) => acc + item.nota, 0);
 
 function statusBadgeClasses(status: string) {
   const s = status.toLowerCase();
   if (s === "aprovado") return "bg-emerald-900 text-emerald-300";
-  if (s === "reprovado") return "bg-red-900 text-red-300";
+  if (s === "reprovado" || s === "em risco") return "bg-red-900 text-red-300";
   return "bg-gray-800 text-gray-300";
 }
 
-function statusLabel(status: string) {
-  const s = status.trim();
-  if (!s || s.toLowerCase() === "pendente") return "Pendente";
-  if (s.toLowerCase() === "exame final") return "Cursando";
-  return s;
+function statusPorMedia(n1: number, n2: number) {
+  const media = (n1 + n2) / 2;
+  if (media >= 7) return "Cursando";
+  if (media >= 6) return "Pendente";
+  return "Em risco";
 }
 
 function fmtNota(val: number | null) {
@@ -116,63 +137,6 @@ function fmtNota(val: number | null) {
     return <span className="text-zinc-600">—</span>;
   }
   return val.toFixed(1);
-}
-
-function formatarData(iso: string) {
-  if (!iso) return "—";
-  const [ano, mes, dia] = iso.split("-");
-  if (!mes || !dia) return iso;
-  return `${dia}/${mes}${ano ? `/${ano}` : ""}`;
-}
-
-function toNum(val: unknown): number | null {
-  if (val === null || val === undefined || val === "") return null;
-  const n = Number(val);
-  return Number.isNaN(n) ? null : n;
-}
-
-function normalizarCriterios(raw: unknown): Criterios {
-  if (!raw || typeof raw !== "object") return { ...CRITERIOS_PADRAO };
-  const c = raw as Partial<Record<keyof Criterios, unknown>>;
-  const ativ1 = Number(c.ativ1);
-  const ativ2 = Number(c.ativ2);
-  const ativ3 = Number(c.ativ3);
-  const ativ4 = Number(c.ativ4);
-  const prova = Number(c.prova);
-  const temAlgum = [ativ1, ativ2, ativ3, ativ4, prova].some((v) => !Number.isNaN(v));
-  if (!temAlgum) return { ...CRITERIOS_PADRAO };
-  return {
-    ativ1: Number.isNaN(ativ1) ? CRITERIOS_PADRAO.ativ1 : ativ1,
-    ativ2: Number.isNaN(ativ2) ? CRITERIOS_PADRAO.ativ2 : ativ2,
-    ativ3: Number.isNaN(ativ3) ? CRITERIOS_PADRAO.ativ3 : ativ3,
-    ativ4: Number.isNaN(ativ4) ? CRITERIOS_PADRAO.ativ4 : ativ4,
-    prova: Number.isNaN(prova) ? CRITERIOS_PADRAO.prova : prova,
-  };
-}
-
-function normalizarDatas(raw: unknown): DatasAvaliacoes {
-  if (!raw || typeof raw !== "object") return { ...DATAS_PADRAO };
-  const d = raw as Partial<Record<keyof DatasAvaliacoes, unknown>>;
-  return {
-    ativ1: typeof d.ativ1 === "string" ? d.ativ1 : "",
-    ativ2: typeof d.ativ2 === "string" ? d.ativ2 : "",
-    ativ3: typeof d.ativ3 === "string" ? d.ativ3 : "",
-    ativ4: typeof d.ativ4 === "string" ? d.ativ4 : "",
-    prova: typeof d.prova === "string" ? d.prova : "",
-  };
-}
-
-function calcularFaltasPct(
-  registros: { turma: string; status: string }[],
-  turmaId: string
-) {
-  const daTurma = registros.filter((r) => r.turma === turmaId);
-  if (daTurma.length === 0) return 0;
-  const faltas = daTurma.filter((r) => {
-    const s = r.status.toLowerCase();
-    return s === "falta" || s === "ausente" || s === "absent";
-  }).length;
-  return Math.round((faltas / daTurma.length) * 100);
 }
 
 function iniciaisDe(nome: string) {
@@ -189,14 +153,13 @@ function iniciaisDe(nome: string) {
 export default function AlunoNotasPage() {
   const { alunoLogado, carregandoSessao } = useAlunoSession();
   const [aluno, setAluno] = useState<AlunoInfo | null>(null);
-  const [boletim, setBoletim] = useState<BoletimItem[]>([]);
-  const [expandidoId, setExpandidoId] = useState<string | null>(null);
+  const [linhaExpandida, setLinhaExpandida] = useState<string | null>(null);
   const [carregando, setCarregando] = useState(true);
   const [semestreSelecionado, setSemestreSelecionado] = useState(
     "4º Semestre (Atual)"
   );
-  const [aiInsight, setAiInsight] = useState("");
-  const [isLoadingAi, setIsLoadingAi] = useState(true);
+  const [insightIA, setInsightIA] = useState("");
+  const [loadingIA, setLoadingIA] = useState(true);
   const [modalFeedback, setModalFeedback] = useState<{
     aberto: boolean;
     tipo: "sucesso" | "erro" | "atencao";
@@ -209,60 +172,64 @@ export default function AlunoNotasPage() {
     mensagem: "",
   });
 
-  async function fetchAiBoletimInsight(
-    alunoNome: string,
-    lista: BoletimItem[]
-  ) {
-    setIsLoadingAi(true);
-    try {
-      const pendentes = lista
-        .filter((d) => {
-          const s = d.status.toLowerCase();
-          return (
-            s === "cursando" ||
-            s === "pendente" ||
-            s === "exame final" ||
-            d.mediaParcial === null
+  const dadosNotas =
+    alunoLogado?.curso && mockNotasPorCurso[alunoLogado.curso]
+      ? mockNotasPorCurso[alunoLogado.curso]
+      : [
+          {
+            disciplina: "Grade Pendente",
+            professor: "-",
+            n1: 0,
+            n2: 0,
+            faltas: 0,
+          },
+        ];
+
+  useEffect(() => {
+    if (carregandoSessao) return;
+
+    let cancelado = false;
+
+    async function carregarInsightDesempenho() {
+      setLoadingIA(true);
+      try {
+        const response = await fetch("/api/insights/desempenho", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ notas: dadosNotas }),
+        });
+        const data = await response.json();
+        if (!response.ok) {
+          throw new Error(data.error || "Falha na análise de desempenho");
+        }
+        if (!cancelado) {
+          setInsightIA((data.insight as string) ?? "");
+        }
+      } catch (err) {
+        console.error("Erro ao gerar insight de desempenho:", err);
+        if (!cancelado) {
+          setInsightIA(
+            "Seu desempenho mostra pontos fortes e oportunidades de evolução. Priorize as disciplinas com notas mais baixas e acompanhe as faltas de perto."
           );
-        })
-        .map((d) => d.disciplina)
-        .join(", ");
-
-      const response = await fetch("/api/insights/boletim", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          alunoNome: alunoNome || "Estudante",
-          totalDisciplinas: lista.length,
-          disciplinasPendentes:
-            pendentes ||
-            (lista.length > 0
-              ? lista.map((d) => d.disciplina).join(", ")
-              : "nenhuma disciplina cadastrada"),
-        }),
-      });
-
-      const data = await response.json();
-      if (!response.ok) throw new Error(data.error || "Falha na análise do boletim");
-      setAiInsight((data.insight as string) ?? "");
-    } catch (err) {
-      console.error("Erro ao gerar insight do boletim:", err);
-      setAiInsight(
-        "Mantenha uma rotina diária de revisão para as disciplinas em andamento. Foque nas matérias com entregas práticas pendentes."
-      );
-    } finally {
-      setIsLoadingAi(false);
+        }
+      } finally {
+        if (!cancelado) setLoadingIA(false);
+      }
     }
-  }
+
+    void carregarInsightDesempenho();
+    return () => {
+      cancelado = true;
+    };
+  }, [alunoLogado?.curso, carregandoSessao]);
 
   useEffect(() => {
     if (carregandoSessao || !alunoLogado) return;
 
-    async function carregarBoletim() {
+    async function carregarAluno() {
       setCarregando(true);
 
       try {
-        // 1) Aluno logado (RA)
         const { data: alunoData, error: alunoError } = await supabase
           .from("alunos")
           .select("*")
@@ -278,12 +245,10 @@ export default function AlunoNotasPage() {
             ra: alunoLogado!.ra,
             curso: alunoLogado!.curso || "Tecnologia da Informação",
           });
-          setBoletim([]);
-          setIsLoadingAi(false);
           return;
         }
 
-        const alunoSessao: AlunoInfo = {
+        setAluno({
           nome: String(alunoData.nome ?? alunoLogado!.nome ?? "Estudante"),
           ra: String(alunoData.ra || alunoData.matricula || alunoLogado!.ra),
           curso: String(
@@ -292,154 +257,13 @@ export default function AlunoNotasPage() {
           professor: alunoData.professor
             ? String(alunoData.professor)
             : undefined,
-        };
-        setAluno(alunoSessao);
-
-        if (!alunoSessao.ra) {
-          setBoletim([]);
-          setIsLoadingAi(false);
-          return;
-        }
-
-        // 2) Notas + detalhes da turma
-        let notasRows: Record<string, unknown>[] = [];
-
-        const { data: notasComJoin, error: notasJoinError } = await supabase
-          .from("notas")
-          .select(
-            "*, turmas(curso, professor, criterios_notas, datas_avaliacoes)"
-          )
-          .eq("ra_aluno", alunoSessao.ra);
-
-        if (notasJoinError) {
-          console.warn(
-            "Join notas→turmas falhou, buscando em separado:",
-            notasJoinError.message
-          );
-
-          const { data: notasSimples, error: notasError } = await supabase
-            .from("notas")
-            .select("*")
-            .eq("ra_aluno", alunoSessao.ra);
-
-          if (notasError) {
-            console.error("Erro ao buscar notas:", notasError.message);
-            setBoletim([]);
-            await fetchAiBoletimInsight(alunoSessao.nome, []);
-            return;
-          }
-
-          notasRows = (notasSimples ?? []) as Record<string, unknown>[];
-
-          const turmaIds = [
-            ...new Set(
-              notasRows
-                .map((n) => String(n.turma ?? ""))
-                .filter(Boolean)
-            ),
-          ];
-
-          if (turmaIds.length > 0) {
-            const { data: turmasData } = await supabase
-              .from("turmas")
-              .select(
-                "id, curso, professor, criterios_notas, datas_avaliacoes"
-              )
-              .in("id", turmaIds);
-
-            const mapaTurmas = new Map(
-              (turmasData ?? []).map((t) => [String(t.id), t])
-            );
-
-            notasRows = notasRows.map((n) => ({
-              ...n,
-              turmas: mapaTurmas.get(String(n.turma ?? "")) ?? null,
-            }));
-          }
-        } else {
-          notasRows = (notasComJoin ?? []) as Record<string, unknown>[];
-        }
-
-        // 3) Faltas (schema real: registro_chamada)
-        const { data: faltasData, error: faltasError } = await supabase
-          .from("registro_chamada")
-          .select("turma_curso, status")
-          .eq("aluno_ra", alunoSessao.ra);
-
-        if (faltasError) {
-          console.error("Erro ao buscar faltas:", faltasError.message);
-        }
-
-        const registrosFaltas = (faltasData ?? []).map((r) => ({
-          turma: String(r.turma_curso ?? ""),
-          status: String(r.status ?? ""),
-        }));
-
-        // 4) Combinar em boletim
-        const lista: BoletimItem[] = notasRows.map((row, idx) => {
-          const turmasRaw = row.turmas;
-          const turmaObj =
-            turmasRaw && typeof turmasRaw === "object" && !Array.isArray(turmasRaw)
-              ? (turmasRaw as Record<string, unknown>)
-              : Array.isArray(turmasRaw) && turmasRaw[0]
-                ? (turmasRaw[0] as Record<string, unknown>)
-                : null;
-
-          const turmaId = String(row.turma ?? "");
-          const disciplina =
-            (typeof turmaObj?.curso === "string" && turmaObj.curso.trim()
-              ? turmaObj.curso
-              : null) || "Disciplina sem nome";
-          const professor =
-            (typeof turmaObj?.professor === "string" &&
-            turmaObj.professor.trim()
-              ? turmaObj.professor
-              : null) || "Professor não atribuído";
-
-          const mediaParcial =
-            toNum(row.media_final) ??
-            (() => {
-              const vals = [
-                toNum(row.ativ1),
-                toNum(row.ativ2),
-                toNum(row.ativ3),
-                toNum(row.ativ4),
-                toNum(row.prova),
-              ].filter((v): v is number => v !== null);
-              if (vals.length === 0) return null;
-              return Number(
-                vals.reduce((a, b) => a + b, 0).toFixed(1)
-              );
-            })();
-
-          const statusRaw = String(row.status ?? "Pendente");
-
-          return {
-            id: String(row.id ?? `${turmaId}-${idx}`),
-            turmaId,
-            disciplina,
-            professor,
-            mediaParcial,
-            faltasPct: calcularFaltasPct(registrosFaltas, turmaId),
-            status: statusRaw,
-            ativ1: toNum(row.ativ1),
-            ativ2: toNum(row.ativ2),
-            ativ3: toNum(row.ativ3),
-            ativ4: toNum(row.ativ4),
-            prova: toNum(row.prova),
-            criterios: normalizarCriterios(turmaObj?.criterios_notas),
-            datas: normalizarDatas(turmaObj?.datas_avaliacoes),
-          };
         });
-
-        setBoletim(lista);
-        await fetchAiBoletimInsight(alunoSessao.nome, lista);
       } finally {
         setCarregando(false);
       }
     }
 
-    void carregarBoletim();
+    void carregarAluno();
   }, [alunoLogado, carregandoSessao]);
 
   function handleBaixarPdf() {
@@ -456,8 +280,8 @@ export default function AlunoNotasPage() {
     setModalFeedback((prev) => ({ ...prev, aberto: false }));
   }
 
-  function toggleExpandido(id: string) {
-    setExpandidoId((prev) => (prev === id ? null : id));
+  function toggleLinhaExpandida(id: string) {
+    setLinhaExpandida((prev) => (prev === id ? null : id));
   }
 
   return (
@@ -571,24 +395,82 @@ export default function AlunoNotasPage() {
             </div>
           </div>
 
-          {/* ── AI Insight Card ── */}
-          <div className="flex items-start gap-4 p-5 rounded-xl bg-zinc-900/50 border border-zinc-800 mb-8">
-            <div className="shrink-0 mt-0.5 w-8 h-8 rounded-lg bg-zinc-800 border border-zinc-700/50 flex items-center justify-center">
-              <Sparkles className="w-4 h-4 text-zinc-300" />
+          {/* ── Insight IA + Desempenho Semestral ── */}
+          <div className="mb-8 space-y-4">
+            <div className="flex items-start gap-4 p-5 rounded-xl bg-gradient-to-br from-violet-950/40 via-zinc-900/80 to-zinc-950 border border-violet-500/20 shadow-[0_0_40px_rgba(139,92,246,0.08)]">
+              <div className="shrink-0 mt-0.5 w-9 h-9 rounded-lg bg-violet-500/15 border border-violet-400/30 flex items-center justify-center">
+                <Sparkles className="w-4 h-4 text-violet-300" />
+              </div>
+              <div className="min-w-0 flex-1">
+                <p className="text-xs font-semibold text-violet-300/90 uppercase tracking-widest mb-2">
+                  Feedback Inteligente
+                </p>
+                {loadingIA ? (
+                  <div className="space-y-2 animate-pulse">
+                    <div className="h-3 rounded bg-zinc-800 w-full" />
+                    <div className="h-3 rounded bg-zinc-800 w-5/6" />
+                    <div className="h-3 rounded bg-zinc-800 w-2/3" />
+                  </div>
+                ) : (
+                  <p className="text-sm text-zinc-200 leading-relaxed">
+                    {insightIA}
+                  </p>
+                )}
+              </div>
             </div>
-            <div>
-              <p className="text-xs font-semibold text-zinc-400 uppercase tracking-widest mb-1">
-                Insight da IA
-              </p>
-              <p
-                className={`text-sm text-zinc-300 leading-relaxed ${
-                  isLoadingAi ? "animate-pulse" : ""
-                }`}
-              >
-                {isLoadingAi
-                  ? "Avaliando desempenho acadêmico..."
-                  : aiInsight}
-              </p>
+
+            <div className="rounded-xl bg-[#0f1117] border border-zinc-800 p-5">
+              <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 mb-5">
+                <div>
+                  <h2 className="text-sm font-semibold text-white">
+                    Desempenho Semestral
+                  </h2>
+                  <p className="text-xs text-zinc-500 mt-0.5">
+                    Comparativo de N1 e N2 por disciplina
+                  </p>
+                </div>
+                <div className="flex items-center gap-4 text-[11px] text-zinc-400">
+                  <span className="flex items-center gap-1.5">
+                    <span className="inline-block w-2 h-2 rounded-sm bg-emerald-500" />
+                    N1
+                  </span>
+                  <span className="flex items-center gap-1.5">
+                    <span className="inline-block w-2 h-2 rounded-sm bg-violet-500" />
+                    N2
+                  </span>
+                </div>
+              </div>
+              <ResponsiveContainer width="100%" height={300}>
+                <BarChart data={dadosNotas}>
+                  <CartesianGrid
+                    strokeDasharray="3 3"
+                    stroke="#27272a"
+                    vertical={false}
+                  />
+                  <XAxis dataKey="disciplina" stroke="#52525b" />
+                  <YAxis stroke="#52525b" domain={[0, 10]} />
+                  <Tooltip
+                    cursor={{ fill: "#27272a" }}
+                    contentStyle={{
+                      backgroundColor: "#09090b",
+                      borderColor: "#27272a",
+                      color: "#fff",
+                    }}
+                  />
+                  <Bar
+                    dataKey="n1"
+                    name="N1"
+                    fill="#10b981"
+                    radius={[4, 4, 0, 0]}
+                  />
+                  <Bar
+                    dataKey="n2"
+                    name="N2"
+                    fill="#8b5cf6"
+                    radius={[4, 4, 0, 0]}
+                  />
+                </BarChart>
+              </ResponsiveContainer>
             </div>
           </div>
 
@@ -597,7 +479,7 @@ export default function AlunoNotasPage() {
             <div className="px-6 py-4 border-b border-zinc-800 flex items-center justify-between">
               <h2 className="text-sm font-semibold">Notas do Semestre</h2>
               <span className="text-xs text-zinc-600">
-                {carregando ? "…" : `${boletim.length} disciplinas`}
+                {carregando ? "…" : `${dadosNotas.length} disciplinas`}
               </span>
             </div>
 
@@ -609,12 +491,12 @@ export default function AlunoNotasPage() {
                     <th className="px-4 py-3 text-left font-medium tracking-wider">Disciplina</th>
                     <th className="px-4 py-3 text-left font-medium tracking-wider">Professor</th>
                     <th className="px-4 py-3 text-center font-medium tracking-wider">Média Parcial</th>
-                    <th className="px-4 py-3 text-center font-medium tracking-wider">Faltas (%)</th>
+                    <th className="px-4 py-3 text-center font-medium tracking-wider">Faltas</th>
                     <th className="px-6 py-3 text-left font-medium tracking-wider">Status</th>
                   </tr>
                 </thead>
                 <tbody>
-                  {carregando ? (
+                  {carregandoSessao || carregando ? (
                     <tr>
                       <td
                         colSpan={6}
@@ -623,23 +505,20 @@ export default function AlunoNotasPage() {
                         Carregando boletim...
                       </td>
                     </tr>
-                  ) : boletim.length === 0 ? (
-                    <tr>
-                      <td
-                        colSpan={6}
-                        className="px-6 py-10 text-center text-sm text-zinc-500"
-                      >
-                        Nenhuma disciplina ou nota lançada para este semestre.
-                      </td>
-                    </tr>
                   ) : (
-                    boletim.map((item) => {
-                      const aberto = expandidoId === item.id;
-                      const label = statusLabel(item.status);
+                    dadosNotas.map((item) => {
+                      const chave = String(item.disciplina);
+                      const aberto = linhaExpandida === chave;
+                      const media =
+                        (Number(item.n1) + Number(item.n2)) / 2;
+                      const label = statusPorMedia(
+                        Number(item.n1),
+                        Number(item.n2)
+                      );
                       return (
-                        <Fragment key={item.id}>
+                        <Fragment key={chave}>
                           <tr
-                            onClick={() => toggleExpandido(item.id)}
+                            onClick={() => toggleLinhaExpandida(chave)}
                             className={`cursor-pointer transition-colors border-b border-zinc-800/80 ${
                               aberto
                                 ? "bg-zinc-900/60"
@@ -660,10 +539,10 @@ export default function AlunoNotasPage() {
                               {item.professor}
                             </td>
                             <td className="px-4 py-4 text-center font-semibold text-white">
-                              {fmtNota(item.mediaParcial)}
+                              {fmtNota(media)}
                             </td>
                             <td className="px-4 py-4 text-center text-zinc-400">
-                              {item.faltasPct}%
+                              {item.faltas}
                             </td>
                             <td className="px-6 py-4">
                               <span
@@ -678,42 +557,32 @@ export default function AlunoNotasPage() {
                           {aberto && (
                             <tr className="border-b border-zinc-800">
                               <td colSpan={6} className="p-0">
-                                <div className="bg-[#13151a] p-4 rounded-b-lg mx-2 mb-2">
-                                  <p className="text-xs font-semibold text-zinc-500 uppercase tracking-wider mb-3">
-                                    Composição da nota
-                                  </p>
-                                  <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-3">
-                                    {COMPOSICAO.map(
-                                      ({ key, label: itemLabel, criterioKey }) => {
-                                        const tirada = item[key];
-                                        const maximo =
-                                          item.criterios[criterioKey];
-                                        const data =
-                                          item.datas[criterioKey];
-                                        return (
-                                          <div
-                                            key={key}
-                                            className="rounded-lg border border-zinc-800/80 bg-zinc-950/40 px-3 py-3"
-                                          >
-                                            <p className="text-xs text-zinc-500 mb-1.5">
-                                              {itemLabel}
-                                            </p>
-                                            <p className="text-sm font-medium text-white">
-                                              {tirada !== null
-                                                ? tirada.toFixed(1)
-                                                : "—"}
-                                              <span className="text-zinc-600 font-normal">
-                                                {" "}
-                                                / {maximo}
-                                              </span>
-                                            </p>
-                                            <p className="text-[11px] text-zinc-600 mt-1.5">
-                                              Data: {formatarData(data)}
-                                            </p>
-                                          </div>
-                                        );
-                                      }
-                                    )}
+                                <div className="bg-zinc-900/50 p-4 rounded-b-lg border-t border-zinc-800">
+                                  <div className="flex items-start justify-between gap-4 mb-3">
+                                    <p className="text-xs font-semibold text-zinc-500 uppercase tracking-wider">
+                                      Composição da Nota
+                                    </p>
+                                    <p className="text-sm font-semibold text-emerald-400 shrink-0">
+                                      Total N1: {TOTAL_N1_MOCK.toFixed(1)}
+                                    </p>
+                                  </div>
+                                  <div className="flex flex-col sm:flex-row gap-3 overflow-x-auto">
+                                    {COMPOSICAO_N1_MOCK.map((comp) => (
+                                      <div
+                                        key={comp.label}
+                                        className="rounded-lg border border-zinc-800/80 bg-zinc-950/60 px-3 py-3 min-w-[140px] flex-1"
+                                      >
+                                        <p className="text-xs text-zinc-400 mb-1.5">
+                                          {comp.label}
+                                        </p>
+                                        <p className="text-sm font-medium text-white">
+                                          Peso {comp.peso.toFixed(1)}
+                                        </p>
+                                        <p className="text-xs text-zinc-500 mt-1">
+                                          Nota {comp.nota.toFixed(1)}
+                                        </p>
+                                      </div>
+                                    ))}
                                   </div>
                                 </div>
                               </td>

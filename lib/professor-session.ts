@@ -11,6 +11,9 @@ export type ProfessorSession = {
   nomeCompletoTitulo: string;
   turno_aula?: string;
   dias_aula?: string[];
+  /** Códigos das turmas (array, JSON string ou CSV). */
+  turmas?: string[] | string;
+  disciplina?: string;
 };
 
 export function iniciaisDoProfessor(nome: string) {

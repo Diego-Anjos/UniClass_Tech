@@ -3,42 +3,45 @@
 import Link from "next/link";
 import {
   LayoutDashboard,
-  ClipboardList,
-  CalendarCheck,
   BookOpen,
+  UserCheck,
+  Sparkles,
+  MessageSquare,
   Map as MapIcon,
   LogOut,
-  Camera,
   GraduationCap,
-  MessageSquare,
-  Settings,
 } from "lucide-react";
 import { MapaSalas } from "@/components/MapaSalas";
+import { ProfessorSettingsControl } from "@/components/professor/config-modal";
 import {
-  iniciaisDoAluno,
-  limparSessaoAluno,
-  useAlunoSession,
-} from "@/lib/aluno-session";
+  iniciaisDoProfessor,
+  limparSessaoProfessor,
+  useProfessorSession,
+} from "@/lib/professor-session";
 
 const navItems = [
-  { icon: LayoutDashboard, label: "Visão Geral", href: "/aluno/dashboard", active: false },
-  { icon: ClipboardList, label: "Boletim e Notas", href: "/aluno/dashboard/notas", active: false },
-  { icon: CalendarCheck, label: "Frequência", href: "/aluno/dashboard/frequencia", active: false },
-  { icon: BookOpen, label: "Grade e Matérias", href: "/aluno/dashboard/grade", active: false },
-  { icon: MapIcon, label: "Mapa de Salas e Labs", href: "/aluno/dashboard/mapa", active: true },
-  { icon: MessageSquare, label: "Contato", href: "/aluno/dashboard/contato", active: false },
+  { icon: LayoutDashboard, label: "Visão Geral", href: "/professor/dashboard", active: false },
+  { icon: BookOpen, label: "Turmas e Notas", href: "/professor/dashboard/notas", active: false },
+  { icon: UserCheck, label: "Chamada Rápida", href: "/professor/dashboard/chamada", active: false },
+  { icon: MapIcon, label: "Mapa de Salas", href: "/professor/dashboard/mapa", active: true },
+  { icon: Sparkles, label: "Insights IA", href: "/professor/dashboard/insights", active: false },
+  { icon: MessageSquare, label: "Mensagens", href: "/professor/dashboard/mensagens", active: false },
 ];
 
-export default function AlunoMapaPage() {
-  const { alunoLogado, carregandoSessao } = useAlunoSession();
+export default function ProfessorMapaPage() {
+  const { professorLogado, carregandoSessao } = useProfessorSession();
 
-  if (carregandoSessao) {
+  if (carregandoSessao || !professorLogado) {
     return (
-      <div className="flex h-screen bg-black text-white items-center justify-center">
-        <p className="text-sm text-zinc-500 animate-pulse">Carregando mapa...</p>
+      <div className="flex h-screen items-center justify-center bg-black text-zinc-400 text-sm">
+        Carregando sessão...
       </div>
     );
   }
+
+  const iniciais = iniciaisDoProfessor(
+    professorLogado.nome || professorLogado.nomeCompletoTitulo
+  );
 
   return (
     <div className="flex h-screen bg-black text-white overflow-hidden">
@@ -56,29 +59,19 @@ export default function AlunoMapaPage() {
         <div className="px-4 py-5 border-b border-zinc-800">
           <div className="flex items-center justify-between gap-3">
             <div className="flex items-center gap-3 min-w-0">
-              <div className="relative shrink-0">
-                <div className="w-10 h-10 rounded-full bg-zinc-800 flex items-center justify-center text-base font-semibold text-white">
-                  {alunoLogado ? iniciaisDoAluno(alunoLogado.nome) : "—"}
-                </div>
-                <div className="absolute -bottom-0.5 -right-0.5 w-4 h-4 bg-zinc-700 border border-zinc-900 rounded-full flex items-center justify-center">
-                  <Camera className="w-2.5 h-2.5 text-zinc-300" />
-                </div>
+              <div className="w-10 h-10 rounded-full bg-zinc-800 flex items-center justify-center text-sm font-semibold text-white shrink-0">
+                {iniciais || "PR"}
               </div>
               <div className="min-w-0">
                 <p className="text-sm font-medium truncate">
-                  {alunoLogado?.nome || "Estudante"}
+                  {professorLogado.nomeCompletoTitulo}
                 </p>
-                <p className="text-xs text-zinc-500">
-                  RA: {alunoLogado?.ra || "—"}
+                <p className="text-xs text-zinc-500 truncate">
+                  {professorLogado.area_atuacao}
                 </p>
               </div>
             </div>
-            <Link
-              href="/aluno/dashboard/perfil"
-              className="text-zinc-500 hover:text-white transition-colors shrink-0"
-            >
-              <Settings className="w-4 h-4" />
-            </Link>
+            <ProfessorSettingsControl />
           </div>
         </div>
 
@@ -102,7 +95,7 @@ export default function AlunoMapaPage() {
         <div className="px-2 py-4 border-t border-zinc-800">
           <a
             href="/"
-            onClick={() => limparSessaoAluno()}
+            onClick={limparSessaoProfessor}
             className="flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm text-zinc-500 hover:bg-zinc-900 hover:text-white transition-colors"
           >
             <LogOut className="w-4 h-4 shrink-0" />
@@ -111,8 +104,14 @@ export default function AlunoMapaPage() {
         </div>
       </aside>
 
-      <main className="flex-1 overflow-y-auto">
-        <MapaSalas usuarioLogado={alunoLogado} role="aluno" />
+      <main className="flex-1 overflow-y-auto bg-black">
+        <MapaSalas
+          usuarioLogado={{
+            id: professorLogado.id,
+            nome: professorLogado.nome,
+          }}
+          role="professor"
+        />
       </main>
     </div>
   );

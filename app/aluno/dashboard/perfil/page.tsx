@@ -103,6 +103,7 @@ export default function AlunoPerfilPage() {
   const inputFotoRef = useRef<HTMLInputElement>(null);
   const [alunoLogado, setAlunoLogado] = useState<AlunoPerfil | null>(null);
   const [uploadingFoto, setUploadingFoto] = useState(false);
+  const [loadingRemocao, setLoadingRemocao] = useState(false);
 
   const [modalEditarAberto, setModalEditarAberto] = useState(false);
   const [telefoneEdit, setTelefoneEdit] = useState("");
@@ -327,8 +328,70 @@ export default function AlunoPerfilPage() {
   }
 
   function abrirSeletorFoto() {
-    if (uploadingFoto) return;
+    if (uploadingFoto || loadingRemocao) return;
     inputFotoRef.current?.click();
+  }
+
+  async function handleRemoverFoto() {
+    if (!alunoLogado?.foto_url || !alunoLogado.ra) return;
+
+    const nomeArquivo = alunoLogado.foto_url.split("/").pop();
+    if (!nomeArquivo) {
+      abrirFeedback(
+        "erro",
+        "Falha ao remover",
+        "Não foi possível identificar o arquivo da foto de perfil."
+      );
+      return;
+    }
+
+    setLoadingRemocao(true);
+    try {
+      const { error: storageError } = await supabase.storage
+        .from("avatares")
+        .remove([nomeArquivo]);
+
+      if (storageError) {
+        console.log(storageError);
+        abrirFeedback(
+          "erro",
+          "Falha ao remover",
+          "Não foi possível remover a foto do armazenamento."
+        );
+        return;
+      }
+
+      const { error: updateError } = await supabase
+        .from("alunos")
+        .update({ foto_url: null })
+        .eq("ra", alunoLogado.ra);
+
+      if (updateError) {
+        console.log(updateError);
+        abrirFeedback(
+          "erro",
+          "Falha ao remover",
+          "A foto foi removida do storage, mas não foi possível atualizar o perfil."
+        );
+        return;
+      }
+
+      setAlunoLogado({ ...alunoLogado, foto_url: null });
+      abrirFeedback(
+        "sucesso",
+        "Foto removida",
+        "Sua foto de perfil foi removida com sucesso."
+      );
+    } catch (error) {
+      console.log(error);
+      abrirFeedback(
+        "erro",
+        "Falha ao remover",
+        "Não foi possível remover a foto de perfil. Tente novamente."
+      );
+    } finally {
+      setLoadingRemocao(false);
+    }
   }
 
   async function handleUploadFoto(
@@ -586,11 +649,11 @@ export default function AlunoPerfilPage() {
                   <button
                     type="button"
                     onClick={abrirSeletorFoto}
-                    disabled={uploadingFoto}
+                    disabled={uploadingFoto || loadingRemocao}
                     className="absolute -bottom-1 -right-1 w-6 h-6 bg-zinc-700 border border-zinc-900 rounded-full flex items-center justify-center cursor-pointer hover:bg-zinc-600 transition-colors disabled:opacity-50"
                     aria-label="Trocar foto de perfil"
                   >
-                    {uploadingFoto ? (
+                    {uploadingFoto || loadingRemocao ? (
                       <Loader2 className="w-3 h-3 text-zinc-300 animate-spin" />
                     ) : (
                       <Camera className="w-3 h-3 text-zinc-300" />
@@ -605,21 +668,40 @@ export default function AlunoPerfilPage() {
                   hidden
                   onChange={handleUploadFoto}
                 />
-                <button
-                  type="button"
-                  onClick={abrirSeletorFoto}
-                  disabled={uploadingFoto}
-                  className="text-xs border border-zinc-800 text-zinc-400 hover:bg-zinc-900 hover:text-white transition-colors rounded-lg px-3 py-1.5 disabled:opacity-50 inline-flex items-center gap-1.5"
-                >
-                  {uploadingFoto ? (
-                    <>
-                      <Loader2 className="w-3 h-3 animate-spin" />
-                      Enviando...
-                    </>
-                  ) : (
-                    "Trocar Foto"
+                <div className="flex flex-col items-start gap-2">
+                  <button
+                    type="button"
+                    onClick={abrirSeletorFoto}
+                    disabled={uploadingFoto || loadingRemocao}
+                    className="text-xs border border-zinc-800 text-zinc-400 hover:bg-zinc-900 hover:text-white transition-colors rounded-lg px-3 py-1.5 disabled:opacity-50 inline-flex items-center gap-1.5"
+                  >
+                    {uploadingFoto ? (
+                      <>
+                        <Loader2 className="w-3 h-3 animate-spin" />
+                        Enviando...
+                      </>
+                    ) : (
+                      "Trocar Foto"
+                    )}
+                  </button>
+                  {alunoLogado?.foto_url && (
+                    <button
+                      type="button"
+                      onClick={() => void handleRemoverFoto()}
+                      disabled={loadingRemocao || uploadingFoto}
+                      className="text-red-400 hover:text-red-300 text-sm hover:underline bg-transparent border-none disabled:opacity-50 inline-flex items-center gap-1.5"
+                    >
+                      {loadingRemocao ? (
+                        <>
+                          <Loader2 className="w-3 h-3 animate-spin" />
+                          Removendo...
+                        </>
+                      ) : (
+                        "Remover Foto"
+                      )}
+                    </button>
                   )}
-                </button>
+                </div>
               </div>
 
               <div className="flex flex-col gap-4">

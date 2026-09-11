@@ -20,6 +20,14 @@ import {
 } from "lucide-react";
 import { supabase } from "@/lib/supabase";
 import { ModalFeedback } from "@/components/ModalFeedback";
+import {
+  ANDARES,
+  chaveAlocacao,
+  diaHoje,
+  normalizarTurma,
+  ocorreHoje,
+  salasDoAndar,
+} from "@/lib/mapa-catalogo";
 
 type StatusProfessor = "Ativo" | "Licença" | "Inativo";
 type Titulacao = "Especialista" | "Mestre(a)" | "Doutor(a)";
@@ -33,6 +41,7 @@ type Professor = {
   cpf: string;
   titulacao: Titulacao;
   area_atuacao: string;
+  disciplina: string;
   carga_horaria: number;
   status: StatusProfessor;
   email: string;
@@ -69,7 +78,8 @@ type FormDataProfessor = {
   matricula: string;
   nome: string;
   titulacao: Titulacao | "";
-  area: string;
+  turmas: string[];
+  disciplina: string;
   cargaHoraria: string;
   cpf: string;
   pis: string;
@@ -90,7 +100,8 @@ const formInicial: FormDataProfessor = {
   matricula: "",
   nome: "",
   titulacao: "",
-  area: "",
+  turmas: [],
+  disciplina: "",
   cargaHoraria: "",
   cpf: "",
   pis: "",
@@ -100,22 +111,41 @@ const formInicial: FormDataProfessor = {
   telefone: "",
 };
 
-const ANDARES = [
-  "Térreo",
-  "1º Andar",
-  "2º Andar",
-  "3º Andar",
-  "4º Andar",
-] as const;
+/** Converte área/turmas salvas (JSON, CSV ou texto simples) em array de códigos. */
+function parseTurmasSalvas(raw: unknown): string[] {
+  if (!raw) return [];
+  if (Array.isArray(raw)) return raw.map(String).map((s) => s.trim()).filter(Boolean);
+  if (typeof raw !== "string") return [];
+  const texto = raw.trim();
+  if (!texto || texto === "—") return [];
+  try {
+    const parsed = JSON.parse(texto);
+    if (Array.isArray(parsed)) {
+      return parsed.map(String).map((s) => s.trim()).filter(Boolean);
+    }
+  } catch {
+    // texto simples / CSV
+  }
+  return texto
+    .split(",")
+    .map((s) => s.trim())
+    .filter(Boolean);
+}
 
-const SALAS_LABS = [
-  "Sala 101",
-  "Sala 102",
-  "Lab 1",
-  "Lab 2",
-  "Lab 3",
-  "Auditório",
-] as const;
+/** Mapeia valores legados (curso) para códigos de turma quando possível. */
+function normalizarTurmasParaCodigos(
+  salvos: string[],
+  disponiveis: TurmaDisponivel[]
+): string[] {
+  const normalizados = salvos.map((valor) => {
+    const porCodigo = disponiveis.find((t) => t.codigo === valor);
+    if (porCodigo) return porCodigo.codigo;
+    const porCurso = disponiveis.find((t) => t.curso === valor);
+    if (porCurso) return porCurso.codigo;
+    return valor;
+  });
+  return [...new Set(normalizados)];
+}
 
 const statusBadge: Record<StatusProfessor, string> = {
   Ativo: "bg-green-950 text-green-400 border-green-900/50",
@@ -236,6 +266,7 @@ function mapProfessor(row: Record<string, unknown>): Professor {
     cpf: String(row.cpf ?? ""),
     titulacao: normalizarTitulacao(String(row.titulacao ?? "Especialista")),
     area_atuacao: String(row.area_atuacao ?? row.area ?? "—"),
+    disciplina: String(row.disciplina ?? ""),
     carga_horaria: Number(row.carga_horaria ?? row.carga_horaria_semanal ?? 0),
     status: (String(row.status ?? "Ativo")) as StatusProfessor,
     email: emailInstitucional,
@@ -264,6 +295,13 @@ export default function GestaoProfessoresPage() {
   const [diasAula, setDiasAula] = useState<string[]>([]);
   const [andarSelecionado, setAndarSelecionado] = useState("");
   const [salaSelecionada, setSalaSelecionada] = useState("");
+  const salasDisponiveis = useMemo(
+    () => salasDoAndar(andarSelecionado),
+    [andarSelecionado]
+  );
+  const [salasOcupadasKeys, setSalasOcupadasKeys] = useState<Set<string>>(
+    new Set()
+  );
   const [turmaAlocadaId, setTurmaAlocadaId] = useState<string | null>(null);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [itemToDelete, setItemToDelete] = useState<string | null>(null);
@@ -311,7 +349,7 @@ export default function GestaoProfessoresPage() {
   async function fetchTurmasDisponiveis() {
     const { data, error } = await supabase
       .from("turmas")
-      .select("id, codigo, curso, turno");
+      .select("id, codigo, curso, turno, professor, sala, andar, dias_aula");
 
     if (error) {
       console.error("Erro ao buscar turmas:", error.message);
@@ -328,8 +366,19 @@ export default function GestaoProfessoresPage() {
           turno: String(t.turno ?? "—"),
         }))
       );
+
+      const hoje = diaHoje();
+      const ocupadas = new Set<string>();
+      for (const raw of data) {
+        const t = normalizarTurma(raw);
+        if (!t?.professor?.trim() || !t.sala?.trim()) continue;
+        if (!ocorreHoje(t, hoje)) continue;
+        ocupadas.add(chaveAlocacao(t.andar, t.sala));
+      }
+      setSalasOcupadasKeys(ocupadas);
     } else {
       setTurmasDisponiveis([]);
+      setSalasOcupadasKeys(new Set());
     }
   }
 
@@ -363,25 +412,47 @@ export default function GestaoProfessoresPage() {
         professor.area_atuacao && professor.area_atuacao !== "—"
           ? professor.area_atuacao
           : "";
+      const codigosSalvos = parseTurmasSalvas(area);
 
       let turmas: TurmaAlocada[] = [];
 
-      if (area) {
+      if (codigosSalvos.length > 0) {
         const { data, error } = await supabase
           .from("turmas")
           .select("*")
-          .ilike("curso", `%${area}%`);
+          .in("codigo", codigosSalvos);
 
         if (error) {
           console.error("Erro ao buscar turmas do professor:", error.message);
-        } else {
-          turmas = (data ?? []).map((t) => ({
+        } else if (data && data.length > 0) {
+          turmas = data.map((t) => ({
             id: String(t.id ?? ""),
             codigo: String(t.codigo ?? "—"),
             curso: String(t.curso ?? "—"),
             turno: String(t.turno ?? "—"),
             diario_fechado: Boolean(t.diario_fechado ?? false),
           }));
+        } else {
+          // Fallback legado: area_atuacao com nome de curso único
+          const { data: porCurso, error: erroCurso } = await supabase
+            .from("turmas")
+            .select("*")
+            .ilike("curso", `%${area}%`);
+
+          if (erroCurso) {
+            console.error(
+              "Erro ao buscar turmas do professor:",
+              erroCurso.message
+            );
+          } else {
+            turmas = (porCurso ?? []).map((t) => ({
+              id: String(t.id ?? ""),
+              codigo: String(t.codigo ?? "—"),
+              curso: String(t.curso ?? "—"),
+              turno: String(t.turno ?? "—"),
+              diario_fechado: Boolean(t.diario_fechado ?? false),
+            }));
+          }
         }
       }
 
@@ -486,6 +557,31 @@ export default function GestaoProfessoresPage() {
     );
   }
 
+  function toggleTurma(codigo: string) {
+    const jaSelecionada = formData.turmas.includes(codigo);
+    const turmas = jaSelecionada
+      ? formData.turmas.filter((t) => t !== codigo)
+      : [...formData.turmas, codigo];
+
+    setFormData((prev) => ({ ...prev, turmas }));
+
+    const turma = turmasDisponiveis.find((t) => t.codigo === codigo);
+    if (!jaSelecionada && turma) {
+      setTurmaAlocadaId(turma.id);
+      if (
+        turma.turno &&
+        turnosAula.includes(turma.turno as (typeof turnosAula)[number])
+      ) {
+        setTurnoAula(turma.turno);
+      }
+    } else if (jaSelecionada) {
+      const restante = turmasDisponiveis.find((t) =>
+        turmas.includes(t.codigo)
+      );
+      setTurmaAlocadaId(restante?.id ?? null);
+    }
+  }
+
   function resetCamposTurnoDias() {
     setTurnoAula("Noite");
     setDiasAula([]);
@@ -517,19 +613,18 @@ export default function GestaoProfessoresPage() {
       return null;
     }
 
-    const idRegistroAtual = turmaAlocadaId;
+    const idsProprios = new Set(
+      turmasDisponiveis
+        .filter((t) => formData.turmas.includes(t.codigo))
+        .map((t) => t.id)
+    );
+    if (turmaAlocadaId) idsProprios.add(turmaAlocadaId);
 
-    let query = supabase
+    const { data: registros, error } = await supabase
       .from("turmas")
       .select("id, professor, dias_aula, curso, turno, sala")
       .eq("sala", salaSelecionada)
       .eq("turno", turnoAula);
-
-    if (idRegistroAtual) {
-      query = query.neq("id", idRegistroAtual);
-    }
-
-    const { data: registros, error } = await query;
 
     if (error) {
       console.error("Erro ao verificar conflito de sala:", error.message);
@@ -541,6 +636,8 @@ export default function GestaoProfessoresPage() {
     const nomeAtual = formData.nome.trim().toLowerCase();
 
     const conflito = registros.find((reg) => {
+      if (idsProprios.has(String(reg.id))) return false;
+
       // Ignora registro do próprio docente (mesmo nome)
       const profReg = String(reg.professor ?? "").trim().toLowerCase();
       if (nomeAtual && profReg && profReg === nomeAtual) return false;
@@ -641,11 +738,15 @@ export default function GestaoProfessoresPage() {
   }
 
   function handleEdit(prof: Professor) {
+    const turmasSalvas = parseTurmasSalvas(
+      prof.area_atuacao === "—" ? "" : prof.area_atuacao
+    );
     setFormData({
       matricula: prof.matricula === "—" ? "" : prof.matricula,
       nome: prof.nome,
       titulacao: prof.titulacao,
-      area: prof.area_atuacao === "—" ? "" : prof.area_atuacao,
+      turmas: normalizarTurmasParaCodigos(turmasSalvas, turmasDisponiveis),
+      disciplina: prof.disciplina || "",
       cargaHoraria: String(prof.carga_horaria || ""),
       cpf: prof.cpf,
       pis: prof.pis,
@@ -662,28 +763,41 @@ export default function GestaoProfessoresPage() {
     setTurmaAlocadaId(null);
     setEditingId(prof.id);
     setAbaAtiva("docente");
-    void fetchTurmasDisponiveis();
     setIsModalOpen(true);
 
-    const area =
-      prof.area_atuacao && prof.area_atuacao !== "—"
-        ? prof.area_atuacao
-        : "";
-    if (area) {
-      void (async () => {
-        const { data } = await supabase
-          .from("turmas")
-          .select("id, sala, andar")
-          .ilike("curso", `%${area}%`)
-          .limit(1)
-          .maybeSingle();
-        if (data) {
-          setTurmaAlocadaId(String(data.id));
-          setAndarSelecionado(String(data.andar ?? ""));
-          setSalaSelecionada(String(data.sala ?? ""));
+    void (async () => {
+      await fetchTurmasDisponiveis();
+
+      const { data: lista } = await supabase
+        .from("turmas")
+        .select("id, sala, andar, codigo, curso, turno");
+
+      const disponiveis = (lista ?? []).map((t) => ({
+        id: String(t.id),
+        codigo: String(t.codigo ?? "—"),
+        curso: String(t.curso ?? "—"),
+        turno: String(t.turno ?? "—"),
+      }));
+
+      const turmasNorm = normalizarTurmasParaCodigos(turmasSalvas, disponiveis);
+      setFormData((prev) => ({ ...prev, turmas: turmasNorm }));
+
+      if (turmasNorm.length === 0) return;
+
+      const primeira =
+        disponiveis.find((t) => turmasNorm.includes(t.codigo)) ?? null;
+
+      if (primeira) {
+        setTurmaAlocadaId(primeira.id);
+        const detalhe = (lista ?? []).find(
+          (t) => String(t.id) === primeira.id
+        );
+        if (detalhe) {
+          setAndarSelecionado(String(detalhe.andar ?? ""));
+          setSalaSelecionada(String(detalhe.sala ?? ""));
         }
-      })();
-    }
+      }
+    })();
   }
 
   async function salvarProfessor() {
@@ -691,15 +805,16 @@ export default function GestaoProfessoresPage() {
 
     const matricula = formData.matricula.trim();
     const nome = formData.nome.trim();
-    const area = formData.area.trim();
+    const turmas = formData.turmas.map((t) => t.trim()).filter(Boolean);
+    const disciplina = formData.disciplina.trim();
     const titulacao = formData.titulacao;
     const cargaHoraria = Number(formData.cargaHoraria);
     const email_institucional =
       formData.email_institucional.trim() || gerarEmailInstitucional(nome);
 
-    if (!matricula || !nome || !titulacao || !area) {
+    if (!matricula || !nome || !titulacao || turmas.length === 0) {
       setFormError(
-        "Preencha os campos essenciais: Nome, Matrícula, Titulação e Área."
+        "Preencha os campos essenciais: Nome, Matrícula, Titulação e ao menos uma Turma."
       );
       setAbaAtiva("docente");
       return;
@@ -715,11 +830,13 @@ export default function GestaoProfessoresPage() {
     }
 
     setIsSubmitting(true);
+    const area_atuacao = turmas.join(", ");
     const payload = {
       matricula,
       nome,
       titulacao,
-      area_atuacao: area,
+      area_atuacao,
+      disciplina,
       carga_horaria: Number.isNaN(cargaHoraria) ? null : cargaHoraria,
       cpf: formData.cpf.trim(),
       pis: formData.pis.trim(),
@@ -743,19 +860,29 @@ export default function GestaoProfessoresPage() {
       return;
     }
 
-    // Alocação física: persiste sala/andar/turno/dias e professor na turma
-    if (area && (andarSelecionado || salaSelecionada || diasAula.length > 0)) {
+    // Alocação física: persiste sala/andar/turno/dias e professor nas turmas selecionadas
+    if (turmas.length > 0 && (andarSelecionado || salaSelecionada || diasAula.length > 0)) {
       const alocacao: Record<string, unknown> = {
         professor: nome,
         turno: turnoAula,
         dias_aula: diasAula,
+        andar: andarSelecionado || null,
+        sala: salaSelecionada || null,
       };
-      if (andarSelecionado) alocacao.andar = andarSelecionado;
-      if (salaSelecionada) alocacao.sala = salaSelecionada;
 
-      const updateQuery = turmaAlocadaId
-        ? supabase.from("turmas").update(alocacao).eq("id", turmaAlocadaId)
-        : supabase.from("turmas").update(alocacao).ilike("curso", `%${area}%`);
+      const idsSelecionados = turmasDisponiveis
+        .filter((t) => turmas.includes(t.codigo))
+        .map((t) => t.id);
+
+      const updateQuery =
+        idsSelecionados.length > 0
+          ? supabase.from("turmas").update(alocacao).in("id", idsSelecionados)
+          : turmaAlocadaId
+            ? supabase.from("turmas").update(alocacao).eq("id", turmaAlocadaId)
+            : supabase
+                .from("turmas")
+                .update(alocacao)
+                .in("codigo", turmas);
 
       const { error: turmasError } = await updateQuery;
 
@@ -1414,48 +1541,94 @@ export default function GestaoProfessoresPage() {
                     </div>
 
                     <div>
-                      <label className={labelClass} htmlFor="prof-area">
-                        Área de Atuação / Turma Atribuída
-                      </label>
-                      <select
-                        id="prof-area"
-                        value={formData.area}
-                        onChange={(e) => {
-                          const curso = e.target.value;
-                          atualizarCampo("area", curso);
-                          const turma = turmasDisponiveis.find(
-                            (t) => t.curso === curso
-                          );
-                          setTurmaAlocadaId(turma?.id ?? null);
-                          if (turma?.turno && turnosAula.includes(turma.turno as (typeof turnosAula)[number])) {
-                            setTurnoAula(turma.turno);
-                          }
-                        }}
-                        className={inputClass}
+                      <p className={labelClass} id="prof-turmas-label">
+                        Turmas Atribuídas
+                      </p>
+                      {formData.turmas.length > 0 && (
+                        <div className="mb-2 flex flex-wrap gap-1.5">
+                          {formData.turmas.map((codigo) => (
+                            <span
+                              key={codigo}
+                              className="inline-flex items-center gap-1 rounded-md bg-purple-600/20 border border-purple-500/40 px-2 py-0.5 text-xs text-purple-200"
+                            >
+                              {codigo}
+                              <button
+                                type="button"
+                                onClick={() => toggleTurma(codigo)}
+                                className="rounded p-0.5 hover:bg-purple-500/30"
+                                aria-label={`Remover turma ${codigo}`}
+                              >
+                                <X className="h-3 w-3" />
+                              </button>
+                            </span>
+                          ))}
+                        </div>
+                      )}
+                      <div
+                        role="group"
+                        aria-labelledby="prof-turmas-label"
+                        className="max-h-44 overflow-y-auto rounded-lg border border-gray-800 bg-black p-2 space-y-1"
                       >
-                        <option value="">
-                          Selecione o curso / turma atribuída...
-                        </option>
                         {turmasDisponiveis.length === 0 ? (
-                          <option value="" disabled>
+                          <p className="px-2 py-3 text-sm text-zinc-500">
                             Nenhuma turma cadastrada. Crie uma turma primeiro.
-                          </option>
+                          </p>
                         ) : (
-                          turmasDisponiveis.map((t) => (
-                            <option key={t.id} value={t.curso}>
-                              {t.curso} ({t.codigo} - {t.turno})
-                            </option>
-                          ))
+                          turmasDisponiveis.map((t) => {
+                            const selecionada = formData.turmas.includes(
+                              t.codigo
+                            );
+                            return (
+                              <label
+                                key={t.id}
+                                className={`flex cursor-pointer items-start gap-2.5 rounded-md px-2 py-2 text-sm transition-colors ${
+                                  selecionada
+                                    ? "bg-purple-600/15 text-white"
+                                    : "text-zinc-300 hover:bg-white/5"
+                                }`}
+                              >
+                                <input
+                                  type="checkbox"
+                                  checked={selecionada}
+                                  onChange={() => toggleTurma(t.codigo)}
+                                  className="mt-0.5 h-4 w-4 shrink-0 rounded border-gray-600 bg-black text-purple-600 focus:ring-purple-500 focus:ring-offset-0"
+                                />
+                                <span>
+                                  <span className="font-medium">{t.codigo}</span>
+                                  <span className="block text-xs text-zinc-500">
+                                    {t.curso} · {t.turno}
+                                  </span>
+                                </span>
+                              </label>
+                            );
+                          })
                         )}
-                        {formData.area &&
-                          !turmasDisponiveis.some(
-                            (t) => t.curso === formData.area
-                          ) && (
-                            <option value={formData.area}>
-                              {formData.area}
-                            </option>
-                          )}
-                      </select>
+                      </div>
+                      {formData.turmas.some(
+                        (codigo) =>
+                          !turmasDisponiveis.some((t) => t.codigo === codigo)
+                      ) && (
+                        <p className="mt-1.5 text-xs text-amber-400/90">
+                          Algumas turmas salvas não estão na lista atual e
+                          permanecem selecionadas.
+                        </p>
+                      )}
+                    </div>
+
+                    <div>
+                      <label className={labelClass} htmlFor="prof-disciplina">
+                        Disciplina / Matéria
+                      </label>
+                      <input
+                        id="prof-disciplina"
+                        type="text"
+                        value={formData.disciplina}
+                        onChange={(e) =>
+                          atualizarCampo("disciplina", e.target.value)
+                        }
+                        className={inputClass}
+                        placeholder="Ex: Modelagem de Dados, Lógica de Programação..."
+                      />
                     </div>
 
                     <div>
@@ -1501,7 +1674,10 @@ export default function GestaoProfessoresPage() {
                       <select
                         id="prof-andar"
                         value={andarSelecionado}
-                        onChange={(e) => setAndarSelecionado(e.target.value)}
+                        onChange={(e) => {
+                          setAndarSelecionado(e.target.value);
+                          setSalaSelecionada("");
+                        }}
                         className={inputClass}
                       >
                         <option value="">Selecione o andar</option>
@@ -1521,14 +1697,30 @@ export default function GestaoProfessoresPage() {
                         id="prof-sala"
                         value={salaSelecionada}
                         onChange={(e) => setSalaSelecionada(e.target.value)}
+                        disabled={!andarSelecionado}
                         className={inputClass}
                       >
-                        <option value="">Selecione a sala ou laboratório</option>
-                        {SALAS_LABS.map((sala) => (
-                          <option key={sala} value={sala}>
-                            {sala}
-                          </option>
-                        ))}
+                        <option value="">
+                          {andarSelecionado
+                            ? "Selecione a sala ou laboratório"
+                            : "Selecione o andar primeiro"}
+                        </option>
+                        {salasDisponiveis.map((sala) => {
+                          const desabilitar =
+                            salasOcupadasKeys.has(
+                              chaveAlocacao(andarSelecionado, sala)
+                            ) && sala !== salaSelecionada;
+
+                          return (
+                            <option
+                              key={sala}
+                              value={sala}
+                              disabled={desabilitar}
+                            >
+                              {desabilitar ? `${sala} (Ocupada)` : sala}
+                            </option>
+                          );
+                        })}
                       </select>
                     </div>
 
