@@ -20,7 +20,7 @@ REGRAS OBRIGATÓRIAS:
         { role: "system", content: systemPrompt },
         { role: "user", content: `Métricas atuais: ${JSON.stringify(metricasGlobais)}` }
       ],
-      model: "gemma2-9b-it",
+      model: "llama-3.3-70b-versatile",
       temperature: 0.5,
       max_tokens: 300,
     });

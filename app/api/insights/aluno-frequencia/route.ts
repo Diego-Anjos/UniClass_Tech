@@ -27,15 +27,15 @@ export async function POST(req: NextRequest) {
     try {
       completion = await groq.chat.completions.create({
         messages: mensagens,
-        model: "gemma2-9b-it",
+        model: "llama-3.3-70b-versatile",
         temperature: 0.6,
         max_tokens: 150,
       });
     } catch (err) {
-      console.warn("Falha no modelo primário (gemma2-9b-it):", err);
+      console.warn("Falha no modelo primário (llama-3.3-70b-versatile):", err);
       completion = await groq.chat.completions.create({
         messages: mensagens,
-        model: "gemma-7b-it",
+        model: "llama-3.2-3b-preview",
         temperature: 0.6,
         max_tokens: 150,
       });

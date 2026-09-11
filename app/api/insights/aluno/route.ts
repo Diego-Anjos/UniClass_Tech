@@ -30,7 +30,7 @@ Professor Responsável: ${professor || "Corpo Docente"}`;
           { role: "system", content: systemPrompt },
           { role: "user", content: userPrompt },
         ],
-        model: "gemma2-9b-it",
+        model: "llama-3.3-70b-versatile",
         temperature: 0.6,
         response_format: { type: "json_object" },
       });
@@ -40,7 +40,7 @@ Professor Responsável: ${professor || "Corpo Docente"}`;
           { role: "system", content: systemPrompt },
           { role: "user", content: userPrompt },
         ],
-        model: "gemma-7b-it",
+        model: "llama-3.2-3b-preview",
         temperature: 0.6,
         response_format: { type: "json_object" },
       });
