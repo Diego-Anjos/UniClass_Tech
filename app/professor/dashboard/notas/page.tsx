@@ -22,7 +22,11 @@ import { supabase } from "@/lib/supabase";
 import {
   iniciaisDoProfessor,
   limparSessaoProfessor,
+  lerSessaoProfessor,
+  normalizarPesosAvaliacao,
+  PESOS_AVALIACAO_PADRAO,
   useProfessorSession,
+  type PesosAvaliacao,
 } from "@/lib/professor-session";
 
 const navItems = [
@@ -34,7 +38,7 @@ const navItems = [
   { icon: MessageSquare, label: "Mensagens", href: "/professor/dashboard/mensagens", active: false },
 ];
 
-type CampoNota = "atv1" | "atv2" | "atv3" | "atv4" | "prova" | "faltas";
+type CampoNota = "atv1" | "atv2" | "atv3" | "atv4" | "prova";
 
 type AlunoTurma = {
   ra: string;
@@ -47,25 +51,15 @@ type AlunoTurma = {
   faltas: number;
 };
 
-const LIMITES_NOTA: Record<Exclude<CampoNota, "faltas">, number> = {
-  atv1: 2.0,
-  atv2: 1.0,
-  atv3: 1.0,
-  atv4: 1.0,
-  prova: 5.0,
+const LABELS_COMPOSICAO: Record<CampoNota, string> = {
+  atv1: "Atividade 1",
+  atv2: "Atividade 2",
+  atv3: "Atividade 3",
+  atv4: "Atividade 4",
+  prova: "Prova Semestral",
 };
 
-const CAMPOS_COMPOSICAO: {
-  campo: Exclude<CampoNota, "faltas">;
-  label: string;
-  max: number;
-}[] = [
-  { campo: "atv1", label: "Atividade 1 (Máx 2.0)", max: 2.0 },
-  { campo: "atv2", label: "Atividade 2 (Máx 1.0)", max: 1.0 },
-  { campo: "atv3", label: "Atividade 3 (Máx 1.0)", max: 1.0 },
-  { campo: "atv4", label: "Atividade 4 (Máx 1.0)", max: 1.0 },
-  { campo: "prova", label: "Prova Semestral (Máx 5.0)", max: 5.0 },
-];
+const CAMPOS_PESO: CampoNota[] = ["atv1", "atv2", "atv3", "atv4", "prova"];
 
 /** Parse turmas vindas do Supabase/sessão (array, JSON ou CSV). */
 function parseTurmasProfessor(raw: unknown): string[] {
@@ -117,8 +111,38 @@ function formatNota(valor: number): string {
   return valor.toFixed(1);
 }
 
+function somaPesos(p: PesosAvaliacao): number {
+  return Math.round((p.atv1 + p.atv2 + p.atv3 + p.atv4 + p.prova) * 10) / 10;
+}
+
+function atualizarSessaoPesos(novosPesos: PesosAvaliacao) {
+  const sessao = lerSessaoProfessor();
+  if (!sessao) return;
+  localStorage.setItem(
+    "uniclass_prof_session",
+    JSON.stringify({ ...sessao, pesos: novosPesos })
+  );
+}
+
+function limitarNotasAosPesos(
+  alunos: AlunoTurma[],
+  limites: PesosAvaliacao
+): AlunoTurma[] {
+  return alunos.map((aluno) => ({
+    ...aluno,
+    atv1: Math.min(aluno.atv1, limites.atv1),
+    atv2: Math.min(aluno.atv2, limites.atv2),
+    atv3: Math.min(aluno.atv3, limites.atv3),
+    atv4: Math.min(aluno.atv4, limites.atv4),
+    prova: Math.min(aluno.prova, limites.prova),
+  }));
+}
+
 const inputComposicaoClass =
   "w-full rounded-md bg-zinc-950 border border-zinc-700 text-white text-sm text-center px-2 py-2 outline-none focus:border-zinc-500 focus:ring-1 focus:ring-zinc-500 [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none";
+
+const inputComposicaoErroClass =
+  "w-full rounded-md bg-zinc-950 border border-red-500/70 text-white text-sm text-center px-2 py-2 outline-none focus:border-red-400 focus:ring-1 focus:ring-red-500/40 [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none";
 
 const inputDisabledClass =
   "w-full appearance-none bg-zinc-900/80 border border-zinc-800 text-sm text-zinc-300 rounded-lg px-4 py-2.5 cursor-not-allowed";
@@ -130,6 +154,10 @@ export default function DiarioDeClassePage() {
   const [loadingAlunos, setLoadingAlunos] = useState(false);
   const [alunoExpandido, setAlunoExpandido] = useState<string | null>(null);
   const [salvando, setSalvando] = useState(false);
+  const [pesos, setPesos] = useState<PesosAvaliacao>(PESOS_AVALIACAO_PADRAO);
+  const [isConfigurandoPesos, setIsConfigurandoPesos] = useState(false);
+  const [salvandoPesos, setSalvandoPesos] = useState(false);
+  const [errosNota, setErrosNota] = useState<Record<string, string>>({});
   const [modalFeedback, setModalFeedback] = useState<{
     aberto: boolean;
     tipo: "sucesso" | "erro" | "atencao";
@@ -151,6 +179,43 @@ export default function DiarioDeClassePage() {
   );
 
   const disciplinaProfessor = professorLogado?.disciplina?.trim() || "";
+  const totalDistribuicao = somaPesos(pesos);
+  const pesosValidos = totalDistribuicao === 10;
+
+  useEffect(() => {
+    if (!professorLogado) return;
+
+    setPesos(normalizarPesosAvaliacao(professorLogado.pesos));
+
+    let cancelado = false;
+
+    async function carregarPesosDoBanco() {
+      const { data, error } = await supabase
+        .from("professores")
+        .select("pesos")
+        .eq("id", professorLogado!.id)
+        .maybeSingle();
+
+      if (cancelado) return;
+
+      if (error) {
+        console.warn("Não foi possível carregar pesos do professor:", error.message);
+        return;
+      }
+
+      if (data?.pesos != null) {
+        const normalizados = normalizarPesosAvaliacao(data.pesos);
+        setPesos(normalizados);
+        atualizarSessaoPesos(normalizados);
+      }
+    }
+
+    void carregarPesosDoBanco();
+
+    return () => {
+      cancelado = true;
+    };
+  }, [professorLogado]);
 
   useEffect(() => {
     let cancelado = false;
@@ -165,6 +230,7 @@ export default function DiarioDeClassePage() {
 
       setLoadingAlunos(true);
       setAlunoExpandido(null);
+      setErrosNota({});
 
       const { data, error } = await supabase
         .from("alunos")
@@ -200,22 +266,43 @@ export default function DiarioDeClassePage() {
     };
   }, [turmaSelecionada]);
 
+  function atualizarPeso(campo: CampoNota, valor: string) {
+    const numerico = valor === "" ? 0 : Number(valor);
+    if (Number.isNaN(numerico) || numerico < 0) return;
+    setPesos((prev) => ({ ...prev, [campo]: numerico }));
+  }
+
   function atualizarAluno(ra: string, campo: CampoNota, valor: string) {
+    const chaveErro = `${ra}-${campo}`;
     const numerico = valor === "" ? 0 : Number(valor);
     if (Number.isNaN(numerico)) return;
+
+    const max = pesos[campo];
+
+    if (numerico > max) {
+      setErrosNota((prev) => ({
+        ...prev,
+        [chaveErro]: `Máximo permitido: ${formatNota(max)}`,
+      }));
+      setAlunosTurma((prev) =>
+        prev.map((aluno) =>
+          aluno.ra !== ra ? aluno : { ...aluno, [campo]: max }
+        )
+      );
+      return;
+    }
+
+    setErrosNota((prev) => {
+      if (!prev[chaveErro]) return prev;
+      const proximo = { ...prev };
+      delete proximo[chaveErro];
+      return proximo;
+    });
 
     setAlunosTurma((prev) =>
       prev.map((aluno) => {
         if (aluno.ra !== ra) return aluno;
-
-        let ajustado = numerico;
-        if (campo === "faltas") {
-          ajustado = Math.max(0, Math.round(numerico));
-        } else {
-          const max = LIMITES_NOTA[campo];
-          ajustado = Math.min(max, Math.max(0, numerico));
-        }
-
+        const ajustado = Math.min(max, Math.max(0, numerico));
         return { ...aluno, [campo]: ajustado };
       })
     );
@@ -223,6 +310,60 @@ export default function DiarioDeClassePage() {
 
   function toggleExpandir(ra: string) {
     setAlunoExpandido((prev) => (prev === ra ? null : ra));
+  }
+
+  async function handleSalvarPesos() {
+    if (!professorLogado?.id) {
+      setModalFeedback({
+        aberto: true,
+        tipo: "erro",
+        titulo: "Sessão inválida",
+        mensagem: "Não foi possível identificar o professor logado.",
+      });
+      return;
+    }
+
+    if (!pesosValidos) {
+      setModalFeedback({
+        aberto: true,
+        tipo: "atencao",
+        titulo: "Distribuição inválida",
+        mensagem: "A soma dos pesos deve ser exatamente 10.0.",
+      });
+      return;
+    }
+
+    setSalvandoPesos(true);
+
+    const { error } = await supabase
+      .from("professores")
+      .update({ pesos })
+      .eq("id", professorLogado.id);
+
+    setSalvandoPesos(false);
+
+    if (error) {
+      console.error("Erro ao salvar pesos:", error.message);
+      setModalFeedback({
+        aberto: true,
+        tipo: "erro",
+        titulo: "Falha ao salvar regra",
+        mensagem: error.message,
+      });
+      return;
+    }
+
+    atualizarSessaoPesos(pesos);
+    setAlunosTurma((prev) => limitarNotasAosPesos(prev, pesos));
+    setErrosNota({});
+    setIsConfigurandoPesos(false);
+
+    setModalFeedback({
+      aberto: true,
+      tipo: "sucesso",
+      titulo: "Regra salva",
+      mensagem: "A distribuição de pontos foi atualizada com sucesso.",
+    });
   }
 
   async function handleSalvarLancamentos() {
@@ -258,7 +399,6 @@ export default function DiarioDeClassePage() {
             atv3: aluno.atv3,
             atv4: aluno.atv4,
             prova: aluno.prova,
-            faltas: aluno.faltas,
             n1: totalN1(aluno),
           })
           .eq("ra", aluno.ra)
@@ -284,7 +424,7 @@ export default function DiarioDeClassePage() {
       aberto: true,
       tipo: "sucesso",
       titulo: "Lançamentos salvos",
-      mensagem: `Notas e faltas de ${alunosTurma.length} aluno(s) atualizadas para ${turmaSelecionada}${
+      mensagem: `Notas de ${alunosTurma.length} aluno(s) atualizadas para ${turmaSelecionada}${
         disciplinaProfessor ? ` — ${disciplinaProfessor}` : ""
       }.`,
     });
@@ -374,7 +514,7 @@ export default function DiarioDeClassePage() {
             </p>
           </div>
 
-          <div className="mb-6 grid grid-cols-1 sm:grid-cols-2 gap-3">
+          <div className="mb-6 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-[1fr_1fr_auto] gap-3 items-end">
             <div>
               <label
                 htmlFor="filtro-turma"
@@ -419,7 +559,85 @@ export default function DiarioDeClassePage() {
                 aria-label="Disciplina do professor"
               />
             </div>
+            <div>
+              <button
+                type="button"
+                onClick={() => setIsConfigurandoPesos((prev) => !prev)}
+                className="inline-flex w-full sm:w-auto items-center justify-center gap-2 rounded-lg border border-zinc-700 bg-zinc-900 px-4 py-2.5 text-sm font-medium text-white hover:border-zinc-500 hover:bg-zinc-800 transition-colors cursor-pointer"
+              >
+                <span aria-hidden>⚙️</span>
+                Configurar Distribuição de Pontos
+              </button>
+            </div>
           </div>
+
+          {isConfigurandoPesos && (
+            <div className="mb-6 rounded-xl border border-zinc-800 bg-zinc-950/60 p-5">
+              <div className="mb-4 flex flex-wrap items-start justify-between gap-3">
+                <div>
+                  <h2 className="text-sm font-semibold text-white">
+                    Distribuição de Pontos do Semestre
+                  </h2>
+                  <p className="mt-1 text-xs text-zinc-500">
+                    Defina o peso máximo de cada avaliação. A soma deve ser 10.0.
+                  </p>
+                </div>
+                <div className="text-right">
+                  <p
+                    className={`text-sm font-semibold ${
+                      pesosValidos ? "text-emerald-400" : "text-red-400"
+                    }`}
+                  >
+                    Total: {formatNota(totalDistribuicao)} / 10.0
+                  </p>
+                  {!pesosValidos && (
+                    <p className="mt-1 text-xs text-red-400">
+                      A soma dos pesos deve ser exatamente 10.0
+                    </p>
+                  )}
+                </div>
+              </div>
+
+              <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3">
+                {CAMPOS_PESO.map((campo) => (
+                  <div key={campo}>
+                    <label
+                      className="mb-1.5 block text-[11px] text-zinc-500"
+                      htmlFor={`peso-${campo}`}
+                    >
+                      {LABELS_COMPOSICAO[campo]}
+                    </label>
+                    <input
+                      id={`peso-${campo}`}
+                      type="number"
+                      min={0}
+                      max={10}
+                      step={0.1}
+                      value={pesos[campo]}
+                      onChange={(e) => atualizarPeso(campo, e.target.value)}
+                      className={inputComposicaoClass}
+                    />
+                  </div>
+                ))}
+              </div>
+
+              <div className="mt-4 flex justify-end">
+                <button
+                  type="button"
+                  onClick={() => void handleSalvarPesos()}
+                  disabled={!pesosValidos || salvandoPesos}
+                  className="inline-flex items-center gap-2 rounded-lg bg-white text-black text-sm font-medium px-4 py-2.5 hover:bg-zinc-200 transition-colors disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer"
+                >
+                  {salvandoPesos ? (
+                    <Loader2 className="h-4 w-4 animate-spin" />
+                  ) : (
+                    <Save className="h-4 w-4" />
+                  )}
+                  {salvandoPesos ? "Salvando..." : "Salvar Regra"}
+                </button>
+              </div>
+            </div>
+          )}
 
           <div className="rounded-xl border border-zinc-800 overflow-hidden bg-zinc-950/40">
             <div className="px-6 py-4 border-b border-zinc-800 flex items-center justify-between">
@@ -527,15 +745,20 @@ export default function DiarioDeClassePage() {
                                 <p className="mb-3 text-[11px] font-semibold uppercase tracking-wider text-zinc-500">
                                   Composição da Nota — {aluno.nome}
                                 </p>
-                                <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3">
-                                  {CAMPOS_COMPOSICAO.map(
-                                    ({ campo, label, max }) => (
+                                <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3">
+                                  {CAMPOS_PESO.map((campo) => {
+                                    const max = pesos[campo];
+                                    const chaveErro = `${aluno.ra}-${campo}`;
+                                    const temErro = Boolean(errosNota[chaveErro]);
+
+                                    return (
                                       <div key={campo}>
                                         <label
                                           className="mb-1.5 block text-[11px] text-zinc-500"
                                           htmlFor={`${aluno.ra}-${campo}`}
                                         >
-                                          {label}
+                                          {LABELS_COMPOSICAO[campo]} (Máx{" "}
+                                          {formatNota(max)})
                                         </label>
                                         <input
                                           id={`${aluno.ra}-${campo}`}
@@ -551,34 +774,20 @@ export default function DiarioDeClassePage() {
                                               e.target.value
                                             )
                                           }
-                                          className={inputComposicaoClass}
+                                          className={
+                                            temErro
+                                              ? inputComposicaoErroClass
+                                              : inputComposicaoClass
+                                          }
                                         />
+                                        {temErro && (
+                                          <p className="mt-1 text-[10px] text-red-400">
+                                            {errosNota[chaveErro]}
+                                          </p>
+                                        )}
                                       </div>
-                                    )
-                                  )}
-                                  <div>
-                                    <label
-                                      className="mb-1.5 block text-[11px] text-zinc-500"
-                                      htmlFor={`${aluno.ra}-faltas`}
-                                    >
-                                      Faltas
-                                    </label>
-                                    <input
-                                      id={`${aluno.ra}-faltas`}
-                                      type="number"
-                                      min={0}
-                                      step={1}
-                                      value={aluno.faltas}
-                                      onChange={(e) =>
-                                        atualizarAluno(
-                                          aluno.ra,
-                                          "faltas",
-                                          e.target.value
-                                        )
-                                      }
-                                      className={inputComposicaoClass}
-                                    />
-                                  </div>
+                                    );
+                                  })}
                                 </div>
                                 <div className="mt-4 flex items-center justify-between rounded-lg border border-zinc-800 bg-zinc-950/60 px-4 py-3">
                                   <span className="text-xs text-zinc-500">

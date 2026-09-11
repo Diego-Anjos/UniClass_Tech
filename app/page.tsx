@@ -83,6 +83,16 @@ export default function LoginPage() {
 
     limparSessaoAluno();
     limparSessaoAdmin();
+    const pesosPadrao = { atv1: 2, atv2: 1, atv3: 1, atv4: 1, prova: 5 };
+    const pesosRaw =
+      data.pesos && typeof data.pesos === "object" && !Array.isArray(data.pesos)
+        ? (data.pesos as Record<string, unknown>)
+        : {};
+    const lerPeso = (chave: string, fallback: number) => {
+      const n = Number(pesosRaw[chave]);
+      return Number.isFinite(n) && n >= 0 ? n : fallback;
+    };
+
     localStorage.setItem(
       "uniclass_prof_session",
       JSON.stringify({
@@ -95,6 +105,13 @@ export default function LoginPage() {
         dias_aula: Array.isArray(data.dias_aula) ? data.dias_aula : [],
         turmas: data.area_atuacao ?? "",
         disciplina: data.disciplina ?? "",
+        pesos: {
+          atv1: lerPeso("atv1", pesosPadrao.atv1),
+          atv2: lerPeso("atv2", pesosPadrao.atv2),
+          atv3: lerPeso("atv3", pesosPadrao.atv3),
+          atv4: lerPeso("atv4", pesosPadrao.atv4),
+          prova: lerPeso("prova", pesosPadrao.prova),
+        },
       })
     );
 
