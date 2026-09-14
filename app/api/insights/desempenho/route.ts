@@ -16,7 +16,7 @@ export async function POST(req: Request) {
         },
         { role: "user", content: JSON.stringify(notas) },
       ],
-      model: "llama-3.1-70b-versatile",
+      model: "llama3-70b-8192",
       temperature: 0.6,
     });
 

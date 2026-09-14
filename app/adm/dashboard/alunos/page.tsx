@@ -14,7 +14,9 @@ import {
   Trash2,
   ChevronLeft,
   ChevronRight,
+  Loader2,
 } from "lucide-react";
+import { toast } from "sonner";
 import { supabase } from "@/lib/supabase";
 import { ModalFeedback } from "@/components/ModalFeedback";
 
@@ -375,6 +377,7 @@ export default function GestaoAlunosPage() {
   );
   const [carregandoAiAluno, setCarregandoAiAluno] = useState(false);
   const [notificandoResend, setNotificandoResend] = useState(false);
+  const [enviandoEmail, setEnviandoEmail] = useState<string | null>(null);
   const [cursosAtivos, setCursosAtivos] = useState<string[]>([]);
   const [professoresDisponiveis, setProfessoresDisponiveis] = useState<
     ProfessorDisponivel[]
@@ -701,6 +704,59 @@ export default function GestaoAlunosPage() {
     setNotificandoResend(false);
   }
 
+  async function handleEnviarEmailTeste(aluno: Aluno) {
+    const alunoComAlias = aluno as Aluno & { emailPessoal?: string };
+    const destinatario = (
+      aluno.email_pessoal ||
+      alunoComAlias.emailPessoal ||
+      aluno.email ||
+      ""
+    ).trim();
+
+    if (!destinatario || destinatario === "—") {
+      toast.error("Este aluno não possui e-mail cadastrado.");
+      return;
+    }
+
+    toast.info(`Enviando e-mail para: ${destinatario}`);
+
+    setEnviandoEmail(aluno.id);
+    try {
+      const res = await fetch("/api/email", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          para: destinatario,
+          assunto: "Bem-vindo ao UniClassTech! 🚀",
+          nomeAluno: aluno.nome,
+        }),
+      });
+
+      const payload = (await res.json()) as { error?: unknown; data?: unknown };
+
+      if (!res.ok || payload.error) {
+        const detalhe =
+          typeof payload.error === "string"
+            ? payload.error
+            : payload.error &&
+                typeof payload.error === "object" &&
+                "message" in payload.error
+              ? String((payload.error as { message: unknown }).message)
+              : "Não foi possível enviar o e-mail de teste.";
+        toast.error(detalhe);
+        return;
+      }
+
+      toast.success(`E-mail enviado com sucesso para ${destinatario}.`);
+    } catch (err: unknown) {
+      const message =
+        err instanceof Error ? err.message : "Erro inesperado ao enviar e-mail.";
+      toast.error(message);
+    } finally {
+      setEnviandoEmail(null);
+    }
+  }
+
   function atualizarCampo<K extends keyof FormDataAluno>(campo: K, valor: FormDataAluno[K]) {
     setFormData((prev) => ({ ...prev, [campo]: valor }));
   }
@@ -951,7 +1007,7 @@ export default function GestaoAlunosPage() {
   }
 
   const inputClass =
-    "w-full px-3 py-2.5 rounded-lg bg-black border border-gray-800 text-sm text-white placeholder:text-zinc-600 outline-none focus:border-purple-500 transition-colors";
+    "w-full px-3 py-2.5 rounded-lg bg-black border border-gray-800 text-sm text-white placeholder:text-zinc-600 outline-none focus:border-zinc-500 transition-colors";
   const labelClass = "block text-xs text-gray-400 mb-1.5";
   const inputLockedClass =
     "w-full px-3 py-2.5 rounded-lg border border-gray-800 text-sm text-zinc-300 outline-none cursor-not-allowed";
@@ -1121,6 +1177,23 @@ export default function GestaoAlunosPage() {
                           <div className="flex items-center justify-end gap-2">
                             <button
                               type="button"
+                              title="Enviar E-mail Teste"
+                              disabled={enviandoEmail === aluno.id}
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                void handleEnviarEmailTeste(aluno);
+                              }}
+                              className="p-1.5 rounded-md text-zinc-500 hover:text-emerald-400 hover:bg-zinc-800 transition-colors disabled:opacity-50 disabled:pointer-events-none"
+                              aria-label="Enviar E-mail Teste"
+                            >
+                              {enviandoEmail === aluno.id ? (
+                                <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                              ) : (
+                                <Mail className="w-3.5 h-3.5" />
+                              )}
+                            </button>
+                            <button
+                              type="button"
                               onClick={(e) => {
                                 e.stopPropagation();
                                 void handleEdit(aluno);
@@ -1163,7 +1236,7 @@ export default function GestaoAlunosPage() {
                         setItensPorPagina(Number(e.target.value));
                         setPaginaAtual(1);
                       }}
-                      className="appearance-none rounded-md bg-[#0f1117] border border-gray-800 text-zinc-300 text-xs px-2.5 py-1.5 outline-none focus:border-purple-500"
+                      className="appearance-none rounded-md bg-[#0f1117] border border-gray-800 text-zinc-300 text-xs px-2.5 py-1.5 outline-none focus:border-zinc-500"
                     >
                       <option value={10}>10</option>
                       <option value={25}>25</option>
@@ -1190,7 +1263,7 @@ export default function GestaoAlunosPage() {
                       onClick={() => setPaginaAtual(pagina)}
                       className={
                         pagina === paginaAtual
-                          ? "bg-purple-600 text-white font-semibold rounded-lg px-3 py-1.5 text-sm"
+                          ? "bg-zinc-100 text-zinc-900 hover:bg-white font-semibold rounded-lg px-3 py-1.5 text-sm"
                           : "bg-transparent text-gray-400 hover:text-white rounded-lg px-3 py-1.5 text-sm transition-colors"
                       }
                     >
@@ -1482,7 +1555,7 @@ export default function GestaoAlunosPage() {
                       onClick={() => setAbaAtiva(aba.id)}
                       className={`flex-1 px-2 py-3 text-xs sm:text-sm transition-colors border-b-2 ${
                         abaAtiva === aba.id
-                          ? "border-b-2 border-purple-500 text-white font-semibold"
+                          ? "border-b-2 border-zinc-100 text-white font-semibold"
                           : "border-transparent text-gray-400 hover:text-gray-200"
                       }`}
                     >
@@ -1594,7 +1667,7 @@ export default function GestaoAlunosPage() {
                         ))}
                       </select>
                       {professorSugerido && (
-                        <span className="text-[11px] text-purple-400 mt-1 block">
+                        <span className="text-[11px] text-zinc-400 mt-1 block">
                           Vinculado automaticamente pela área de atuação do
                           docente.
                         </span>
@@ -1747,7 +1820,7 @@ export default function GestaoAlunosPage() {
                         placeholder="00000-000"
                       />
                       {buscandoCep && (
-                        <span className="text-[11px] text-purple-400 mt-1 block">
+                        <span className="text-[11px] text-zinc-400 mt-1 block">
                           Buscando endereço...
                         </span>
                       )}

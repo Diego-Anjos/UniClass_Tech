@@ -2,7 +2,7 @@
 
 # dependencies
 node_modules/
-/.pnp
+.pnp/
 .pnp.*
 .yarn/*
 !.yarn/patches
@@ -21,29 +21,35 @@ build/
 # production
 /build
 
-# environment variables (MUITO IMPORTANTE)
+# environment variables — never commit secrets (Supabase, Groq, Resend, etc.)
 .env
-.env*.local
-.env.local
-.env.development.local
-.env.test.local
-.env.production.local
+.env.*
+!.env.example
+!.env*.example
 
 # vercel
-.vercel
+.vercel/
 
-# debug
+# debug / logs
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
 .pnpm-debug.log*
+lerna-debug.log*
 
-# OS / Editor
+# OS
 .DS_Store
+Thumbs.db
+Desktop.ini
+ehthumbs.db
+
+# editor / IDE
 .vscode/
 .cursor/
 .idea/
 *.pem
+*.swp
+*.swo
 
 # typescript
 *.tsbuildinfo

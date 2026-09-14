@@ -22,14 +22,14 @@ export async function POST(req: NextRequest) {
     try {
       completion = await groq.chat.completions.create({
         messages: mensagens,
-        model: "llama-3.1-70b-versatile",
+        model: "llama3-70b-8192",
         temperature: 0.6,
         max_tokens: 120,
       });
     } catch (err) {
       completion = await groq.chat.completions.create({
         messages: mensagens,
-        model: "llama-3.1-8b-instant",
+        model: "llama3-8b-8192",
         temperature: 0.6,
         max_tokens: 120,
       });
