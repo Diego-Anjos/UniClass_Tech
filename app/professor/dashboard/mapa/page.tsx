@@ -8,6 +8,7 @@ import {
   Sparkles,
   MessageSquare,
   Map as MapIcon,
+  CalendarDays,
   LogOut,
   GraduationCap,
 } from "lucide-react";
@@ -23,6 +24,7 @@ const navItems = [
   { icon: LayoutDashboard, label: "Visão Geral", href: "/professor/dashboard", active: false },
   { icon: BookOpen, label: "Turmas e Notas", href: "/professor/dashboard/notas", active: false },
   { icon: UserCheck, label: "Chamada Rápida", href: "/professor/dashboard/chamada", active: false },
+  { icon: CalendarDays, label: "Agenda Semestral", href: "/professor/dashboard/agenda", active: false },
   { icon: MapIcon, label: "Mapa de Salas", href: "/professor/dashboard/mapa", active: true },
   { icon: Sparkles, label: "Insights IA", href: "/professor/dashboard/insights", active: false },
   { icon: MessageSquare, label: "Mensagens", href: "/professor/dashboard/mensagens", active: false },

@@ -6,6 +6,7 @@ import {
   LayoutDashboard,
   ClipboardList,
   CalendarCheck,
+  CalendarDays,
   BookOpen,
   Map as MapIcon,
   LogOut,
@@ -26,6 +27,7 @@ import {
 const navItems = [
   { icon: LayoutDashboard, label: "Visão Geral", href: "/aluno/dashboard", active: false },
   { icon: ClipboardList, label: "Boletim e Notas", href: "/aluno/dashboard/notas", active: false },
+  { icon: CalendarDays, label: "Meu Calendário", href: "/aluno/dashboard/calendario", active: false },
   { icon: CalendarCheck, label: "Frequência", href: "/aluno/dashboard/frequencia", active: true },
   { icon: BookOpen, label: "Grade e Matérias", href: "/aluno/dashboard/grade", active: false },
   { icon: MapIcon, label: "Mapa de Salas e Labs", href: "/aluno/dashboard/mapa", active: false },

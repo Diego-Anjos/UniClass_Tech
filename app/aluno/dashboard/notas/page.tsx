@@ -2,10 +2,12 @@
 
 import { Fragment, useEffect, useState } from "react";
 import Link from "next/link";
+import { PDFDownloadLink } from "@react-pdf/renderer";
 import {
   LayoutDashboard,
   ClipboardList,
   CalendarCheck,
+  CalendarDays,
   BookOpen,
   Map,
   LogOut,
@@ -27,7 +29,7 @@ import {
   CartesianGrid,
 } from "recharts";
 import { supabase } from "@/lib/supabase";
-import { ModalFeedback } from "@/components/ModalFeedback";
+import { BoletimPDF } from "@/components/BoletimPDF";
 import {
   limparSessaoAluno,
   useAlunoSession,
@@ -95,6 +97,7 @@ const mockNotasPorCurso: Record<string, any[]> = {
 const navItems = [
   { icon: LayoutDashboard, label: "Visão Geral",         href: "/aluno/dashboard",        active: false },
   { icon: ClipboardList,   label: "Boletim e Notas",     href: "/aluno/dashboard/notas",  active: true  },
+  { icon: CalendarDays,    label: "Meu Calendário",       href: "/aluno/dashboard/calendario",                      active: false },
   { icon: CalendarCheck,   label: "Frequência",           href: "/aluno/dashboard/frequencia",                       active: false },
   { icon: BookOpen,        label: "Grade e Matérias",     href: "/aluno/dashboard/grade",                       active: false },
   { icon: Map,             label: "Mapa de Salas e Labs", href: "/aluno/dashboard/mapa",                       active: false },
@@ -160,17 +163,6 @@ export default function AlunoNotasPage() {
   );
   const [insightIA, setInsightIA] = useState("");
   const [loadingIA, setLoadingIA] = useState(true);
-  const [modalFeedback, setModalFeedback] = useState<{
-    aberto: boolean;
-    tipo: "sucesso" | "erro" | "atencao";
-    titulo: string;
-    mensagem: string;
-  }>({
-    aberto: false,
-    tipo: "sucesso",
-    titulo: "",
-    mensagem: "",
-  });
 
   const dadosNotas =
     alunoLogado?.curso && mockNotasPorCurso[alunoLogado.curso]
@@ -184,6 +176,23 @@ export default function AlunoNotasPage() {
             faltas: 0,
           },
         ];
+
+  const dadosAluno = {
+    nome: aluno?.nome ?? alunoLogado?.nome ?? "Estudante",
+    ra: aluno?.ra ?? alunoLogado?.ra ?? "—",
+    curso: aluno?.curso ?? alunoLogado?.curso ?? "Matrícula Pendente",
+  };
+
+  const notasBoletim = dadosNotas.map((item) => {
+    const n1 = Number(item.n1);
+    const n2 = Number(item.n2);
+    return {
+      disciplina: String(item.disciplina),
+      notaFinal: ((n1 + n2) / 2).toFixed(1),
+      faltas: Number(item.faltas) || 0,
+      status: statusPorMedia(n1, n2),
+    };
+  });
 
   useEffect(() => {
     if (carregandoSessao) return;
@@ -265,20 +274,6 @@ export default function AlunoNotasPage() {
 
     void carregarAluno();
   }, [alunoLogado, carregandoSessao]);
-
-  function handleBaixarPdf() {
-    setModalFeedback({
-      aberto: true,
-      tipo: "sucesso",
-      titulo: "Solicitação Recebida",
-      mensagem:
-        "O download do seu Histórico Escolar oficial (PDF) será iniciado em instantes.",
-    });
-  }
-
-  function fecharFeedback() {
-    setModalFeedback((prev) => ({ ...prev, aberto: false }));
-  }
 
   function toggleLinhaExpandida(id: string) {
     setLinhaExpandida((prev) => (prev === id ? null : id));
@@ -384,14 +379,26 @@ export default function AlunoNotasPage() {
                 <option>2º Semestre</option>
                 <option>1º Semestre</option>
               </select>
-              <button
-                type="button"
-                onClick={handleBaixarPdf}
-                className="flex items-center gap-2 border border-zinc-800 text-zinc-300 hover:bg-zinc-900 hover:text-white transition-colors text-sm rounded-lg px-4 py-2 cursor-pointer"
+              <PDFDownloadLink
+                document={
+                  <BoletimPDF aluno={dadosAluno} notas={notasBoletim} />
+                }
+                fileName="boletim_uniclasstech.pdf"
+                className="inline-flex no-underline"
               >
-                <Download className="w-4 h-4" />
-                Baixar Histórico PDF
-              </button>
+                {({ blob, url, loading, error }) => (
+                  <span
+                    className={`inline-flex items-center gap-2 rounded-lg bg-white text-black text-sm font-medium px-4 py-2 transition-opacity hover:opacity-90 cursor-pointer ${
+                      loading ? "opacity-70 pointer-events-none" : ""
+                    }`}
+                  >
+                    <Download className="w-4 h-4" />
+                    {loading
+                      ? "Gerando documento..."
+                      : "Baixar Boletim em PDF"}
+                  </span>
+                )}
+              </PDFDownloadLink>
             </div>
           </div>
 
@@ -600,13 +607,6 @@ export default function AlunoNotasPage() {
         </div>
       </main>
 
-      <ModalFeedback
-        aberto={modalFeedback.aberto}
-        onClose={fecharFeedback}
-        tipo={modalFeedback.tipo}
-        titulo={modalFeedback.titulo}
-        mensagem={modalFeedback.mensagem}
-      />
     </div>
   );
 }
