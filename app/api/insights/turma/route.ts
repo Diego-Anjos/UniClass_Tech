@@ -1,9 +1,13 @@
 import { NextRequest, NextResponse } from "next/server";
 import Groq from "groq-sdk";
+import { requireApiAuth, serviceUnavailable } from "@/lib/api-auth";
 
 const groq = new Groq({ apiKey: process.env.GROQ_API_KEY });
 
 export async function POST(req: NextRequest) {
+  const denied = requireApiAuth(req);
+  if (denied) return denied;
+
   try {
     const { professor, filtros, metricasGlobais } = await req.json();
 
@@ -28,6 +32,6 @@ REGRAS OBRIGATÓRIAS:
     return NextResponse.json({ analise: completion.choices[0]?.message?.content || "Análise indisponível no momento." });
   } catch (error) {
     console.error(error);
-    return NextResponse.json({ analise: "Não foi possível gerar a análise macro da turma neste momento." });
+    return serviceUnavailable("Os insights gerados por IA estão temporariamente indisponíveis.");
   }
 }

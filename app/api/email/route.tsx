@@ -2,14 +2,16 @@ import * as React from "react";
 import { Resend } from "resend";
 import { NextResponse } from "next/server";
 import EmailBoasVindas from "@/emails/EmailBoasVindas";
+import { requireApiAuth } from "@/lib/api-auth";
 
 const resend = new Resend(process.env.RESEND_API_KEY);
 
 export async function POST(request: Request) {
+  const denied = requireApiAuth(request);
+  if (denied) return denied;
+
   try {
     const { para, assunto, nomeAluno } = await request.json();
-
-    console.log("Tentando enviar e-mail para:", para);
 
     const { data, error } = await resend.emails.send({
       from: "UniClassTech <onboarding@resend.dev>",

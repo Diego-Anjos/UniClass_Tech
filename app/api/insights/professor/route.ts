@@ -1,9 +1,13 @@
 import { NextRequest, NextResponse } from "next/server";
 import Groq from "groq-sdk";
+import { requireApiAuth, serviceUnavailable } from "@/lib/api-auth";
 
 const groq = new Groq({ apiKey: process.env.GROQ_API_KEY });
 
 export async function POST(req: NextRequest) {
+  const denied = requireApiAuth(req);
+  if (denied) return denied;
+
   try {
     const { nome, titulacao, area_atuacao, carga_horaria, turmasCount } =
       await req.json();
@@ -52,16 +56,6 @@ Turmas Atribuídas: ${turmasCount}`;
     const data = JSON.parse(content);
     return NextResponse.json(data);
   } catch {
-    return NextResponse.json({
-      tipoAlerta: "EQUILÍBRIO DE CARGA",
-      corAlerta: "blue",
-      mensagem:
-        "Distribuição curricular estável e em conformidade com o plano pedagógico semestral.",
-      metricaValor: "94%",
-      metricaLabel: "CONFORMIDADE",
-      turmaDestaque: "GTI",
-      detalheComparativo:
-        "Comparativo gerado com base nas entregas regimentais deste semestre.",
-    });
+    return serviceUnavailable("Os insights gerados por IA estão temporariamente indisponíveis.");
   }
 }

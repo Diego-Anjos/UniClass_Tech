@@ -17,9 +17,9 @@ export type BoletimAluno = {
 
 export type BoletimNota = {
   disciplina: string;
-  notaFinal: number | string;
+  n1: number | string;
+  n2: number | string;
   faltas: number;
-  status: string;
 };
 
 type BoletimPDFProps = {
@@ -101,7 +101,7 @@ const styles = StyleSheet.create({
   tableHeaderCell: {
     fontFamily: "Helvetica-Bold",
     fontSize: 9,
-    color: "#ffffff",
+    color: "#fafafa",
     textTransform: "uppercase",
     letterSpacing: 0.4,
   },
@@ -120,28 +120,12 @@ const styles = StyleSheet.create({
     paddingVertical: 9,
     paddingHorizontal: 10,
   },
-  colDisciplina: { width: "46%" },
+  colDisciplina: { width: "52%" },
   colNota: { width: "16%", textAlign: "center" },
   colFaltas: { width: "16%", textAlign: "center" },
-  colStatus: { width: "22%", textAlign: "center" },
   cellText: {
     fontSize: 9.5,
     color: "#18181b",
-  },
-  statusAprovado: {
-    fontFamily: "Helvetica-Bold",
-    fontSize: 9.5,
-    color: "#166534",
-  },
-  statusReprovado: {
-    fontFamily: "Helvetica-Bold",
-    fontSize: 9.5,
-    color: "#991b1b",
-  },
-  statusDefault: {
-    fontFamily: "Helvetica-Bold",
-    fontSize: 9.5,
-    color: "#27272a",
   },
   emptyState: {
     paddingVertical: 20,
@@ -172,36 +156,27 @@ const styles = StyleSheet.create({
   },
 });
 
-function statusStyle(status: string) {
-  const normalized = status.trim().toLowerCase();
-  if (normalized.includes("aprov")) return styles.statusAprovado;
-  if (normalized.includes("reprov")) return styles.statusReprovado;
-  return styles.statusDefault;
-}
-
-function formatarEmissao(date = new Date()) {
-  return date.toLocaleString("pt-BR", {
+function formatarData(date = new Date()) {
+  return date.toLocaleDateString("pt-BR", {
     day: "2-digit",
     month: "2-digit",
     year: "numeric",
-    hour: "2-digit",
-    minute: "2-digit",
   });
 }
 
 export function BoletimPDF({ aluno, notas }: BoletimPDFProps) {
-  const emissao = formatarEmissao();
+  const dataAtual = formatarData();
 
   return (
     <Document
-      title={`Boletim Acadêmico — ${aluno.nome}`}
+      title={`Histórico e Boletim Acadêmico — ${aluno.nome}`}
       author="UniClassTech"
-      subject="Boletim Acadêmico Oficial"
+      subject="Histórico e Boletim Acadêmico"
     >
       <Page size="A4" style={styles.page}>
         <View style={styles.header}>
           <Text style={styles.brand}>UniClassTech</Text>
-          <Text style={styles.subtitle}>Boletim Acadêmico Oficial</Text>
+          <Text style={styles.subtitle}>Histórico e Boletim Acadêmico</Text>
         </View>
 
         <View style={styles.alunoBox}>
@@ -224,12 +199,10 @@ export function BoletimPDF({ aluno, notas }: BoletimPDFProps) {
             <Text style={[styles.tableHeaderCell, styles.colDisciplina]}>
               Disciplina
             </Text>
-            <Text style={[styles.tableHeaderCell, styles.colNota]}>Nota</Text>
+            <Text style={[styles.tableHeaderCell, styles.colNota]}>N1</Text>
+            <Text style={[styles.tableHeaderCell, styles.colNota]}>N2</Text>
             <Text style={[styles.tableHeaderCell, styles.colFaltas]}>
               Faltas
-            </Text>
-            <Text style={[styles.tableHeaderCell, styles.colStatus]}>
-              Status
             </Text>
           </View>
 
@@ -249,13 +222,13 @@ export function BoletimPDF({ aluno, notas }: BoletimPDFProps) {
                     {nota.disciplina}
                   </Text>
                   <Text style={[styles.cellText, styles.colNota]}>
-                    {nota.notaFinal}
+                    {nota.n1}
+                  </Text>
+                  <Text style={[styles.cellText, styles.colNota]}>
+                    {nota.n2}
                   </Text>
                   <Text style={[styles.cellText, styles.colFaltas]}>
                     {nota.faltas}
-                  </Text>
-                  <Text style={[statusStyle(nota.status), styles.colStatus]}>
-                    {nota.status}
                   </Text>
                 </View>
               );
@@ -264,10 +237,10 @@ export function BoletimPDF({ aluno, notas }: BoletimPDFProps) {
         </View>
 
         <View style={styles.footer} fixed>
-          <Text style={styles.footerText}>Emitido em {emissao}</Text>
-          <Text style={styles.footerMuted}>
-            Documento gerado eletronicamente pelo UniClassTech
+          <Text style={styles.footerText}>
+            Documento gerado eletronicamente pelo sistema UniClassTech
           </Text>
+          <Text style={styles.footerMuted}>{dataAtual}</Text>
         </View>
       </Page>
     </Document>

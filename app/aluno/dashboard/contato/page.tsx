@@ -21,7 +21,11 @@ import {
 } from "lucide-react";
 import { supabase } from "@/lib/supabase";
 import { ModalFeedback } from "@/components/ModalFeedback";
-import { limparSessaoAluno } from "@/lib/aluno-session";
+import { toast } from "sonner";
+import {
+  limparSessaoAluno,
+  useAlunoSession,
+} from "@/lib/aluno-session";
 import {
   normalizarPreferencias,
 } from "@/lib/professor-preferencias";
@@ -115,7 +119,10 @@ function destinoChamado(chamado: ChamadoAluno) {
 }
 
 export default function AlunoContatoPage() {
-  const [aluno, setAluno] = useState<{ nome: string; ra: string } | null>(null);
+  const { alunoLogado, carregandoSessao } = useAlunoSession();
+  const aluno = alunoLogado
+    ? { nome: alunoLogado.nome, ra: alunoLogado.ra }
+    : null;
   const [assuntoSuporte, setAssuntoSuporte] = useState("");
   const [mensagemSuporte, setMensagemSuporte] = useState("");
   const [enviandoSuporte, setEnviandoSuporte] = useState(false);
@@ -144,35 +151,33 @@ export default function AlunoContatoPage() {
   });
 
   useEffect(() => {
-    const raw = localStorage.getItem("alunoLogado");
-    if (raw) {
-      try {
-        const dadosParseados = JSON.parse(raw) as { nome: string; ra: string };
-        setAluno(dadosParseados);
-      } catch {
-        setAluno(null);
-      }
-    }
-  }, []);
-
-  useEffect(() => {
-    if (!aluno) return;
+    if (carregandoSessao || !aluno) return;
 
     async function carregarDisciplinasAluno() {
-      // 1. Pega os IDs das turmas onde o aluno tem nota/matrícula
-      const { data: notas } = await supabase
+      const { data: notas, error: notasError } = await supabase
         .from("notas")
         .select("turma")
         .eq("ra_aluno", aluno!.ra);
 
+      if (notasError) {
+        toast.error("Erro ao carregar disciplinas do boletim.");
+        setDisciplinasAluno([]);
+        return;
+      }
+
       if (notas && notas.length > 0) {
         const turmaIds = notas.map((n) => n.turma);
 
-        // 2. Busca os dados dessas turmas específicas
-        const { data: turmas } = await supabase
+        const { data: turmas, error: turmasError } = await supabase
           .from("turmas")
           .select("id, curso, professor")
           .in("id", turmaIds);
+
+        if (turmasError) {
+          toast.error("Erro ao carregar turmas.");
+          setDisciplinasAluno([]);
+          return;
+        }
 
         if (turmas) {
           setDisciplinasAluno(turmas as DisciplinaAluno[]);
@@ -183,7 +188,7 @@ export default function AlunoContatoPage() {
     }
 
     void carregarDisciplinasAluno();
-  }, [aluno]);
+  }, [aluno, carregandoSessao]);
 
   useEffect(() => {
     if (!professorSelecionado) {
@@ -217,16 +222,24 @@ export default function AlunoContatoPage() {
           setDisponibilidadeProf({ dias, de, ate });
           return;
         }
+      } else if (error) {
+        toast.error("Erro ao carregar disponibilidade do professor.");
       }
 
       // Fallback: dados ainda só em preferencias (jsonb)
-      const { data: alt } = await supabase
+      const { data: alt, error: altError } = await supabase
         .from("professores")
         .select("preferencias")
         .ilike("nome", `%${professorSelecionado}%`)
         .maybeSingle();
 
       if (cancelado) return;
+
+      if (altError) {
+        toast.error("Erro ao carregar preferências do professor.");
+        setDisponibilidadeProf(null);
+        return;
+      }
 
       if (alt?.preferencias) {
         const prefs = normalizarPreferencias(alt.preferencias);
@@ -262,6 +275,7 @@ export default function AlunoContatoPage() {
 
         if (error) {
           console.error("Erro ao buscar chamados:", error.message);
+          toast.error("Erro ao carregar seus chamados.");
           setMeusChamados([]);
           return;
         }
@@ -287,7 +301,12 @@ export default function AlunoContatoPage() {
       .eq("ra_aluno", ra)
       .order("data_abertura", { ascending: false });
 
-    if (!error && data) {
+    if (error) {
+      toast.error("Erro ao atualizar lista de chamados.");
+      return;
+    }
+
+    if (data) {
       setMeusChamados(
         (data as Record<string, unknown>[]).map(mapearChamadoAluno)
       );
@@ -444,6 +463,14 @@ export default function AlunoContatoPage() {
     } finally {
       setEnviandoProfessor(false);
     }
+  }
+
+  if (carregandoSessao || !aluno) {
+    return (
+      <div className="flex h-screen items-center justify-center bg-black text-zinc-400 text-sm">
+        Carregando sessão...
+      </div>
+    );
   }
 
   return (

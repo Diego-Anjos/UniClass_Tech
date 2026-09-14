@@ -1,7 +1,11 @@
 import Groq from "groq-sdk";
 import { NextResponse } from "next/server";
+import { requireApiAuth } from "@/lib/api-auth";
 
-export async function GET() {
+export async function GET(request: Request) {
+  const denied = requireApiAuth(request);
+  if (denied) return denied;
+
   // Guard: chave de API deve existir como variável de servidor (nunca NEXT_PUBLIC_)
   if (!process.env.GROQ_API_KEY) {
     console.error("[/api/groq/test] GROQ_API_KEY não definida no ambiente.");

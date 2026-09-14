@@ -67,6 +67,14 @@ export function limparSessaoProfessor() {
   localStorage.removeItem("uniclass_prof_session");
 }
 
+/** Limpa localStorage e remove o cookie httpOnly de papel. */
+export function encerrarSessaoProfessor() {
+  limparSessaoProfessor();
+  if (typeof window !== "undefined") {
+    void fetch("/api/auth/logout", { method: "POST" });
+  }
+}
+
 /** Lê a sessão do professor no localStorage (sem redirecionar). */
 export function lerSessaoProfessor(): ProfessorSession | null {
   if (typeof window === "undefined") return null;
@@ -95,14 +103,14 @@ export function useProfessorSession() {
     const parsed = lerSessaoProfessor();
 
     if (!parsed) {
-      limparSessaoProfessor();
+      encerrarSessaoProfessor();
       setCarregandoSessao(false);
       router.push("/");
       return;
     }
 
     if (!parsed.nome && !parsed.nomeCompletoTitulo) {
-      limparSessaoProfessor();
+      encerrarSessaoProfessor();
       setCarregandoSessao(false);
       router.push("/");
       return;

@@ -4,15 +4,12 @@ import { FormEvent, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { GraduationCap, Shield, X } from "lucide-react";
-import { supabase } from "@/lib/supabase";
 import { salvarSessaoAluno, limparSessaoAluno } from "@/lib/aluno-session";
 import { limparSessaoProfessor } from "@/lib/professor-session";
 import { limparSessaoAdmin } from "@/lib/admin-session";
 
 type TipoLogin = "Aluno" | "Professor";
 type AbaLegal = "termos" | "privacidade";
-
-const SENHA_PADRAO_ALUNO = "aluno123";
 
 export default function LoginPage() {
   const router = useRouter();
@@ -37,82 +34,52 @@ export default function LoginPage() {
   }
 
   async function handleLoginAluno(usuarioInput: string, senhaInput: string) {
-    const { data: aluno, error } = await supabase
-      .from("alunos")
-      .select("*")
-      .eq("ra", usuarioInput)
-      .single();
+    const response = await fetch("/api/auth/aluno", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ ra: usuarioInput, senha: senhaInput }),
+    });
+    const data = await response.json();
 
-    if (error || !aluno) {
-      setErro("RA não encontrado no sistema.");
-      return;
-    }
-
-    if (senhaInput !== SENHA_PADRAO_ALUNO) {
-      setErro("Senha incorreta.");
+    if (!response.ok) {
+      setErro(String(data.error ?? "Não foi possível autenticar."));
       return;
     }
 
     limparSessaoProfessor();
     limparSessaoAdmin();
     salvarSessaoAluno({
-      ra: String(aluno.ra ?? usuarioInput),
-      nome: String(aluno.nome ?? "Estudante"),
-      curso: String(aluno.curso ?? ""),
-      semestreAtual:
-        aluno.semestre_atual ?? aluno.semestre ?? aluno.SemestreAtual ?? "",
+      ra: String(data.aluno.ra),
+      nome: String(data.aluno.nome),
+      curso: String(data.aluno.curso ?? ""),
+      semestreAtual: data.aluno.semestreAtual ?? "",
     });
 
     router.push("/aluno/dashboard");
   }
 
   async function handleLoginProfessor(usuarioInput: string, senhaInput: string) {
-    const emailCompleto = `${usuarioInput}@uniclasstech.edu.br`;
+    const response = await fetch("/api/auth/professor", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ usuario: usuarioInput, senha: senhaInput }),
+    });
+    const data = await response.json();
 
-    const { data, error } = await supabase
-      .from("professores")
-      .select("*")
-      .eq("email_institucional", emailCompleto)
-      .eq("senha", senhaInput)
-      .single();
-
-    if (error || !data) {
-      setErro("Credenciais inválidas. Verifique seu e-mail e senha.");
+    if (!response.ok) {
+      setErro(
+        String(
+          data.error ?? "Credenciais inválidas. Verifique seu e-mail e senha."
+        )
+      );
       return;
     }
 
     limparSessaoAluno();
     limparSessaoAdmin();
-    const pesosPadrao = { atv1: 2, atv2: 1, atv3: 1, atv4: 1, prova: 5 };
-    const pesosRaw =
-      data.pesos && typeof data.pesos === "object" && !Array.isArray(data.pesos)
-        ? (data.pesos as Record<string, unknown>)
-        : {};
-    const lerPeso = (chave: string, fallback: number) => {
-      const n = Number(pesosRaw[chave]);
-      return Number.isFinite(n) && n >= 0 ? n : fallback;
-    };
-
     localStorage.setItem(
       "uniclass_prof_session",
-      JSON.stringify({
-        id: data.id,
-        nome: data.nome,
-        titulacao: data.titulacao,
-        area_atuacao: data.area_atuacao,
-        nomeCompletoTitulo: `${data.titulacao} ${data.nome}`,
-        turno_aula: data.turno_aula ?? "Noite",
-        dias_aula: Array.isArray(data.dias_aula) ? data.dias_aula : [],
-        turmas: data.area_atuacao ?? "",
-        disciplina: data.disciplina ?? "",
-        pesos: {
-          atv1: lerPeso("atv1", pesosPadrao.atv1),
-          atv2: lerPeso("atv2", pesosPadrao.atv2),
-          atv3: lerPeso("atv3", pesosPadrao.atv3),
-          atv4: lerPeso("atv4", pesosPadrao.atv4),
-          prova: lerPeso("prova", pesosPadrao.prova),
-        },
-      })
+      JSON.stringify(data.professor)
     );
 
     router.push("/professor/dashboard");

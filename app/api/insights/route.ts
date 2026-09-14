@@ -1,11 +1,15 @@
 import { NextRequest, NextResponse } from "next/server";
 import Groq from "groq-sdk";
+import { requireApiAuth, serviceUnavailable } from "@/lib/api-auth";
 
 const groq = new Groq({
   apiKey: process.env.GROQ_API_KEY,
 });
 
 export async function POST(req: NextRequest) {
+  const denied = requireApiAuth(req);
+  if (denied) return denied;
+
   try {
     const { context, turmasAtivas } = await req.json();
 
@@ -30,8 +34,8 @@ export async function POST(req: NextRequest) {
         temperature: 0.7,
         max_tokens: 150,
       });
-    } catch (erroPrimario: any) {
-      console.warn("Falha no modelo primário (llama-3.1-8b-instant):", erroPrimario.message || erroPrimario);
+    } catch (erroPrimario: unknown) {
+      console.warn("Falha no modelo primário (llama-3.1-8b-instant):", erroPrimario instanceof Error ? erroPrimario.message : erroPrimario);
       
       // Tentativa 2: Modelo de Redundância
       completion = await groq.chat.completions.create({
@@ -47,6 +51,6 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ insight });
   } catch (error) {
     console.error("Erro crítico na API do Groq (ambos os modelos falharam):", error);
-    return NextResponse.json({ insight: "Os insights gerados por IA estão temporariamente indisponíveis. Tente novamente mais tarde." }, { status: 200 });
+    return serviceUnavailable("Os insights gerados por IA estão temporariamente indisponíveis.");
   }
 }

@@ -11,6 +11,14 @@ export function limparSessaoAdmin() {
   localStorage.removeItem(ADMIN_SESSION_KEY);
 }
 
+/** Limpa localStorage e remove o cookie httpOnly de papel. */
+export function encerrarSessaoAdmin() {
+  limparSessaoAdmin();
+  if (typeof window !== "undefined") {
+    void fetch("/api/auth/logout", { method: "POST" });
+  }
+}
+
 export function salvarSessaoAdmin(admin: AdminSession) {
   localStorage.setItem(ADMIN_SESSION_KEY, JSON.stringify(admin));
 }

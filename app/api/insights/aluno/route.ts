@@ -1,9 +1,13 @@
 import { NextRequest, NextResponse } from "next/server";
 import Groq from "groq-sdk";
+import { requireApiAuth, serviceUnavailable } from "@/lib/api-auth";
 
 const groq = new Groq({ apiKey: process.env.GROQ_API_KEY });
 
 export async function POST(req: NextRequest) {
+  const denied = requireApiAuth(req);
+  if (denied) return denied;
+
   try {
     const { nome, curso, semestre, professor } = await req.json();
 
@@ -50,13 +54,6 @@ Professor Responsável: ${professor || "Corpo Docente"}`;
     const data = JSON.parse(content);
     return NextResponse.json(data);
   } catch (error) {
-    return NextResponse.json({
-      tipoAlerta: "ALERTA PREDITIVO",
-      corAlerta: "amber",
-      mensagem: "Estudante com frequência dentro da média regimental. Recomenda-se acompanhamento nas semanas de avaliação.",
-      riscoLabel: "Moderado",
-      metricaLabel: "FALTAS",
-      metricaValor: "12%"
-    });
+    return serviceUnavailable("Os insights gerados por IA estão temporariamente indisponíveis.");
   }
 }

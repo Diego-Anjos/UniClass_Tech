@@ -1,8 +1,8 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import Link from "next/link";
-import { usePathname } from "next/navigation";
+import { usePathname, useRouter } from "next/navigation";
 import {
   LayoutDashboard,
   Users,
@@ -17,7 +17,7 @@ import {
   X,
   Map as MapIcon,
 } from "lucide-react";
-import { limparSessaoAdmin } from "@/lib/admin-session";
+import { lerSessaoAdmin, encerrarSessaoAdmin } from "@/lib/admin-session";
 
 const navItems = [
   { icon: LayoutDashboard, label: "Visão Geral", href: "/adm/dashboard" },
@@ -50,10 +50,36 @@ function isActivePath(pathname: string, href: string) {
 
 export function AdmDashboardShell({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
+  const router = useRouter();
   const [sidebarAbertaMobile, setSidebarAbertaMobile] = useState(false);
+  const [verificandoSessao, setVerificandoSessao] = useState(true);
+  const [sessaoValida, setSessaoValida] = useState(false);
+
+  useEffect(() => {
+    const sessao = lerSessaoAdmin();
+
+    if (!sessao) {
+      encerrarSessaoAdmin();
+      setVerificandoSessao(false);
+      setSessaoValida(false);
+      router.replace("/adm/login");
+      return;
+    }
+
+    setSessaoValida(true);
+    setVerificandoSessao(false);
+  }, [router]);
 
   function fecharSidebarMobile() {
     setSidebarAbertaMobile(false);
+  }
+
+  if (verificandoSessao || !sessaoValida) {
+    return (
+      <div className="min-h-screen w-full bg-[#07090e] text-zinc-400 flex items-center justify-center text-sm">
+        Verificando sessão...
+      </div>
+    );
   }
 
   return (
@@ -148,7 +174,7 @@ export function AdmDashboardShell({ children }: { children: React.ReactNode }) {
           <Link
             href="/"
             onClick={() => {
-              limparSessaoAdmin();
+              encerrarSessaoAdmin();
               fecharSidebarMobile();
             }}
             className="flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm text-zinc-500 hover:bg-zinc-900 hover:text-white transition-colors"

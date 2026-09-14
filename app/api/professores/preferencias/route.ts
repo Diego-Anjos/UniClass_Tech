@@ -5,6 +5,7 @@ import {
   normalizarPreferencias,
   type PreferenciasProfessor,
 } from "@/lib/professor-preferencias";
+import { requireApiAuth } from "@/lib/api-auth";
 
 export const runtime = "nodejs";
 
@@ -75,6 +76,9 @@ async function salvarNoStorage(
 }
 
 export async function GET(request: Request) {
+  const denied = requireApiAuth(request);
+  if (denied) return denied;
+
   try {
     const { searchParams } = new URL(request.url);
     const professorId = searchParams.get("professorId")?.trim();
@@ -157,6 +161,9 @@ export async function GET(request: Request) {
 }
 
 export async function PUT(request: Request) {
+  const denied = requireApiAuth(request);
+  if (denied) return denied;
+
   try {
     const body = (await request.json()) as {
       professorId?: string;

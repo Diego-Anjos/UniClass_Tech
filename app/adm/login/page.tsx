@@ -8,9 +8,6 @@ import { limparSessaoAluno } from "@/lib/aluno-session";
 import { limparSessaoProfessor } from "@/lib/professor-session";
 import { salvarSessaoAdmin } from "@/lib/admin-session";
 
-const ADMIN_EMAIL = "admin@uniclass.com";
-const ADMIN_SENHA = "admin123";
-
 export default function LoginAdmPage() {
   const router = useRouter();
   const [usuario, setUsuario] = useState("");
@@ -18,22 +15,31 @@ export default function LoginAdmPage() {
   const [erro, setErro] = useState("");
   const [carregando, setCarregando] = useState(false);
 
-  function handleLogin(e: FormEvent<HTMLFormElement>) {
+  async function handleLogin(e: FormEvent<HTMLFormElement>) {
     e.preventDefault();
     setErro("");
     setCarregando(true);
 
     try {
-      const email = usuario.trim();
-      if (email !== ADMIN_EMAIL || senha !== ADMIN_SENHA) {
-        setErro("Credenciais administrativas inválidas.");
+      const response = await fetch("/api/auth/admin", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          email: usuario.trim(),
+          senha,
+        }),
+      });
+      const data = await response.json();
+
+      if (!response.ok) {
+        setErro(String(data.error ?? "Credenciais administrativas inválidas."));
         return;
       }
 
       limparSessaoAluno();
       limparSessaoProfessor();
       salvarSessaoAdmin({
-        nome: "Secretaria Acadêmica",
+        nome: String(data.admin?.nome ?? "Secretaria Acadêmica"),
         role: "admin",
       });
 

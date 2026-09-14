@@ -279,8 +279,6 @@ export function MapaSalas({ usuarioLogado, role }: Props) {
           .from("turmas")
           .select(COLUNAS_TURMA_MAPA);
 
-        console.log("Dados do Supabase:", turmasData);
-
         if (turmasError) {
           console.error("Erro ao buscar turmas (mapa):", turmasError.message);
         }
@@ -304,8 +302,6 @@ export function MapaSalas({ usuarioLogado, role }: Props) {
         const ocupacoesMapa = paraMapa
           .map(turmaParaOcupacao)
           .filter((o): o is OcupacaoMapa => o !== null);
-
-        console.log("Dados do Supabase:", ocupacoesMapa);
 
         setAlocacoes(paraMapa);
         setDadosSupabase(ocupacoesMapa);

@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 
 export const ALUNO_SESSION_KEY = "alunoLogado";
 
+
 export type AlunoSession = {
   ra: string;
   nome: string;
@@ -25,6 +26,14 @@ export function iniciaisDoAluno(nome: string) {
 
 export function limparSessaoAluno() {
   localStorage.removeItem(ALUNO_SESSION_KEY);
+}
+
+/** Limpa localStorage e remove o cookie httpOnly de papel. */
+export function encerrarSessaoAluno() {
+  limparSessaoAluno();
+  if (typeof window !== "undefined") {
+    void fetch("/api/auth/logout", { method: "POST" });
+  }
 }
 
 export function salvarSessaoAluno(aluno: AlunoSession) {
@@ -54,7 +63,7 @@ export function useAlunoSession() {
     const session = lerSessaoAluno();
 
     if (!session) {
-      limparSessaoAluno();
+      encerrarSessaoAluno();
       setCarregandoSessao(false);
       router.push("/");
       return;

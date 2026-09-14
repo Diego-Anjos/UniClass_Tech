@@ -71,7 +71,7 @@ type ResumoEngajamento = {
   presentes: number;
   faltas: number;
   taxaPresenca: number;
-  fonte: "registro_chamada" | "mock";
+  fonte: "registro_chamada";
   resumo: string;
 };
 
@@ -86,26 +86,6 @@ type DadoGraficoMacro = {
   frequencia: number;
 };
 
-const MESES_1_SEMESTRE = ["Fev", "Mar", "Abr", "Mai", "Jun"] as const;
-const MESES_2_SEMESTRE = ["Ago", "Set", "Out", "Nov", "Dez"] as const;
-
-function gerarDadosGraficoMock(filtros: FiltrosMacro): DadoGraficoMacro[] {
-  const meses =
-    filtros.semestre === "2º Semestre" ? MESES_2_SEMESTRE : MESES_1_SEMESTRE;
-  const seed = Number(filtros.ano) + (filtros.semestre.startsWith("2") ? 17 : 3);
-
-  return meses.map((mes, index) => {
-    const notaMedia = Number(
-      (6.2 + ((seed + index * 7) % 28) / 10 - index * 0.05).toFixed(1)
-    );
-    const frequencia = Math.min(
-      98,
-      Math.max(68, 88 - index * 2 + ((seed + index * 5) % 9))
-    );
-    return { mes, notaMedia, frequencia };
-  });
-}
-
 function iniciaisDoNome(nome: string) {
   return nome
     .split(" ")
@@ -113,35 +93,6 @@ function iniciaisDoNome(nome: string) {
     .slice(0, 2)
     .map((parte) => parte[0]?.toUpperCase() ?? "")
     .join("");
-}
-
-function hashId(id: string) {
-  let hash = 0;
-  for (let i = 0; i < id.length; i++) {
-    hash = (hash * 31 + id.charCodeAt(i)) >>> 0;
-  }
-  return hash;
-}
-
-function mockEngajamento(aluno: AlunoInsight): ResumoEngajamento {
-  const base = 8 + aluno.semestre * 2 + (hashId(aluno.id) % 12);
-  const faltas = Math.min(35, Math.max(4, base));
-  const taxaPresenca = Math.max(55, 100 - faltas);
-  const presentes = Math.round((taxaPresenca / 100) * 20);
-  const totalFaltas = 20 - presentes;
-
-  let tom = "engajamento estável";
-  if (faltas >= 25) tom = "alerta de frequência";
-  else if (faltas >= 15) tom = "atenção moderada";
-
-  return {
-    totalRegistros: 20,
-    presentes,
-    faltas: totalFaltas,
-    taxaPresenca,
-    fonte: "mock",
-    resumo: `Estimativa do ${aluno.semestre}º semestre: ${taxaPresenca}% de presença e ${tom} nas últimas aulas.`,
-  };
 }
 
 function mensagemInicialIA(nomeAluno: string): ChatMessage {
@@ -167,12 +118,8 @@ export default function ProfessorInsightsPage() {
     ano: anoAtual.toString(),
     semestre: "1º Semestre",
   });
-  const [dadosGrafico, setDadosGrafico] = useState<DadoGraficoMacro[]>(() =>
-    gerarDadosGraficoMock({
-      ano: anoAtual.toString(),
-      semestre: "1º Semestre",
-    })
-  );
+  const [dadosGrafico, setDadosGrafico] = useState<DadoGraficoMacro[]>([]);
+  const [carregandoGrafico, setCarregandoGrafico] = useState(false);
   const [analiseMacroIA, setAnaliseMacroIA] = useState("");
   const [carregandoMacro, setCarregandoMacro] = useState(false);
   const chatScrollRef = useRef<HTMLDivElement>(null);
@@ -194,7 +141,7 @@ export default function ProfessorInsightsPage() {
       `Professor vinculado: ${alunoSelecionado.professor || "—"}`,
       `Engajamento/Frequência: ${resumo}`,
       resumoAluno
-        ? `Métricas: ${resumoAluno.presentes} presentes, ${resumoAluno.faltas} faltas, ${resumoAluno.taxaPresenca}% de presença (${resumoAluno.fonte === "registro_chamada" ? "dados reais" : "estimativa"}).`
+        ? `Métricas: ${resumoAluno.presentes} presentes, ${resumoAluno.faltas} faltas, ${resumoAluno.taxaPresenca}% de presença (dados reais).`
         : null,
     ]
       .filter(Boolean)
@@ -293,13 +240,13 @@ export default function ProfessorInsightsPage() {
 
       if (error) {
         console.error("Erro ao buscar registro_chamada:", error.message);
-        setResumoAluno(mockEngajamento(alunoSelecionado!));
+        setResumoAluno(null);
         setCarregandoResumo(false);
         return;
       }
 
       if (!data || data.length === 0) {
-        setResumoAluno(mockEngajamento(alunoSelecionado!));
+        setResumoAluno(null);
         setCarregandoResumo(false);
         return;
       }
@@ -354,20 +301,120 @@ export default function ProfessorInsightsPage() {
   useEffect(() => {
     if (!professorLogado) return;
 
-    const dados = gerarDadosGraficoMock(filtrosMacro);
-    setDadosGrafico(dados);
-
     let cancelado = false;
 
-    async function carregarAnaliseMacro() {
+    async function carregarSerieEAnaliseMacro() {
+      setCarregandoGrafico(true);
       setCarregandoMacro(true);
+
       try {
+        const ras = alunos.map((a) => a.ra).filter(Boolean);
+        let serie: DadoGraficoMacro[] = [];
+
+        if (ras.length > 0) {
+          const { data: notasRows, error: notasError } = await supabase
+            .from("notas")
+            .select("media_final, created_at, updated_at")
+            .in("ra_aluno", ras);
+
+          if (notasError) {
+            console.error("Erro ao agregar notas macro:", notasError.message);
+          }
+
+          const { data: chamadaRows, error: chamadaError } = await supabase
+            .from("registro_chamada")
+            .select("status, data")
+            .in("aluno_ra", ras);
+
+          if (chamadaError) {
+            console.error(
+              "Erro ao agregar frequência macro:",
+              chamadaError.message
+            );
+          }
+
+          const meses =
+            filtrosMacro.semestre === "2º Semestre"
+              ? [
+                  { mes: "Ago", n: 8 },
+                  { mes: "Set", n: 9 },
+                  { mes: "Out", n: 10 },
+                  { mes: "Nov", n: 11 },
+                  { mes: "Dez", n: 12 },
+                ]
+              : [
+                  { mes: "Fev", n: 2 },
+                  { mes: "Mar", n: 3 },
+                  { mes: "Abr", n: 4 },
+                  { mes: "Mai", n: 5 },
+                  { mes: "Jun", n: 6 },
+                ];
+
+          const anoNum = Number(filtrosMacro.ano) || anoAtual;
+
+          serie = meses.map(({ mes, n }) => {
+            const notasDoMes = (notasRows ?? []).filter((row) => {
+              const raw = String(row.updated_at ?? row.created_at ?? "");
+              const d = new Date(raw);
+              return (
+                !Number.isNaN(d.getTime()) &&
+                d.getFullYear() === anoNum &&
+                d.getMonth() + 1 === n
+              );
+            });
+            const medias = notasDoMes
+              .map((r) => Number(r.media_final))
+              .filter((v) => Number.isFinite(v));
+            const notaMedia =
+              medias.length > 0
+                ? Number(
+                    (
+                      medias.reduce((acc, v) => acc + v, 0) / medias.length
+                    ).toFixed(1)
+                  )
+                : 0;
+
+            const chamadasDoMes = (chamadaRows ?? []).filter((row) => {
+              const d = new Date(String(row.data ?? ""));
+              return (
+                !Number.isNaN(d.getTime()) &&
+                d.getFullYear() === anoNum &&
+                d.getMonth() + 1 === n
+              );
+            });
+            const presentes = chamadasDoMes.filter(
+              (r) => String(r.status ?? "").toLowerCase() === "presente"
+            ).length;
+            const frequencia =
+              chamadasDoMes.length > 0
+                ? Math.round((presentes / chamadasDoMes.length) * 100)
+                : 0;
+
+            return { mes, notaMedia, frequencia };
+          });
+
+          const temDado = serie.some(
+            (p) => p.notaMedia > 0 || p.frequencia > 0
+          );
+          if (!temDado) serie = [];
+        }
+
+        if (cancelado) return;
+        setDadosGrafico(serie);
+
+        if (serie.length === 0) {
+          setAnaliseMacroIA(
+            "Sem dados suficientes de notas/frequência para gerar a análise macro neste período."
+          );
+          return;
+        }
+
         const mediaNotas =
-          dados.reduce((acc, item) => acc + item.notaMedia, 0) /
-          (dados.length || 1);
+          serie.reduce((acc, item) => acc + item.notaMedia, 0) /
+          (serie.length || 1);
         const mediaFrequencia =
-          dados.reduce((acc, item) => acc + item.frequencia, 0) /
-          (dados.length || 1);
+          serie.reduce((acc, item) => acc + item.frequencia, 0) /
+          (serie.length || 1);
 
         const response = await fetch("/api/insights/turma", {
           method: "POST",
@@ -376,7 +423,7 @@ export default function ProfessorInsightsPage() {
             professor: professorLogado!.nomeCompletoTitulo,
             filtros: filtrosMacro,
             metricasGlobais: {
-              serieMensal: dados,
+              serieMensal: serie,
               mediaNotas: Number(mediaNotas.toFixed(1)),
               mediaFrequencia: Math.round(mediaFrequencia),
               totalAlunos: alunos.length,
@@ -387,27 +434,36 @@ export default function ProfessorInsightsPage() {
 
         const data = await response.json();
         if (cancelado) return;
+        if (!response.ok) {
+          setAnaliseMacroIA(
+            String(data.error ?? "Análise indisponível no momento.")
+          );
+          return;
+        }
         setAnaliseMacroIA(
-          (data.analise as string) ||
-            "Análise indisponível no momento."
+          (data.analise as string) || "Análise indisponível no momento."
         );
       } catch (err) {
         console.error("Erro na análise macro da turma:", err);
         if (!cancelado) {
+          setDadosGrafico([]);
           setAnaliseMacroIA(
             "Não foi possível gerar a análise macro da turma neste momento."
           );
         }
       } finally {
-        if (!cancelado) setCarregandoMacro(false);
+        if (!cancelado) {
+          setCarregandoGrafico(false);
+          setCarregandoMacro(false);
+        }
       }
     }
 
-    void carregarAnaliseMacro();
+    void carregarSerieEAnaliseMacro();
     return () => {
       cancelado = true;
     };
-  }, [filtrosMacro, professorLogado, alunos.length]);
+  }, [filtrosMacro, professorLogado, alunos]);
 
   function handleSelecionarAluno(alunoId: string) {
     if (!alunoId) {
@@ -669,18 +725,16 @@ export default function ProfessorInsightsPage() {
                           {resumoAluno.resumo}
                         </p>
                         <p className="text-[11px] text-zinc-600 mt-2">
-                          Fonte:{" "}
-                          {resumoAluno.fonte === "registro_chamada"
-                            ? "registro_chamada"
-                            : "estimativa por semestre"}
+                          Fonte: registro_chamada
                         </p>
                       </>
                     ) : (
-                      <p className="text-sm text-zinc-500">
-                        Sem dados de engajamento disponíveis.
-                      </p>
+                      <div className="rounded-lg border border-dashed border-gray-800 bg-black/30 px-3 py-6 text-center">
+                        <p className="text-sm text-zinc-500">
+                          Sem registros de chamada para este aluno.
+                        </p>
+                      </div>
                     )}
-                  </div>
                 </div>
               )}
             </div>
@@ -835,6 +889,17 @@ export default function ProfessorInsightsPage() {
                   <span className="text-[11px] text-[#9333ea]">● Notas</span>
                 </div>
                 <div className="h-56 w-full">
+                  {carregandoGrafico ? (
+                    <div className="h-full flex items-center justify-center text-sm text-zinc-500">
+                      Carregando série de notas...
+                    </div>
+                  ) : dadosGrafico.length === 0 ? (
+                    <div className="h-full flex items-center justify-center rounded-lg border border-dashed border-gray-800 bg-black/30 px-4 text-center">
+                      <p className="text-sm text-zinc-500">
+                        Sem dados de notas para o período selecionado.
+                      </p>
+                    </div>
+                  ) : (
                   <ResponsiveContainer width="100%" height="100%">
                     <BarChart data={dadosGrafico}>
                       <CartesianGrid
@@ -870,6 +935,7 @@ export default function ProfessorInsightsPage() {
                       />
                     </BarChart>
                   </ResponsiveContainer>
+                  )}
                 </div>
               </div>
 
@@ -883,6 +949,17 @@ export default function ProfessorInsightsPage() {
                   </span>
                 </div>
                 <div className="h-56 w-full">
+                  {carregandoGrafico ? (
+                    <div className="h-full flex items-center justify-center text-sm text-zinc-500">
+                      Carregando série de frequência...
+                    </div>
+                  ) : dadosGrafico.length === 0 ? (
+                    <div className="h-full flex items-center justify-center rounded-lg border border-dashed border-gray-800 bg-black/30 px-4 text-center">
+                      <p className="text-sm text-zinc-500">
+                        Sem dados de frequência para o período selecionado.
+                      </p>
+                    </div>
+                  ) : (
                   <ResponsiveContainer width="100%" height="100%">
                     <LineChart data={dadosGrafico}>
                       <CartesianGrid
@@ -925,6 +1002,7 @@ export default function ProfessorInsightsPage() {
                       />
                     </LineChart>
                   </ResponsiveContainer>
+                  )}
                 </div>
               </div>
             </div>

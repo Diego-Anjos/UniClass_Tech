@@ -1,9 +1,13 @@
 import { NextRequest, NextResponse } from "next/server";
 import Groq from "groq-sdk";
+import { requireApiAuth, serviceUnavailable } from "@/lib/api-auth";
 
 const groq = new Groq({ apiKey: process.env.GROQ_API_KEY });
 
 export async function POST(req: NextRequest) {
+  const denied = requireApiAuth(req);
+  if (denied) return denied;
+
   try {
     const { turma, presentes, faltas, total } = await req.json();
 
@@ -27,9 +31,6 @@ Retorne um JSON: { "tipoAlerta": "ALERTA DE FREQUÊNCIA" ou "ENGAJAMENTO ALTO", 
     const data = JSON.parse(completion.choices[0]?.message?.content || "{}");
     return NextResponse.json(data);
   } catch (error) {
-    return NextResponse.json({
-      tipoAlerta: "ALERTA DE FREQUÊNCIA",
-      mensagem: "Presença registrada. Acompanhe os alunos recorrentemente ausentes para evitar evasão."
-    });
+    return serviceUnavailable("Os insights gerados por IA estão temporariamente indisponíveis.");
   }
 }

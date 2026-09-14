@@ -1,9 +1,13 @@
 import { NextResponse } from "next/server";
 import Groq from "groq-sdk";
+import { requireApiAuth, serviceUnavailable } from "@/lib/api-auth";
 
 const groq = new Groq({ apiKey: process.env.GROQ_API_KEY });
 
 export async function POST(req: Request) {
+  const denied = requireApiAuth(req);
+  if (denied) return denied;
+
   try {
     const { notas } = await req.json();
 
@@ -26,12 +30,6 @@ export async function POST(req: Request) {
     );
   } catch (error) {
     console.error("ERRO GROQ:", error);
-    return NextResponse.json(
-      {
-        insight:
-          "Não foi possível analisar seu desempenho no momento. Continue acompanhando suas notas e faltas — em breve o feedback inteligente estará disponível novamente.",
-      },
-      { status: 200 }
-    );
+    return serviceUnavailable("Os insights gerados por IA estão temporariamente indisponíveis.");
   }
 }

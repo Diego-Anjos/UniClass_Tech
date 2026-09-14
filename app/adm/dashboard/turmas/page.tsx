@@ -92,12 +92,6 @@ const CURSOS_DISPONIVEIS = [
   "Banco de Dados",
 ];
 
-const statusBadge: Record<StatusTurma, string> = {
-  Aberta: "bg-green-950 text-green-400 border-green-900/50",
-  "Em andamento": "bg-sky-950 text-sky-400 border-sky-900/50",
-  Fechada: "bg-zinc-800 text-zinc-400 border-zinc-700",
-};
-
 const abas: AbaTurma[] = [
   "Disciplinas & Professores",
   "Lista de Alunos",
@@ -110,8 +104,7 @@ function ocupacaoPercentual(ocupacao: number, capacidade: number) {
 }
 
 function statusPorOcupacao(
-  percentual: number,
-  statusDb: StatusTurma
+  percentual: number
 ): { label: string; className: string } {
   if (percentual >= 100) {
     return {
@@ -119,21 +112,9 @@ function statusPorOcupacao(
       className: "bg-red-950 text-red-400 border-red-900/50",
     };
   }
-  if (percentual === 0) {
-    return {
-      label: "Sem Alunos",
-      className: "bg-zinc-800 text-zinc-400 border-zinc-700",
-    };
-  }
-  if (statusDb === "Em andamento") {
-    return {
-      label: "Em andamento",
-      className: statusBadge["Em andamento"],
-    };
-  }
   return {
-    label: "Aberta",
-    className: statusBadge.Aberta,
+    label: "Disponível",
+    className: "bg-green-950 text-green-400 border-green-900/50",
   };
 }
 
@@ -146,11 +127,24 @@ function formatarSemestreAluno(valor: unknown) {
   return raw;
 }
 
-function mapTurma(
-  row: Record<string, unknown>,
-  matriculados = 0
-): Turma {
-  const capacidade = Number(row.capacidade ?? 40) || 40;
+function lerMatriculadosDoBanco(row: Record<string, unknown>): number {
+  const bruto =
+    row.alunos_matriculados ?? row.ocupacao ?? row.matriculados ?? 0;
+  const valor = Number(bruto);
+  if (Number.isNaN(valor) || valor < 0) return 0;
+  return Math.floor(valor);
+}
+
+function lerCapacidadeDoBanco(row: Record<string, unknown>): number {
+  const bruto = row.capacidade ?? row.capacidade_maxima ?? 40;
+  const valor = Number(bruto);
+  if (Number.isNaN(valor) || valor <= 0) return 40;
+  return valor;
+}
+
+function mapTurma(row: Record<string, unknown>): Turma {
+  const capacidade = lerCapacidadeDoBanco(row);
+  const matriculados = lerMatriculadosDoBanco(row);
   const percentual = ocupacaoPercentual(matriculados, capacidade);
   return {
     id: String(row.id ?? ""),
@@ -216,11 +210,10 @@ export default function TurmasMatriculasPage() {
   async function fetchTurmas() {
     setIsLoading(true);
 
-    const [{ data: turmasData, error: turmasError }, { data: alunosData, error: alunosError }] =
-      await Promise.all([
-        supabase.from("turmas").select("*").order("created_at", { ascending: false }),
-        supabase.from("alunos").select("curso"),
-      ]);
+    const { data: turmasData, error: turmasError } = await supabase
+      .from("turmas")
+      .select("*")
+      .order("created_at", { ascending: false });
 
     if (turmasError) {
       console.error("Erro ao buscar turmas:", turmasError.message);
@@ -229,24 +222,11 @@ export default function TurmasMatriculasPage() {
       return;
     }
 
-    if (alunosError) {
-      console.error("Erro ao buscar alunos para ocupação:", alunosError.message);
-    }
+    const turmasMapeadas = (turmasData || []).map((t) =>
+      mapTurma(t as Record<string, unknown>)
+    );
 
-    const contagemPorCurso: Record<string, number> = {};
-    (alunosData || []).forEach((aluno) => {
-      if (aluno.curso) {
-        contagemPorCurso[aluno.curso] =
-          (contagemPorCurso[aluno.curso] || 0) + 1;
-      }
-    });
-
-    const turmasComOcupacao = (turmasData || []).map((t) => {
-      const matriculados = contagemPorCurso[String(t.curso ?? "")] || 0;
-      return mapTurma(t as Record<string, unknown>, matriculados);
-    });
-
-    setTurmas(turmasComOcupacao);
+    setTurmas(turmasMapeadas);
 
     const hoje = diaHoje();
     const ocupadas = new Set<string>();
@@ -289,10 +269,8 @@ export default function TurmasMatriculasPage() {
   }, [turmas, searchTerm, filterTurno, filterStatus]);
 
   const capacidadeTurma = turmaSelecionada?.capacidade || 40;
-  const matriculados = turmaSelecionada?.matriculados ?? alunosDaTurma.length;
-  const taxaOcupacao =
-    turmaSelecionada?.percentual ??
-    ocupacaoPercentual(matriculados, capacidadeTurma);
+  const matriculados = turmaSelecionada?.matriculados ?? 0;
+  const taxaOcupacao = ocupacaoPercentual(matriculados, capacidadeTurma);
 
   useEffect(() => {
     if (!turmaSelecionada?.id) {
@@ -330,31 +308,6 @@ export default function TurmasMatriculasPage() {
 
       if (cancelado) return;
       setAlunosDaTurma(alunos);
-      setTurmaSelecionada((prev) => {
-        if (!prev || prev.id !== turma.id) return prev;
-        const capacidade = prev.capacidade || 40;
-        const percentual = ocupacaoPercentual(alunos.length, capacidade);
-        return {
-          ...prev,
-          matriculados: alunos.length,
-          ocupacao: alunos.length,
-          percentual,
-          capacidade,
-        };
-      });
-      setTurmas((prev) =>
-        prev.map((t) => {
-          if (t.id !== turma.id) return t;
-          const capacidade = t.capacidade || 40;
-          return {
-            ...t,
-            matriculados: alunos.length,
-            ocupacao: alunos.length,
-            percentual: ocupacaoPercentual(alunos.length, capacidade),
-            capacidade,
-          };
-        })
-      );
 
       let professores: ProfessorTurma[] = [];
       if (curso) {
@@ -380,7 +333,7 @@ export default function TurmasMatriculasPage() {
       setProfessoresDaTurma(professores);
 
       const capacidade = turma.capacidade || 40;
-      const matriculadosCount = alunos.length;
+      const matriculadosCount = turma.matriculados ?? 0;
 
       setIsGeneratingInsight(true);
       setAiInsight(null);
@@ -586,7 +539,7 @@ export default function TurmasMatriculasPage() {
     }
 
     setIsSubmitting(true);
-    const payload = {
+    const payloadBase = {
       codigo,
       curso,
       turno: formData.turno,
@@ -596,8 +549,11 @@ export default function TurmasMatriculasPage() {
       sala: salaSelecionada || null,
     };
     const { error } = editingId
-      ? await supabase.from("turmas").update(payload).eq("id", editingId)
-      : await supabase.from("turmas").insert(payload);
+      ? await supabase.from("turmas").update(payloadBase).eq("id", editingId)
+      : await supabase.from("turmas").insert({
+          ...payloadBase,
+          alunos_matriculados: 0,
+        });
     setIsSubmitting(false);
 
     if (error) {
@@ -758,10 +714,11 @@ export default function TurmasMatriculasPage() {
                   ) : (
                     turmasFiltradas.map((turma) => {
                       const capacidade = turma.capacidade || 40;
-                      const statusOcup = statusPorOcupacao(
-                        turma.percentual,
-                        turma.status
+                      const percentual = ocupacaoPercentual(
+                        turma.matriculados,
+                        capacidade
                       );
+                      const statusOcup = statusPorOcupacao(percentual);
                       return (
                         <tr
                           key={turma.id || turma.codigo}
@@ -789,13 +746,13 @@ export default function TurmasMatriculasPage() {
                                   {turma.matriculados}/{capacidade}
                                 </span>
                                 <span className="text-zinc-500">
-                                  {turma.percentual}%
+                                  {percentual}%
                                 </span>
                               </div>
                               <div className="w-full bg-gray-800 rounded-full h-1.5 overflow-hidden">
                                 <div
                                   className="bg-purple-600 h-full rounded-full transition-all duration-500"
-                                  style={{ width: `${turma.percentual}%` }}
+                                  style={{ width: `${percentual}%` }}
                                 />
                               </div>
                             </div>
@@ -925,8 +882,10 @@ export default function TurmasMatriculasPage() {
                         label="Status"
                         valor={
                           statusPorOcupacao(
-                            turmaSelecionada.percentual,
-                            turmaSelecionada.status
+                            ocupacaoPercentual(
+                              turmaSelecionada.matriculados,
+                              turmaSelecionada.capacidade || 40
+                            )
                           ).label
                         }
                       />

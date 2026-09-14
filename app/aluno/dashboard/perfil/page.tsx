@@ -22,9 +22,11 @@ import {
 } from "lucide-react";
 import { supabase } from "@/lib/supabase";
 import { ModalFeedback } from "@/components/ModalFeedback";
+import { toast } from "sonner";
 import {
   iniciaisDoAluno,
   limparSessaoAluno,
+  useAlunoSession,
 } from "@/lib/aluno-session";
 
 const inputClass =
@@ -102,6 +104,7 @@ const navItems = [
 ];
 
 export default function AlunoPerfilPage() {
+  const { alunoLogado: sessaoAluno, carregandoSessao } = useAlunoSession();
   const inputFotoRef = useRef<HTMLInputElement>(null);
   const [alunoLogado, setAlunoLogado] = useState<AlunoPerfil | null>(null);
   const [uploadingFoto, setUploadingFoto] = useState(false);
@@ -176,37 +179,24 @@ export default function AlunoPerfilPage() {
   ];
 
   useEffect(() => {
-    const raw = localStorage.getItem("alunoLogado");
-    if (!raw) return;
+    if (carregandoSessao || !sessaoAluno?.ra) return;
 
-    try {
-      const sessao = JSON.parse(raw) as {
-        nome?: string;
-        ra?: string;
-        curso?: string;
-        semestreAtual?: string | number;
-      };
-      if (!sessao.ra) return;
-
-      setAlunoLogado({
-        nome: sessao.nome ?? "",
-        ra: sessao.ra,
-        curso: sessao.curso ?? "",
-        semestre: formatarSemestre(sessao.semestreAtual),
-        modalidade: "",
-        campus: "",
-        data_nascimento: "",
-        cpf: "",
-        email_institucional: "",
-        telefone: "",
-        email_pessoal: "",
-        endereco: "",
-        foto_url: null,
-      });
-    } catch {
-      setAlunoLogado(null);
-    }
-  }, []);
+    setAlunoLogado({
+      nome: sessaoAluno.nome ?? "",
+      ra: sessaoAluno.ra,
+      curso: sessaoAluno.curso ?? "",
+      semestre: formatarSemestre(sessaoAluno.semestreAtual),
+      modalidade: "",
+      campus: "",
+      data_nascimento: "",
+      cpf: "",
+      email_institucional: "",
+      telefone: "",
+      email_pessoal: "",
+      endereco: "",
+      foto_url: null,
+    });
+  }, [carregandoSessao, sessaoAluno]);
 
   useEffect(() => {
     if (!alunoLogado?.ra) return;
@@ -218,7 +208,12 @@ export default function AlunoPerfilPage() {
         .eq("ra", alunoLogado!.ra)
         .single();
 
-      if (error || !data) return;
+      if (error) {
+        toast.error("Não foi possível carregar o perfil.");
+        return;
+      }
+
+      if (!data) return;
 
       const row = data as Record<string, unknown>;
       setAlunoLogado({
@@ -354,7 +349,6 @@ export default function AlunoPerfilPage() {
         .remove([nomeArquivo]);
 
       if (storageError) {
-        console.log(storageError);
         abrirFeedback(
           "erro",
           "Falha ao remover",
@@ -369,7 +363,6 @@ export default function AlunoPerfilPage() {
         .eq("ra", alunoLogado.ra);
 
       if (updateError) {
-        console.log(updateError);
         abrirFeedback(
           "erro",
           "Falha ao remover",
@@ -384,8 +377,7 @@ export default function AlunoPerfilPage() {
         "Foto removida",
         "Sua foto de perfil foi removida com sucesso."
       );
-    } catch (error) {
-      console.log(error);
+    } catch {
       abrirFeedback(
         "erro",
         "Falha ao remover",
@@ -435,7 +427,6 @@ export default function AlunoPerfilPage() {
         });
 
       if (error) {
-        console.log(error);
         abrirFeedback(
           "erro",
           "Falha no upload",
@@ -456,7 +447,6 @@ export default function AlunoPerfilPage() {
         .eq("ra", alunoLogado.ra);
 
       if (updateError) {
-        console.log(updateError);
         abrirFeedback(
           "erro",
           "Falha ao salvar foto",
@@ -473,8 +463,7 @@ export default function AlunoPerfilPage() {
         "Foto atualizada",
         "Sua foto de perfil foi alterada com sucesso."
       );
-    } catch (error) {
-      console.log(error);
+    } catch {
       abrirFeedback(
         "erro",
         "Falha no upload",
@@ -483,6 +472,14 @@ export default function AlunoPerfilPage() {
     } finally {
       setUploadingFoto(false);
     }
+  }
+
+  if (carregandoSessao || !sessaoAluno) {
+    return (
+      <div className="flex h-screen items-center justify-center bg-black text-zinc-400 text-sm">
+        Carregando sessão...
+      </div>
+    );
   }
 
   return (

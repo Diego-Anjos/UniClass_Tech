@@ -1,8 +1,8 @@
 "use client";
 
 import { Fragment, useEffect, useState } from "react";
+import dynamic from "next/dynamic";
 import Link from "next/link";
-import { PDFDownloadLink } from "@react-pdf/renderer";
 import {
   LayoutDashboard,
   ClipboardList,
@@ -12,7 +12,6 @@ import {
   Map,
   LogOut,
   Camera,
-  Download,
   Sparkles,
   GraduationCap,
   MessageSquare,
@@ -28,71 +27,24 @@ import {
   ResponsiveContainer,
   CartesianGrid,
 } from "recharts";
+import { toast } from "sonner";
 import { supabase } from "@/lib/supabase";
 import { BoletimPDF } from "@/components/BoletimPDF";
+import { Button } from "@/components/ui/button";
 import {
   limparSessaoAluno,
   useAlunoSession,
 } from "@/lib/aluno-session";
+import { PESOS_AVALIACAO_PADRAO } from "@/lib/professor-session";
 
-const mockNotasPorCurso: Record<string, any[]> = {
-  "Banco de Dados": [
-    {
-      disciplina: "Modelagem de Dados",
-      professor: "Roberto Lima",
-      n1: 8.5,
-      n2: 7.0,
-      faltas: 2,
-    },
-    {
-      disciplina: "SQL Avançado",
-      professor: "Sofia Mendes",
-      n1: 9.0,
-      n2: 8.5,
-      faltas: 0,
-    },
-    {
-      disciplina: "Administração de SGBD",
-      professor: "Carlos Silva",
-      n1: 6.0,
-      n2: 7.5,
-      faltas: 4,
-    },
-  ],
-  "Análise e Desenvolvimento de Sistemas (Tecnólogo)": [
-    {
-      disciplina: "Lógica de Programação",
-      professor: "Ana Costa",
-      n1: 7.5,
-      n2: 8.0,
-      faltas: 2,
-    },
-    {
-      disciplina: "Desenvolvimento Web",
-      professor: "Marcos Paulo",
-      n1: 9.0,
-      n2: 9.0,
-      faltas: 0,
-    },
-  ],
-  // Alias do catálogo administrativo (sem sufixo Tecnólogo)
-  "Análise e Desenvolvimento de Sistemas": [
-    {
-      disciplina: "Lógica de Programação",
-      professor: "Ana Costa",
-      n1: 7.5,
-      n2: 8.0,
-      faltas: 2,
-    },
-    {
-      disciplina: "Desenvolvimento Web",
-      professor: "Marcos Paulo",
-      n1: 9.0,
-      n2: 9.0,
-      faltas: 0,
-    },
-  ],
-};
+const PDFDownloadLink = dynamic(
+  () =>
+    import("@react-pdf/renderer").then((mod) => mod.PDFDownloadLink),
+  {
+    ssr: false,
+    loading: () => <Button disabled>Carregando gerador...</Button>,
+  }
+);
 
 const navItems = [
   { icon: LayoutDashboard, label: "Visão Geral",         href: "/aluno/dashboard",        active: false },
@@ -111,15 +63,18 @@ type AlunoInfo = {
   professor?: string;
 };
 
-const COMPOSICAO_N1_MOCK = [
-  { label: "Atividade 1", peso: 2.0, nota: 1.5 },
-  { label: "Atividade 2", peso: 1.0, nota: 1.0 },
-  { label: "Atividade 3", peso: 1.0, nota: 0.5 },
-  { label: "Atividade 4", peso: 1.0, nota: 1.0 },
-  { label: "Prova Semestral", peso: 5.0, nota: 4.5 },
-];
-
-const TOTAL_N1_MOCK = COMPOSICAO_N1_MOCK.reduce((acc, item) => acc + item.nota, 0);
+type NotaBoletim = {
+  disciplina: string;
+  professor: string;
+  n1: number;
+  n2: number;
+  faltas: number;
+  atv1: number;
+  atv2: number;
+  atv3: number;
+  atv4: number;
+  prova: number;
+};
 
 function statusBadgeClasses(status: string) {
   const s = status.toLowerCase();
@@ -153,49 +108,131 @@ function iniciaisDe(nome: string) {
   );
 }
 
+function formatarSemestreLabel(valor: unknown): string {
+  if (valor === null || valor === undefined || valor === "") {
+    return "Semestre atual";
+  }
+  const texto = String(valor).trim();
+  if (/semestre/i.test(texto)) return texto;
+  return `${texto}º Semestre (Atual)`;
+}
+
+function composicaoN1De(item: NotaBoletim) {
+  const pesos = PESOS_AVALIACAO_PADRAO;
+  return [
+    { label: "Atividade 1", peso: pesos.atv1, nota: item.atv1 },
+    { label: "Atividade 2", peso: pesos.atv2, nota: item.atv2 },
+    { label: "Atividade 3", peso: pesos.atv3, nota: item.atv3 },
+    { label: "Atividade 4", peso: pesos.atv4, nota: item.atv4 },
+    { label: "Prova Semestral", peso: pesos.prova, nota: item.prova },
+  ];
+}
+
 export default function AlunoNotasPage() {
   const { alunoLogado, carregandoSessao } = useAlunoSession();
   const [aluno, setAluno] = useState<AlunoInfo | null>(null);
+  const [dadosNotas, setDadosNotas] = useState<NotaBoletim[]>([]);
   const [linhaExpandida, setLinhaExpandida] = useState<string | null>(null);
   const [carregando, setCarregando] = useState(true);
   const [semestreSelecionado, setSemestreSelecionado] = useState(
-    "4º Semestre (Atual)"
+    "Semestre atual"
   );
   const [insightIA, setInsightIA] = useState("");
   const [loadingIA, setLoadingIA] = useState(true);
 
-  const dadosNotas =
-    alunoLogado?.curso && mockNotasPorCurso[alunoLogado.curso]
-      ? mockNotasPorCurso[alunoLogado.curso]
-      : [
-          {
-            disciplina: "Grade Pendente",
-            professor: "-",
-            n1: 0,
-            n2: 0,
-            faltas: 0,
-          },
-        ];
+  useEffect(() => {
+    if (carregandoSessao || !alunoLogado?.ra) return;
 
-  const dadosAluno = {
-    nome: aluno?.nome ?? alunoLogado?.nome ?? "Estudante",
-    ra: aluno?.ra ?? alunoLogado?.ra ?? "—",
-    curso: aluno?.curso ?? alunoLogado?.curso ?? "Matrícula Pendente",
-  };
+    let cancelado = false;
 
-  const notasBoletim = dadosNotas.map((item) => {
-    const n1 = Number(item.n1);
-    const n2 = Number(item.n2);
-    return {
-      disciplina: String(item.disciplina),
-      notaFinal: ((n1 + n2) / 2).toFixed(1),
-      faltas: Number(item.faltas) || 0,
-      status: statusPorMedia(n1, n2),
+    async function carregarBoletim() {
+      setCarregando(true);
+
+      const { data, error } = await supabase
+        .from("alunos")
+        .select(
+          "nome, ra, curso, professor, turma, atv1, atv2, atv3, atv4, prova, n1, n2, faltas, semestre_atual"
+        )
+        .eq("ra", alunoLogado!.ra);
+
+      if (cancelado) return;
+
+      if (error) {
+        console.error("Erro ao buscar boletim:", error.message);
+        toast.error("Não foi possível carregar o boletim.");
+        setAluno({
+          nome: alunoLogado!.nome,
+          ra: alunoLogado!.ra,
+          curso: alunoLogado!.curso || "Tecnologia da Informação",
+        });
+        setDadosNotas([]);
+        setCarregando(false);
+        return;
+      }
+
+      const rows = data ?? [];
+
+      if (rows.length === 0) {
+        setAluno({
+          nome: alunoLogado!.nome,
+          ra: alunoLogado!.ra,
+          curso: alunoLogado!.curso || "Tecnologia da Informação",
+        });
+        setDadosNotas([]);
+        setCarregando(false);
+        return;
+      }
+
+      const primeiro = rows[0];
+      setAluno({
+        nome: String(primeiro.nome ?? alunoLogado!.nome ?? "Estudante"),
+        ra: String(primeiro.ra || alunoLogado!.ra),
+        curso: String(
+          primeiro.curso || alunoLogado!.curso || "Tecnologia da Informação"
+        ),
+        professor: primeiro.professor
+          ? String(primeiro.professor)
+          : undefined,
+      });
+
+      const semestre =
+        primeiro.semestre_atual ?? alunoLogado!.semestreAtual ?? "";
+      setSemestreSelecionado(formatarSemestreLabel(semestre));
+
+      setDadosNotas(
+        rows.map((row) => {
+          const atv1 = Number(row.atv1) || 0;
+          const atv2 = Number(row.atv2) || 0;
+          const atv3 = Number(row.atv3) || 0;
+          const atv4 = Number(row.atv4) || 0;
+          const prova = Number(row.prova) || 0;
+          const n1 = atv1 + atv2 + atv3 + atv4 + prova;
+
+          return {
+            disciplina: String(row.turma ?? row.curso ?? "Disciplina"),
+            professor: String(row.professor ?? "—"),
+            n1,
+            n2: Number(row.n2) || 0,
+            faltas: Number(row.faltas) || 0,
+            atv1,
+            atv2,
+            atv3,
+            atv4,
+            prova,
+          };
+        })
+      );
+      setCarregando(false);
+    }
+
+    void carregarBoletim();
+    return () => {
+      cancelado = true;
     };
-  });
+  }, [alunoLogado, carregandoSessao]);
 
   useEffect(() => {
-    if (carregandoSessao) return;
+    if (carregandoSessao || carregando) return;
 
     let cancelado = false;
 
@@ -230,50 +267,7 @@ export default function AlunoNotasPage() {
     return () => {
       cancelado = true;
     };
-  }, [alunoLogado?.curso, carregandoSessao]);
-
-  useEffect(() => {
-    if (carregandoSessao || !alunoLogado) return;
-
-    async function carregarAluno() {
-      setCarregando(true);
-
-      try {
-        const { data: alunoData, error: alunoError } = await supabase
-          .from("alunos")
-          .select("*")
-          .eq("ra", alunoLogado!.ra)
-          .single();
-
-        if (alunoError || !alunoData) {
-          if (alunoError) {
-            console.error("Erro ao buscar aluno:", alunoError.message);
-          }
-          setAluno({
-            nome: alunoLogado!.nome,
-            ra: alunoLogado!.ra,
-            curso: alunoLogado!.curso || "Tecnologia da Informação",
-          });
-          return;
-        }
-
-        setAluno({
-          nome: String(alunoData.nome ?? alunoLogado!.nome ?? "Estudante"),
-          ra: String(alunoData.ra || alunoData.matricula || alunoLogado!.ra),
-          curso: String(
-            alunoData.curso || alunoLogado!.curso || "Tecnologia da Informação"
-          ),
-          professor: alunoData.professor
-            ? String(alunoData.professor)
-            : undefined,
-        });
-      } finally {
-        setCarregando(false);
-      }
-    }
-
-    void carregarAluno();
-  }, [alunoLogado, carregandoSessao]);
+  }, [dadosNotas, carregando, carregandoSessao]);
 
   function toggleLinhaExpandida(id: string) {
     setLinhaExpandida((prev) => (prev === id ? null : id));
@@ -374,31 +368,25 @@ export default function AlunoNotasPage() {
                 onChange={(e) => setSemestreSelecionado(e.target.value)}
                 className="bg-zinc-950 border border-zinc-800 text-zinc-300 text-sm rounded-lg px-3 py-2 outline-none focus:border-zinc-600 transition-colors cursor-pointer"
               >
-                <option>4º Semestre (Atual)</option>
-                <option>3º Semestre</option>
-                <option>2º Semestre</option>
-                <option>1º Semestre</option>
+                <option value={semestreSelecionado}>{semestreSelecionado}</option>
               </select>
-              <PDFDownloadLink
-                document={
-                  <BoletimPDF aluno={dadosAluno} notas={notasBoletim} />
-                }
-                fileName="boletim_uniclasstech.pdf"
-                className="inline-flex no-underline"
-              >
-                {({ blob, url, loading, error }) => (
-                  <span
-                    className={`inline-flex items-center gap-2 rounded-lg bg-white text-black text-sm font-medium px-4 py-2 transition-opacity hover:opacity-90 cursor-pointer ${
-                      loading ? "opacity-70 pointer-events-none" : ""
-                    }`}
-                  >
-                    <Download className="w-4 h-4" />
-                    {loading
-                      ? "Gerando documento..."
-                      : "Baixar Boletim em PDF"}
-                  </span>
-                )}
-              </PDFDownloadLink>
+              {alunoLogado && (
+                <PDFDownloadLink
+                  document={
+                    <BoletimPDF aluno={alunoLogado} notas={dadosNotas} />
+                  }
+                  fileName={`Boletim_${alunoLogado.ra}.pdf`}
+                  className="inline-flex no-underline"
+                >
+                  {({ loading }) => (
+                    <Button variant="outline">
+                      {loading
+                        ? "Preparando documento..."
+                        : "Baixar Boletim em PDF"}
+                    </Button>
+                  )}
+                </PDFDownloadLink>
+              )}
             </div>
           </div>
 
@@ -447,37 +435,43 @@ export default function AlunoNotasPage() {
                   </span>
                 </div>
               </div>
-              <ResponsiveContainer width="100%" height={300}>
-                <BarChart data={dadosNotas}>
-                  <CartesianGrid
-                    strokeDasharray="3 3"
-                    stroke="#27272a"
-                    vertical={false}
-                  />
-                  <XAxis dataKey="disciplina" stroke="#52525b" />
-                  <YAxis stroke="#52525b" domain={[0, 10]} />
-                  <Tooltip
-                    cursor={{ fill: "#27272a" }}
-                    contentStyle={{
-                      backgroundColor: "#09090b",
-                      borderColor: "#27272a",
-                      color: "#fff",
-                    }}
-                  />
-                  <Bar
-                    dataKey="n1"
-                    name="N1"
-                    fill="#10b981"
-                    radius={[4, 4, 0, 0]}
-                  />
-                  <Bar
-                    dataKey="n2"
-                    name="N2"
-                    fill="#8b5cf6"
-                    radius={[4, 4, 0, 0]}
-                  />
-                </BarChart>
-              </ResponsiveContainer>
+              {dadosNotas.length === 0 && !carregando ? (
+                <p className="text-sm text-zinc-500 py-16 text-center">
+                  Nenhuma nota lançada ainda.
+                </p>
+              ) : (
+                <ResponsiveContainer width="100%" height={300}>
+                  <BarChart data={dadosNotas}>
+                    <CartesianGrid
+                      strokeDasharray="3 3"
+                      stroke="#27272a"
+                      vertical={false}
+                    />
+                    <XAxis dataKey="disciplina" stroke="#52525b" />
+                    <YAxis stroke="#52525b" domain={[0, 10]} />
+                    <Tooltip
+                      cursor={{ fill: "#27272a" }}
+                      contentStyle={{
+                        backgroundColor: "#09090b",
+                        borderColor: "#27272a",
+                        color: "#fff",
+                      }}
+                    />
+                    <Bar
+                      dataKey="n1"
+                      name="N1"
+                      fill="#10b981"
+                      radius={[4, 4, 0, 0]}
+                    />
+                    <Bar
+                      dataKey="n2"
+                      name="N2"
+                      fill="#8b5cf6"
+                      radius={[4, 4, 0, 0]}
+                    />
+                  </BarChart>
+                </ResponsiveContainer>
+              )}
             </div>
           </div>
 
@@ -512,9 +506,18 @@ export default function AlunoNotasPage() {
                         Carregando boletim...
                       </td>
                     </tr>
+                  ) : dadosNotas.length === 0 ? (
+                    <tr>
+                      <td
+                        colSpan={6}
+                        className="px-6 py-10 text-center text-sm text-zinc-500"
+                      >
+                        Nenhuma nota encontrada para o seu RA.
+                      </td>
+                    </tr>
                   ) : (
-                    dadosNotas.map((item) => {
-                      const chave = String(item.disciplina);
+                    dadosNotas.map((item, index) => {
+                      const chave = `${item.disciplina}-${index}`;
                       const aberto = linhaExpandida === chave;
                       const media =
                         (Number(item.n1) + Number(item.n2)) / 2;
@@ -522,6 +525,7 @@ export default function AlunoNotasPage() {
                         Number(item.n1),
                         Number(item.n2)
                       );
+                      const composicao = composicaoN1De(item);
                       return (
                         <Fragment key={chave}>
                           <tr
@@ -570,11 +574,11 @@ export default function AlunoNotasPage() {
                                       Composição da Nota
                                     </p>
                                     <p className="text-sm font-semibold text-emerald-400 shrink-0">
-                                      Total N1: {TOTAL_N1_MOCK.toFixed(1)}
+                                      Total N1: {item.n1.toFixed(1)}
                                     </p>
                                   </div>
                                   <div className="flex flex-col sm:flex-row gap-3 overflow-x-auto">
-                                    {COMPOSICAO_N1_MOCK.map((comp) => (
+                                    {composicao.map((comp) => (
                                       <div
                                         key={comp.label}
                                         className="rounded-lg border border-zinc-800/80 bg-zinc-950/60 px-3 py-3 min-w-[140px] flex-1"
