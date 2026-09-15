@@ -288,11 +288,11 @@ export default function TurmasMatriculasPage() {
       const curso = turma.curso && turma.curso !== "—" ? turma.curso : "";
 
       let alunos: AlunoTurma[] = [];
-      if (curso) {
+      if (turma.codigo) {
         const { data, error } = await supabase
           .from("alunos")
           .select("*")
-          .eq("curso", curso);
+          .eq("turma", turma.codigo);
 
         if (error) {
           console.error("Erro ao buscar alunos da turma:", error.message);

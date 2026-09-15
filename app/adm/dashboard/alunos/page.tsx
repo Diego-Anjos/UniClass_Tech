@@ -68,6 +68,7 @@ type FormDataAluno = {
   ra: string;
   nome: string;
   curso: string;
+  turma: string;
   semestre: string;
   cpf: string;
   rg: string;
@@ -80,6 +81,12 @@ type FormDataAluno = {
   bairro: string;
   cidade: string;
   estado: string;
+};
+
+type TurmaDisponivel = {
+  id: string;
+  codigo: string;
+  curso: string;
 };
 
 const CURSOS_DISPONIVEIS = [
@@ -99,6 +106,7 @@ const formInicial: FormDataAluno = {
   ra: "",
   nome: "",
   curso: "",
+  turma: "",
   semestre: "",
   cpf: "",
   rg: "",
@@ -379,6 +387,9 @@ export default function GestaoAlunosPage() {
   const [notificandoResend, setNotificandoResend] = useState(false);
   const [enviandoEmail, setEnviandoEmail] = useState<string | null>(null);
   const [cursosAtivos, setCursosAtivos] = useState<string[]>([]);
+  const [turmasDisponiveis, setTurmasDisponiveis] = useState<TurmaDisponivel[]>(
+    []
+  );
   const [professoresDisponiveis, setProfessoresDisponiveis] = useState<
     ProfessorDisponivel[]
   >([]);
@@ -471,6 +482,29 @@ export default function GestaoAlunosPage() {
     }
   }
 
+  async function fetchTurmasDisponiveis() {
+    const { data, error } = await supabase
+      .from("turmas")
+      .select("id, codigo, curso")
+      .order("codigo", { ascending: true });
+
+    if (error) {
+      console.error("Erro ao buscar turmas:", error.message);
+      setTurmasDisponiveis([]);
+      return;
+    }
+
+    setTurmasDisponiveis(
+      (data ?? [])
+        .map((t) => ({
+          id: String(t.id ?? ""),
+          codigo: String(t.codigo ?? "").trim(),
+          curso: String(t.curso ?? "").trim(),
+        }))
+        .filter((t) => t.codigo && t.curso)
+    );
+  }
+
   async function fetchProfessoresDisponiveis() {
     const { data, error } = await supabase
       .from("professores")
@@ -499,6 +533,7 @@ export default function GestaoAlunosPage() {
   useEffect(() => {
     fetchAlunos();
     fetchCursosAtivos();
+    fetchTurmasDisponiveis();
     fetchProfessoresDisponiveis();
   }, []);
 
@@ -517,6 +552,14 @@ export default function GestaoAlunosPage() {
     }
     return base.sort();
   }, [cursosAtivos, formData.curso]);
+
+  const turmasDoCurso = useMemo(() => {
+    const cursoSelecionado = formData.curso.trim().toLowerCase();
+    if (!cursoSelecionado) return [];
+    return turmasDisponiveis.filter(
+      (t) => t.curso.trim().toLowerCase() === cursoSelecionado
+    );
+  }, [turmasDisponiveis, formData.curso]);
 
   const opcoesVinculo = useMemo(
     () => construirOpcoesVinculo(professoresDisponiveis),
@@ -781,6 +824,15 @@ export default function GestaoAlunosPage() {
     }
   }
 
+  function aoSelecionarCurso(cursoSelecionado: string) {
+    setFormData((prev) => ({
+      ...prev,
+      curso: cursoSelecionado,
+      turma: "",
+    }));
+    sugerirProfessorPorCurso(cursoSelecionado);
+  }
+
   function fecharModal() {
     setIsModalOpen(false);
     setFormData(formInicial);
@@ -832,6 +884,7 @@ export default function GestaoAlunosPage() {
     setAbaAtiva("academico");
     setCepErro(null);
     void fetchProfessoresDisponiveis();
+    void fetchTurmasDisponiveis();
     setIsModalOpen(true);
     void gerarNovoRA();
   }
@@ -851,11 +904,15 @@ export default function GestaoAlunosPage() {
   async function handleEdit(aluno: Aluno) {
     const curso = aluno.curso === "—" ? "" : aluno.curso;
     const semestre = aluno.semestre ? String(aluno.semestre) : "1";
+    const turmaSalva =
+      extrairSiglaTurma(aluno.turma) ||
+      (aluno.turma && aluno.turma !== "—" ? aluno.turma.trim() : "");
 
     setFormData({
       ra: aluno.ra === "—" ? "" : aluno.ra || "",
       nome: aluno.nome || "",
       curso: curso || "",
+      turma: turmaSalva,
       semestre,
       cpf: aluno.cpf,
       rg: aluno.rg,
@@ -875,9 +932,13 @@ export default function GestaoAlunosPage() {
     });
 
     let lista = professoresDisponiveis;
-    const { data, error } = await supabase
-      .from("professores")
-      .select("id, nome, area_atuacao, titulacao");
+    const [{ data, error }, turmasResult] = await Promise.all([
+      supabase.from("professores").select("id, nome, area_atuacao, titulacao"),
+      supabase
+        .from("turmas")
+        .select("id, codigo, curso")
+        .order("codigo", { ascending: true }),
+    ]);
 
     if (!error && data && data.length > 0) {
       lista = data.map((p) => ({
@@ -889,8 +950,19 @@ export default function GestaoAlunosPage() {
       setProfessoresDisponiveis(lista);
     }
 
+    if (!turmasResult.error && turmasResult.data) {
+      setTurmasDisponiveis(
+        turmasResult.data
+          .map((t) => ({
+            id: String(t.id ?? ""),
+            codigo: String(t.codigo ?? "").trim(),
+            curso: String(t.curso ?? "").trim(),
+          }))
+          .filter((t) => t.codigo && t.curso)
+      );
+    }
+
     const professorSalvo = (aluno.professor || "").trim();
-    const turmaSalva = extrairSiglaTurma(aluno.turma);
     const matchSalvo = encontrarProfessorNaLista(professorSalvo, lista);
     const opcoes = construirOpcoesVinculo(lista);
 
@@ -901,13 +973,13 @@ export default function GestaoAlunosPage() {
       setProfessorSugerido(null);
     } else if (matchSalvo) {
       const siglas = extrairSiglasTurma(matchSalvo.area_atuacao);
-      const sigla = turmaSalva || siglas[0] || "";
+      const sigla = siglas[0] || "";
       setProfessorVinculado(valorOpcaoProfessor(matchSalvo));
       setTurmaVinculada(sigla);
       setProfessorSugerido(null);
     } else if (professorSalvo) {
       setProfessorVinculado(professorSalvo);
-      setTurmaVinculada(turmaSalva);
+      setTurmaVinculada("");
       setProfessorSugerido(null);
     } else if (curso) {
       const sugerido = sugerirProfessorPorArea(curso, lista);
@@ -942,10 +1014,8 @@ export default function GestaoAlunosPage() {
     const ra = formData.ra.trim();
     const nome = formData.nome.trim();
     const curso = formData.curso.trim();
-    const turma =
-      extrairSiglaTurma(turmaVinculada) ||
-      extrairSiglaTurma(professorVinculado);
-    const opcaoTurma = opcoesVinculo.find((o) => o.value === turma);
+    const turma = formData.turma.trim();
+    const opcaoTurma = opcoesVinculo.find((o) => o.value === turmaVinculada);
     const professor =
       opcaoTurma?.professorLabel.trim() || professorVinculado.trim();
     const semestreNum = parseInt(formData.semestre, 10);
@@ -1358,6 +1428,15 @@ export default function GestaoAlunosPage() {
                     <div className="rounded-xl bg-zinc-900 border border-zinc-800 p-4 space-y-3">
                       <Campo label="Nome completo" valor={alunoSelecionado.nome} />
                       <Campo label="RA" valor={alunoSelecionado.ra} />
+                      <Campo label="Curso" valor={alunoSelecionado.curso} />
+                      <Campo
+                        label="Turma"
+                        valor={
+                          alunoSelecionado.turma?.trim()
+                            ? alunoSelecionado.turma
+                            : "—"
+                        }
+                      />
                       <Campo
                         label="E-mail institucional"
                         valor={alunoSelecionado.email}
@@ -1372,6 +1451,14 @@ export default function GestaoAlunosPage() {
                   <div className="space-y-4">
                     <div className="rounded-xl bg-zinc-900 border border-zinc-800 p-4 space-y-3">
                       <Campo label="Curso" valor={alunoSelecionado.curso} />
+                      <Campo
+                        label="Turma"
+                        valor={
+                          alunoSelecionado.turma?.trim()
+                            ? alunoSelecionado.turma
+                            : "—"
+                        }
+                      />
                       <Campo
                         label="Professor(a) / Orientador"
                         valor={alunoSelecionado.professor || "—"}
@@ -1607,11 +1694,7 @@ export default function GestaoAlunosPage() {
                       <select
                         id="curso"
                         value={formData.curso}
-                        onChange={(e) => {
-                          const cursoSelecionado = e.target.value;
-                          atualizarCampo("curso", cursoSelecionado);
-                          sugerirProfessorPorCurso(cursoSelecionado);
-                        }}
+                        onChange={(e) => aoSelecionarCurso(e.target.value)}
                         className={inputClass}
                       >
                         <option value="" disabled>
@@ -1623,6 +1706,59 @@ export default function GestaoAlunosPage() {
                           </option>
                         ))}
                       </select>
+                    </div>
+                    <div>
+                      <label className={labelClass} htmlFor="turma">
+                        Código da Turma
+                      </label>
+                      <select
+                        id="turma"
+                        value={formData.turma}
+                        onChange={(e) =>
+                          // Sempre persiste o `codigo` da turma (ex: GTI-5A-N)
+                          atualizarCampo("turma", e.target.value)
+                        }
+                        disabled={!formData.curso}
+                        className={`${inputClass} font-mono disabled:opacity-50 disabled:cursor-not-allowed`}
+                      >
+                        <option value="">
+                          {!formData.curso
+                            ? "Selecione um curso primeiro"
+                            : turmasDoCurso.length === 0
+                              ? "Nenhuma turma disponível para este curso"
+                              : "Selecione o código da turma"}
+                        </option>
+                        {formData.turma &&
+                          !turmasDoCurso.some(
+                            (t) => t.codigo === formData.turma
+                          ) && (
+                            <option value={formData.turma}>
+                              {formData.turma}
+                            </option>
+                          )}
+                        {turmasDoCurso.map((turma) => (
+                          <option
+                            key={turma.id || turma.codigo}
+                            value={turma.codigo}
+                          >
+                            {turma.codigo}
+                          </option>
+                        ))}
+                      </select>
+                      {formData.turma ? (
+                        <span className="text-[11px] text-zinc-400 mt-1.5 block">
+                          Código vinculado ao aluno:{" "}
+                          <span className="font-mono text-zinc-200">
+                            {formData.turma}
+                          </span>
+                        </span>
+                      ) : formData.curso ? (
+                        <span className="text-[11px] text-zinc-500 mt-1.5 block">
+                          O valor salvo em{" "}
+                          <span className="font-mono">alunos.turma</span> será o
+                          código da turma (ex.: GTI-5A-N).
+                        </span>
+                      ) : null}
                     </div>
                     <div>
                       <label
@@ -1648,7 +1784,7 @@ export default function GestaoAlunosPage() {
                         className={inputClass}
                       >
                         <option value="">
-                          Selecione ou confirme o docente / turma...
+                          Selecione ou confirme o docente...
                         </option>
                         {turmaVinculada &&
                           !opcoesVinculo.some(
