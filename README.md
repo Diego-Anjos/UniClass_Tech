@@ -6,13 +6,13 @@
 [![TypeScript](https://img.shields.io/badge/TypeScript-3178C6?style=for-the-badge&logo=typescript&logoColor=white)](https://www.typescriptlang.org/)
 [![Tailwind CSS](https://img.shields.io/badge/Tailwind_CSS-06B6D4?style=for-the-badge&logo=tailwindcss&logoColor=white)](https://tailwindcss.com/)
 [![Supabase](https://img.shields.io/badge/Supabase-3ECF8E?style=for-the-badge&logo=supabase&logoColor=white)](https://supabase.com/)
-[![Groq](https://img.shields.io/badge/Groq-F55036?style=for-the-badge&logo=groq&logoColor=white)](https://groq.com/)
+[![Google Gemini](https://img.shields.io/badge/Google_Gemini-8E75B2?style=for-the-badge&logo=googlegemini&logoColor=white)](https://ai.google.dev/)
 
 </div>
 
 <br />
 
-**UniClassTech** é um ERP educacional moderno focado em **realismo operacional**, **UX premium (Dark Theme)** e **automação via Inteligência Artificial** (Llama 3 via Groq). A plataforma conecta secretaria, docentes e alunos em um fluxo único, com interfaces escuras elegantes e insights gerados por IA em tempo real.
+**UniClassTech** é um ERP educacional moderno focado em **realismo operacional**, **UX premium (Dark Theme)** e **automação via Inteligência Artificial** (Google Gemini). A plataforma conecta secretaria, docentes e alunos em um fluxo único, com interfaces escuras elegantes e insights gerados por IA em tempo real.
 
 ---
 
@@ -40,7 +40,7 @@
 | :--- | :--- |
 | **Frontend** | Next.js (App Router), React, Tailwind CSS, Lucide React |
 | **Backend / Database** | Supabase (Auth, Postgres, Storage) |
-| **IA** | Groq SDK (Llama 3 / GPT) |
+| **IA** | Google Gemini (`@google/generative-ai`) |
 
 ---
 
@@ -66,7 +66,7 @@ Crie o arquivo `.env.local` na raiz do projeto:
 ```bash
 NEXT_PUBLIC_SUPABASE_URL=sua_url_do_supabase
 NEXT_PUBLIC_SUPABASE_ANON_KEY=sua_chave_anon_do_supabase
-GROQ_API_KEY=sua_chave_da_api_groq
+GEMINI_API_KEY=sua_chave_da_api_gemini
 ```
 
 ### 4. Inicie o servidor de desenvolvimento

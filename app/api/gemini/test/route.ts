@@ -1,0 +1,34 @@
+import { NextResponse } from "next/server";
+import { GoogleGenerativeAI } from "@google/generative-ai";
+import { requireApiAuth } from "@/lib/api-auth";
+import { modelosFallback } from "@/lib/gemini-fallback";
+
+export async function GET(req: Request) {
+  const denied = requireApiAuth(req);
+  if (denied) return denied;
+
+  if (!process.env.GEMINI_API_KEY) {
+    console.error("[/api/gemini/test] GEMINI_API_KEY não definida no ambiente.");
+    return NextResponse.json(
+      {
+        status: "error",
+        error: "Configuração de servidor incompleta: chave do Gemini ausente.",
+      },
+      { status: 503 }
+    );
+  }
+
+  try {
+    const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
+    const modeloNome = modelosFallback[0];
+    const model = genAI.getGenerativeModel({ model: modeloNome });
+    await model.generateContent("Responda apenas: ok");
+
+    return NextResponse.json({ status: "ok", provider: "gemini", model: modeloNome });
+  } catch (err: unknown) {
+    const message =
+      err instanceof Error ? err.message : "Falha ao conectar com o Gemini.";
+    console.error("[/api/gemini/test] Erro:", message);
+    return NextResponse.json({ status: "error", error: message }, { status: 503 });
+  }
+}

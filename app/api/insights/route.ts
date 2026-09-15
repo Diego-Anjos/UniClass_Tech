@@ -1,10 +1,15 @@
 import { NextRequest, NextResponse } from "next/server";
-import Groq from "groq-sdk";
-import { requireApiAuth, serviceUnavailable } from "@/lib/api-auth";
+import { requireApiAuth } from "@/lib/api-auth";
+import {
+  buildPrompt,
+  createGenAI,
+  generateJsonWithFallback,
+} from "@/lib/gemini-fallback";
 
-const groq = new Groq({
-  apiKey: process.env.GROQ_API_KEY,
-});
+const genAI = createGenAI();
+
+const FALLBACK_INSIGHT =
+  "Não foi possível gerar a análise da IA no momento. Tente novamente mais tarde.";
 
 export async function POST(req: NextRequest) {
   const denied = requireApiAuth(req);
@@ -13,44 +18,18 @@ export async function POST(req: NextRequest) {
   try {
     const { context, turmasAtivas } = await req.json();
 
-    const mensagens = [
-      {
-        role: "system",
-        content: "Você é um assistente acadêmico virtual da plataforma UniClassTech. Você fornece dicas úteis, curtas e profissionais para professores. Seja direto e não use formatação markdown especial, apenas texto limpo."
-      },
-      {
-        role: "user",
-        content: `Gere uma análise motivacional ou dica de gestão em exatas DUAS frases curtas para o ${context}, considerando que ele possui ${turmasAtivas} turma(s) ativa(s) no momento.`
-      }
-    ];
+    const prompt = buildPrompt(
+      `Você é um assistente acadêmico virtual da plataforma UniClassTech. Você fornece dicas úteis, curtas e profissionais para professores. Seja direto e não use formatação markdown especial, apenas texto limpo.
+Retorne no formato: { "insight": "suas duas frases aqui" }`,
+      `Gere uma análise motivacional ou dica de gestão em exatas DUAS frases curtas para o ${context}, considerando que ele possui ${turmasAtivas} turma(s) ativa(s) no momento.`
+    );
 
-    let completion;
-
-    try {
-      // Tentativa 1: Modelo Primário
-      completion = await groq.chat.completions.create({
-        messages: mensagens,
-        model: "llama-3.1-8b-instant",
-        temperature: 0.7,
-        max_tokens: 150,
-      });
-    } catch (erroPrimario: unknown) {
-      console.warn("Falha no modelo primário (llama-3.1-8b-instant):", erroPrimario instanceof Error ? erroPrimario.message : erroPrimario);
-      
-      // Tentativa 2: Modelo de Redundância
-      completion = await groq.chat.completions.create({
-        messages: mensagens,
-        model: "mixtral-8x7b-32768",
-        temperature: 0.7,
-        max_tokens: 150,
-      });
-    }
-
-    const insight = completion?.choices[0]?.message?.content || "Sua rotina acadêmica está organizada. Tenha um ótimo dia de aulas!";
-    
+    const data = await generateJsonWithFallback(genAI, prompt);
+    const insight =
+      (typeof data.insight === "string" && data.insight) || FALLBACK_INSIGHT;
     return NextResponse.json({ insight });
   } catch (error) {
-    console.error("Erro crítico na API do Groq (ambos os modelos falharam):", error);
-    return serviceUnavailable("Os insights gerados por IA estão temporariamente indisponíveis.");
+    console.error("Erro crítico na API de insights:", error);
+    return NextResponse.json({ insight: FALLBACK_INSIGHT }, { status: 200 });
   }
 }

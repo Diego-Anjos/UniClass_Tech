@@ -1,8 +1,18 @@
 import { NextRequest, NextResponse } from "next/server";
-import Groq from "groq-sdk";
-import { requireApiAuth, serviceUnavailable } from "@/lib/api-auth";
+import { requireApiAuth } from "@/lib/api-auth";
+import {
+  buildPrompt,
+  createGenAI,
+  generateJsonWithFallback,
+} from "@/lib/gemini-fallback";
 
-const groq = new Groq({ apiKey: process.env.GROQ_API_KEY });
+const genAI = createGenAI();
+
+const FALLBACK_CHAMADA = {
+  tipoAlerta: "ALERTA DE FREQUÊNCIA",
+  mensagem:
+    "Não foi possível gerar a análise da IA no momento. Tente novamente mais tarde.",
+};
 
 export async function POST(req: NextRequest) {
   const denied = requireApiAuth(req);
@@ -10,27 +20,18 @@ export async function POST(req: NextRequest) {
 
   try {
     const { turma, presentes, faltas, total } = await req.json();
-
     const taxaFalta = Math.round((faltas / (total || 1)) * 100);
 
-    const systemPrompt = `Você é um assistente pedagógico. Baseado nos dados da chamada de hoje, gere um insight curto (máximo 2 linhas) para o professor. 
-Retorne um JSON: { "tipoAlerta": "ALERTA DE FREQUÊNCIA" ou "ENGAJAMENTO ALTO", "mensagem": "texto aqui" }`;
+    const prompt = buildPrompt(
+      `Você é um assistente pedagógico. Baseado nos dados da chamada de hoje, gere um insight curto (máximo 2 linhas) para o professor.
+Retorne no formato: { "tipoAlerta": "ALERTA DE FREQUÊNCIA" ou "ENGAJAMENTO ALTO", "mensagem": "texto aqui" }`,
+      `Turma: ${turma}. Hoje: ${presentes} presentes, ${faltas} faltas. Taxa de ausência diária: ${taxaFalta}%.`
+    );
 
-    const userPrompt = `Turma: ${turma}. Hoje: ${presentes} presentes, ${faltas} faltas. Taxa de ausência diária: ${taxaFalta}%.`;
-
-    const completion = await groq.chat.completions.create({
-      messages: [
-        { role: "system", content: systemPrompt },
-        { role: "user", content: userPrompt }
-      ],
-      model: "llama3-70b-8192",
-      temperature: 0.5,
-      response_format: { type: "json_object" }
-    });
-
-    const data = JSON.parse(completion.choices[0]?.message?.content || "{}");
+    const data = await generateJsonWithFallback(genAI, prompt);
     return NextResponse.json(data);
   } catch (error) {
-    return serviceUnavailable("Os insights gerados por IA estão temporariamente indisponíveis.");
+    console.error("Erro crítico na API de chamada:", error);
+    return NextResponse.json(FALLBACK_CHAMADA, { status: 200 });
   }
 }

@@ -998,7 +998,7 @@ export default function TurmasMatriculasPage() {
                         <div className="flex items-center gap-2">
                           <Sparkles className="w-4 h-4 text-zinc-400" />
                           <p className="text-xs font-medium uppercase tracking-widest text-zinc-400">
-                            Painel Preditivo · Groq / Llama 3
+                            Painel Preditivo · Gemini / Flash
                           </p>
                         </div>
                         {!isGeneratingInsight && (

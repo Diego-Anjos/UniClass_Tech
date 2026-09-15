@@ -1,21 +1,15 @@
 import { NextRequest, NextResponse } from "next/server";
-import Groq from "groq-sdk";
-import { requireApiAuth, serviceUnavailable } from "@/lib/api-auth";
+import { requireApiAuth } from "@/lib/api-auth";
+import {
+  buildPrompt,
+  createGenAI,
+  generateJsonWithFallback,
+} from "@/lib/gemini-fallback";
 
-const groq = new Groq({ apiKey: process.env.GROQ_API_KEY });
+const genAI = createGenAI();
 
 const FALLBACK_DICA =
-  "Consulte os laboratórios com status 'Livre' para estudo prático individual durante seus horários vagos.";
-
-function extrairTexto(
-  completion: Awaited<ReturnType<typeof groq.chat.completions.create>>
-): string {
-  const content = completion?.choices[0]?.message?.content?.trim() ?? "";
-  // gpt-oss às vezes devolve só um caractere quando o orçamento de tokens
-  // é consumido pelo raciocínio interno — trate como inválido.
-  if (content.length < 8) return "";
-  return content;
-}
+  "Não foi possível gerar a análise da IA no momento. Consulte os laboratórios com status 'Livre' para estudo durante seus horários vagos.";
 
 export async function POST(req: NextRequest) {
   const denied = requireApiAuth(req);
@@ -24,51 +18,24 @@ export async function POST(req: NextRequest) {
   try {
     const { andar, salaProxima } = await req.json();
 
-    const mensagens = [
-      {
-        role: "system" as const,
-        content:
-          "Aja como um assistente de campus inteligente. Dê uma dica curta e amigável em uma única frase sobre como o aluno pode aproveitar os laboratórios com status 'Livre' para estudar. Fale de forma natural e garanta que a frase tenha começo, meio e fim.",
-      },
-      {
-        role: "user" as const,
-        content: `O estudante está visualizando o ${andar}. Sua próxima aula é no ambiente '${salaProxima}'. Sugira como aproveitar um laboratório livre para estudar antes ou depois da aula.`,
-      },
-    ];
+    const prompt = buildPrompt(
+      `Aja como um assistente de campus inteligente. Dê uma dica curta e amigável em uma única frase sobre como o aluno pode aproveitar os laboratórios com status 'Livre' para estudar. Fale de forma natural e garanta que a frase tenha começo, meio e fim.
+Retorne no formato: { "dica": "sua frase aqui", "insight": "mesma frase aqui" }`,
+      `O estudante está visualizando o ${andar}. Sua próxima aula é no ambiente '${salaProxima}'. Sugira como aproveitar um laboratório livre para estudar antes ou depois da aula.`
+    );
 
-    let dica = "";
-
-    try {
-      const completion = await groq.chat.completions.create({
-        messages: mensagens,
-        model: "llama3-70b-8192",
-        temperature: 0.6,
-        max_tokens: 100,
-      });
-      dica = extrairTexto(completion);
-    } catch (err) {
-      console.warn("Falha no modelo primário (llama3-70b-8192):", err);
-    }
-
-    if (!dica) {
-      try {
-        const completion = await groq.chat.completions.create({
-          messages: mensagens,
-          model: "llama3-8b-8192",
-          temperature: 0.6,
-          max_tokens: 100,
-        });
-        dica = extrairTexto(completion);
-      } catch (err) {
-        console.warn("Falha no modelo secundário (llama3-8b-8192):", err);
-      }
-    }
-
-    if (!dica) dica = FALLBACK_DICA;
+    const data = await generateJsonWithFallback(genAI, prompt);
+    const dica =
+      (typeof data.dica === "string" && data.dica.trim()) ||
+      (typeof data.insight === "string" && data.insight.trim()) ||
+      FALLBACK_DICA;
 
     return NextResponse.json({ dica, insight: dica });
   } catch (error) {
     console.error("Erro crítico na API do mapa de salas:", error);
-    return serviceUnavailable("Os insights gerados por IA estão temporariamente indisponíveis.");
+    return NextResponse.json(
+      { dica: FALLBACK_DICA, insight: FALLBACK_DICA },
+      { status: 200 }
+    );
   }
 }

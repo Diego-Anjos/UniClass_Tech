@@ -178,7 +178,7 @@ export default function ConfiguracoesSistemaPage() {
     });
   }
 
-  // Groq e Resend/Google Calendar ficam separados: Groq tem estado próprio
+  // Gemini e Resend/Google Calendar ficam separados: Gemini tem estado próprio
   const [integracoes, setIntegracoes] = useState<Integracao[]>([
     {
       id: "resend",
@@ -202,7 +202,7 @@ export default function ConfiguracoesSistemaPage() {
     "Conectado" | "Desconectado" | "Testando..."
   >("Conectado");
 
-  const [groqStatus, setGroqStatus] = useState<
+  const [geminiStatus, setGeminiStatus] = useState<
     "Conectado" | "Desconectado" | "Testando..."
   >("Conectado");
 
@@ -254,38 +254,38 @@ export default function ConfiguracoesSistemaPage() {
     }
   }
 
-  async function testarConexaoGroq() {
-    setGroqStatus("Testando...");
+  async function testarConexaoGemini() {
+    setGeminiStatus("Testando...");
     try {
-      const res = await fetch("/api/groq/test");
+      const res = await fetch("/api/gemini/test");
       if (res.ok) {
-        setGroqStatus("Conectado");
+        setGeminiStatus("Conectado");
         setModalFeedback({
           aberto: true,
           tipo: "sucesso",
           titulo: "Conexão estabelecida",
           mensagem:
-            "Conexão com Groq AI estabelecida com sucesso! Llama 3 operacional.",
+            "Conexão com Google Gemini estabelecida com sucesso! Gemini Flash operacional.",
         });
       } else {
-        setGroqStatus("Desconectado");
+        setGeminiStatus("Desconectado");
         setModalFeedback({
           aberto: true,
           tipo: "erro",
           titulo: "Falha na conexão",
           mensagem:
-            "Falha na conexão com a Groq AI. Verifique a chave de API.",
+            "Falha na conexão com o Google Gemini. Verifique a chave de API.",
         });
       }
     } catch (err) {
-      console.error("Erro ao testar Groq:", err);
-      setGroqStatus("Desconectado");
+      console.error("Erro ao testar Gemini:", err);
+      setGeminiStatus("Desconectado");
       setModalFeedback({
         aberto: true,
         tipo: "erro",
         titulo: "Falha na conexão",
         mensagem:
-          "Falha na conexão com a Groq AI. Verifique a chave de API.",
+          "Falha na conexão com o Google Gemini. Verifique a chave de API.",
       });
     }
   }
@@ -424,7 +424,7 @@ export default function ConfiguracoesSistemaPage() {
                       Parâmetros Acadêmicos
                     </h2>
                     <p className="text-xs text-zinc-500 mt-1">
-                      Regras usadas pelo FastAPI e pelos alertas preditivos da Groq.
+                      Regras usadas pelo FastAPI e pelos alertas preditivos do Google Gemini.
                     </p>
                   </div>
 
@@ -553,7 +553,7 @@ export default function ConfiguracoesSistemaPage() {
                       </button>
                     </div>
 
-                    {/* Card Groq AI — status dinâmico via testarConexaoGroq() */}
+                    {/* Card Google Gemini — status dinâmico via testarConexaoGemini() */}
                     <div className="rounded-xl bg-zinc-950 border border-zinc-800 p-5 flex flex-col sm:flex-row sm:items-center gap-4">
                       <div className="flex items-center gap-4 flex-1 min-w-0">
                         <div className="w-11 h-11 rounded-lg bg-zinc-900 border border-zinc-800 flex items-center justify-center shrink-0">
@@ -561,40 +561,40 @@ export default function ConfiguracoesSistemaPage() {
                         </div>
                         <div className="min-w-0">
                           <div className="flex items-center gap-2.5 flex-wrap">
-                            <p className="text-sm font-medium text-white">Groq AI</p>
+                            <p className="text-sm font-medium text-white">Google Gemini</p>
                             <span
                               className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[11px] font-medium border ${
-                                groqStatus === "Conectado"
+                                geminiStatus === "Conectado"
                                   ? "bg-green-950 text-green-400 border-green-900/50"
-                                  : groqStatus === "Desconectado"
+                                  : geminiStatus === "Desconectado"
                                   ? "bg-red-950 text-red-400 border-red-900/50"
                                   : "bg-zinc-800 text-zinc-400 border-zinc-700/50"
                               }`}
                             >
-                              {groqStatus === "Conectado" ? (
+                              {geminiStatus === "Conectado" ? (
                                 <CheckCircle2 className="w-3 h-3" />
-                              ) : groqStatus === "Desconectado" ? (
+                              ) : geminiStatus === "Desconectado" ? (
                                 <XCircle className="w-3 h-3" />
                               ) : (
                                 <span className="w-3 h-3 rounded-full border-2 border-zinc-400 border-t-transparent animate-spin inline-block" />
                               )}
-                              {groqStatus}
+                              {geminiStatus}
                             </span>
                           </div>
                           <p className="text-xs text-zinc-500 mt-1">
-                            Insights preditivos via Llama 3
+                            Insights preditivos via Gemini / Flash
                           </p>
                         </div>
                       </div>
 
                       <button
                         type="button"
-                        onClick={testarConexaoGroq}
-                        disabled={groqStatus === "Testando..."}
+                        onClick={testarConexaoGemini}
+                        disabled={geminiStatus === "Testando..."}
                         className="inline-flex items-center justify-center gap-2 px-4 py-2 rounded-lg bg-zinc-900 border border-zinc-800 text-sm text-zinc-200 hover:bg-zinc-800 hover:text-white transition-colors shrink-0 disabled:opacity-60"
                       >
                         <Plug className="w-4 h-4" />
-                        {groqStatus === "Testando..." ? "Testando..." : "Testar Conexão"}
+                        {geminiStatus === "Testando..." ? "Testando..." : "Testar Conexão"}
                       </button>
                     </div>
 

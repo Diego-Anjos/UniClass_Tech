@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
+import dynamic from "next/dynamic";
 import {
   Search,
   Filter,
@@ -19,6 +20,30 @@ import {
 import { toast } from "sonner";
 import { supabase } from "@/lib/supabase";
 import { ModalFeedback } from "@/components/ModalFeedback";
+import type { BoletimNota } from "@/components/pdf/BoletimPDF";
+
+const BoletimDownloadButton = dynamic(
+  () =>
+    import("@/components/pdf/BoletimDownloadButton").then(
+      (mod) => mod.BoletimDownloadButton
+    ),
+  {
+    ssr: false,
+    loading: () => (
+      <div className="inline-flex w-full items-center justify-center gap-2 rounded-lg border border-zinc-800 bg-zinc-900/60 px-4 py-2.5 text-sm text-zinc-500">
+        <Loader2 className="h-4 w-4 animate-spin" />
+        Carregando gerador de PDF...
+      </div>
+    ),
+  }
+);
+
+const NOTAS_BOLETIM_EXEMPLO: BoletimNota[] = [
+  { disciplina: "Banco de Dados", n1: 7.5, n2: 8.0, faltas: 4 },
+  { disciplina: "Engenharia de Software", n1: 8.2, n2: 7.8, faltas: 2 },
+  { disciplina: "Redes de Computadores", n1: 6.5, n2: 7.0, faltas: 1 },
+  { disciplina: "Estruturas de Dados", n1: 9.0, n2: 8.5, faltas: 0 },
+];
 
 type StatusAluno = "Ativo" | "Evadido" | "Trancado" | string;
 type AbaProntuario = "Cadastral" | "Acadêmico" | "Insights de IA";
@@ -429,6 +454,7 @@ export default function GestaoAlunosPage() {
   }
 
   function corRiscoClasses(risco: string) {
+    if (!risco) return "text-zinc-500";
     const normalizado = risco.trim().toLowerCase();
     if (normalizado === "crítico" || normalizado === "critico") {
       return "text-rose-400";
@@ -1490,6 +1516,16 @@ export default function GestaoAlunosPage() {
                         </li>
                       </ul>
                     </div>
+
+                    <BoletimDownloadButton
+                      aluno={{
+                        nome: alunoSelecionado.nome,
+                        ra: alunoSelecionado.ra,
+                        curso: alunoSelecionado.curso,
+                        turma: alunoSelecionado.turma,
+                      }}
+                      notas={NOTAS_BOLETIM_EXEMPLO}
+                    />
                   </div>
                 )}
 
@@ -1499,7 +1535,7 @@ export default function GestaoAlunosPage() {
                       <div className="px-4 py-3 border-b border-zinc-800 flex items-center gap-2">
                         <Sparkles className="w-4 h-4 text-zinc-400" />
                         <p className="text-xs font-medium uppercase tracking-widest text-zinc-400">
-                          Painel Preditivo · Groq / Llama 3
+                          Painel Preditivo · Gemini / Flash
                         </p>
                       </div>
 
@@ -1513,7 +1549,7 @@ export default function GestaoAlunosPage() {
                             </div>
                             <div className="h-12 rounded-lg bg-zinc-950 border border-zinc-800" />
                             <p className="text-xs text-zinc-500 text-center pt-1">
-                              Analisando histórico pedagógico com Llama 3...
+                              Analisando histórico pedagógico com Google Gemini...
                             </p>
                           </div>
                         ) : aiInsightAluno ? (

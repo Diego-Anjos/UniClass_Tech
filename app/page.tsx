@@ -260,7 +260,7 @@ export default function LoginPage() {
           <div className="space-y-4">
             <div className="p-5 rounded-xl border border-zinc-700/50 bg-black/50 backdrop-blur-md">
               <h3 className="font-medium text-white mb-1">
-                Insights de IA do Groq
+                Insights de IA do Google Gemini
               </h3>
               <p className="text-sm text-zinc-300">
                 Análise automática de engajamento e risco de reprovação das

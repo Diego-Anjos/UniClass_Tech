@@ -1,8 +1,22 @@
 import { NextRequest, NextResponse } from "next/server";
-import Groq from "groq-sdk";
-import { requireApiAuth, serviceUnavailable } from "@/lib/api-auth";
+import { requireApiAuth } from "@/lib/api-auth";
+import {
+  buildPrompt,
+  createGenAI,
+  generateJsonWithFallback,
+} from "@/lib/gemini-fallback";
 
-const groq = new Groq({ apiKey: process.env.GROQ_API_KEY });
+const genAI = createGenAI();
+
+const FALLBACK_ALUNO = {
+  tipoAlerta: "ALERTA PREDITIVO",
+  corAlerta: "amber",
+  mensagem:
+    "Não foi possível gerar a análise da IA no momento. Tente novamente mais tarde.",
+  riscoLabel: "Indisponível",
+  metricaLabel: "STATUS",
+  metricaValor: "—",
+};
 
 export async function POST(req: NextRequest) {
   const denied = requireApiAuth(req);
@@ -11,8 +25,9 @@ export async function POST(req: NextRequest) {
   try {
     const { nome, curso, semestre, professor } = await req.json();
 
-    const systemPrompt = `Você é um analista pedagógico sênior do ERP educacional UniClassTech.
-Com base no estudante, seu curso e semestre, gere um diagnóstico acadêmico preditivo e retorne ESTRITAMENTE um JSON válido (sem markdown, sem blocos de código) no seguinte formato:
+    const prompt = buildPrompt(
+      `Você é um analista pedagógico sênior do ERP educacional UniClassTech.
+Com base no estudante, seu curso e semestre, gere um diagnóstico acadêmico preditivo no seguinte formato JSON:
 {
   "tipoAlerta": "ALERTA PREDITIVO" | "DESEMPENHO NOTÁVEL" | "RISCO DE EVASÃO",
   "corAlerta": "amber" | "emerald" | "rose",
@@ -20,40 +35,17 @@ Com base no estudante, seu curso e semestre, gere um diagnóstico acadêmico pre
   "riscoLabel": "Baixo" | "Moderado" | "Crítico" | "Nenhum",
   "metricaLabel": "FALTAS" | "MÉDIA N1" | "ENGAJAMENTO",
   "metricaValor": "14%" | "8.8" | "92%"
-}`;
-
-    const userPrompt = `Aluno: ${nome}
+}`,
+      `Aluno: ${nome}
 Curso: ${curso}
 Semestre: ${semestre}
-Professor Responsável: ${professor || "Corpo Docente"}`;
+Professor Responsável: ${professor || "Corpo Docente"}`
+    );
 
-    let completion;
-    try {
-      completion = await groq.chat.completions.create({
-        messages: [
-          { role: "system", content: systemPrompt },
-          { role: "user", content: userPrompt },
-        ],
-        model: "llama3-70b-8192",
-        temperature: 0.6,
-        response_format: { type: "json_object" },
-      });
-    } catch {
-      completion = await groq.chat.completions.create({
-        messages: [
-          { role: "system", content: systemPrompt },
-          { role: "user", content: userPrompt },
-        ],
-        model: "llama3-8b-8192",
-        temperature: 0.6,
-        response_format: { type: "json_object" },
-      });
-    }
-
-    const content = completion?.choices[0]?.message?.content || "{}";
-    const data = JSON.parse(content);
+    const data = await generateJsonWithFallback(genAI, prompt);
     return NextResponse.json(data);
   } catch (error) {
-    return serviceUnavailable("Os insights gerados por IA estão temporariamente indisponíveis.");
+    console.error("Erro crítico na API de insight do aluno:", error);
+    return NextResponse.json(FALLBACK_ALUNO, { status: 200 });
   }
 }

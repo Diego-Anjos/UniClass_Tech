@@ -1,8 +1,15 @@
 import { NextRequest, NextResponse } from "next/server";
-import Groq from "groq-sdk";
-import { requireApiAuth, serviceUnavailable } from "@/lib/api-auth";
+import { requireApiAuth } from "@/lib/api-auth";
+import {
+  buildPrompt,
+  createGenAI,
+  generateJsonWithFallback,
+} from "@/lib/gemini-fallback";
 
-const groq = new Groq({ apiKey: process.env.GROQ_API_KEY });
+const genAI = createGenAI();
+
+const FALLBACK_INSIGHT =
+  "Não foi possível gerar a análise da IA no momento. Tente novamente mais tarde.";
 
 export async function POST(req: NextRequest) {
   const denied = requireApiAuth(req);
@@ -11,39 +18,18 @@ export async function POST(req: NextRequest) {
   try {
     const { escopo, totalTurmas, alunosEmRisco } = await req.json();
 
-    const mensagens = [
-      {
-        role: "system",
-        content: "Você é um especialista em análise preditiva educacional da plataforma UniClassTech. Com base nos dados fornecidos, gere um resumo executivo de exatamente DUAS frases com métricas ou ações preventivas (sem formatação markdown)."
-      },
-      {
-        role: "user",
-        content: `Escopo: ${escopo}. Total de turmas ativas: ${totalTurmas}. Alunos detectados em situação de risco: ${alunosEmRisco}. Destaque uma recomendação preditiva rápida para evitar evasão e melhorar o aproveitamento.`
-      }
-    ];
+    const prompt = buildPrompt(
+      `Você é um especialista em análise preditiva educacional da plataforma UniClassTech. Com base nos dados fornecidos, gere um resumo executivo de exatamente DUAS frases com métricas ou ações preventivas (sem formatação markdown).
+Retorne no formato: { "insight": "seu resumo aqui" }`,
+      `Escopo: ${escopo}. Total de turmas ativas: ${totalTurmas}. Alunos detectados em situação de risco: ${alunosEmRisco}. Destaque uma recomendação preditiva rápida para evitar evasão e melhorar o aproveitamento.`
+    );
 
-    let completion;
-    try {
-      completion = await groq.chat.completions.create({
-        messages: mensagens,
-        model: "llama3-70b-8192",
-        temperature: 0.6,
-        max_tokens: 140,
-      });
-    } catch (err) {
-      completion = await groq.chat.completions.create({
-        messages: mensagens,
-        model: "llama3-8b-8192",
-        temperature: 0.6,
-        max_tokens: 140,
-      });
-    }
-
-    const insight = completion?.choices[0]?.message?.content || 
-      "Acompanhamento preditivo estabilizado. Mantenha os planos de reforço pedagógico nas disciplinas com menor índice de rendimento.";
-
+    const data = await generateJsonWithFallback(genAI, prompt);
+    const insight =
+      (typeof data.insight === "string" && data.insight) || FALLBACK_INSIGHT;
     return NextResponse.json({ insight });
   } catch (error) {
-    return serviceUnavailable("Os insights gerados por IA estão temporariamente indisponíveis.");
+    console.error("Erro crítico na API preditiva:", error);
+    return NextResponse.json({ insight: FALLBACK_INSIGHT }, { status: 200 });
   }
 }

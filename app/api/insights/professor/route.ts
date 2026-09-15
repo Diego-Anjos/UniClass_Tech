@@ -1,8 +1,23 @@
 import { NextRequest, NextResponse } from "next/server";
-import Groq from "groq-sdk";
-import { requireApiAuth, serviceUnavailable } from "@/lib/api-auth";
+import { requireApiAuth } from "@/lib/api-auth";
+import {
+  buildPrompt,
+  createGenAI,
+  generateJsonWithFallback,
+} from "@/lib/gemini-fallback";
 
-const groq = new Groq({ apiKey: process.env.GROQ_API_KEY });
+const genAI = createGenAI();
+
+const FALLBACK_PROFESSOR = {
+  tipoAlerta: "EQUILÍBRIO DE CARGA",
+  corAlerta: "amber",
+  mensagem:
+    "Não foi possível gerar a análise da IA no momento. Tente novamente mais tarde.",
+  metricaValor: "—",
+  metricaLabel: "STATUS",
+  turmaDestaque: "Indisponível",
+  detalheComparativo: "Serviço de IA temporariamente indisponível.",
+};
 
 export async function POST(req: NextRequest) {
   const denied = requireApiAuth(req);
@@ -12,8 +27,9 @@ export async function POST(req: NextRequest) {
     const { nome, titulacao, area_atuacao, carga_horaria, turmasCount } =
       await req.json();
 
-    const systemPrompt = `Você é um analista acadêmico sênior do ERP educacional UniClassTech.
-Analise os dados do docente e retorne ESTRITAMENTE um objeto JSON válido (sem blocos de código markdown, sem texto fora das chaves) com o seguinte formato:
+    const prompt = buildPrompt(
+      `Você é um analista acadêmico sênior do ERP educacional UniClassTech.
+Analise os dados do docente e retorne um objeto JSON com o seguinte formato:
 {
   "tipoAlerta": "ALERTA DE RETENÇÃO" ou "DESEMPENHO POSITIVO" ou "EQUILÍBRIO DE CARGA",
   "corAlerta": "amber" ou "emerald" ou "blue",
@@ -22,40 +38,17 @@ Analise os dados do docente e retorne ESTRITAMENTE um objeto JSON válido (sem b
   "metricaLabel": "QUEDA" ou "ENGAGEMENT" ou "ADERÊNCIA",
   "turmaDestaque": "Sigla da turma ou área",
   "detalheComparativo": "Texto explicativo de 1 linha sobre a métrica."
-}`;
-
-    const userPrompt = `Docente: ${titulacao} ${nome}
+}`,
+      `Docente: ${titulacao} ${nome}
 Área: ${area_atuacao}
 Carga Horária: ${carga_horaria}
-Turmas Atribuídas: ${turmasCount}`;
+Turmas Atribuídas: ${turmasCount}`
+    );
 
-    let completion;
-    try {
-      completion = await groq.chat.completions.create({
-        messages: [
-          { role: "system", content: systemPrompt },
-          { role: "user", content: userPrompt },
-        ],
-        model: "llama3-70b-8192",
-        temperature: 0.5,
-        response_format: { type: "json_object" },
-      });
-    } catch {
-      completion = await groq.chat.completions.create({
-        messages: [
-          { role: "system", content: systemPrompt },
-          { role: "user", content: userPrompt },
-        ],
-        model: "llama3-8b-8192",
-        temperature: 0.5,
-        response_format: { type: "json_object" },
-      });
-    }
-
-    const content = completion?.choices[0]?.message?.content || "{}";
-    const data = JSON.parse(content);
+    const data = await generateJsonWithFallback(genAI, prompt);
     return NextResponse.json(data);
-  } catch {
-    return serviceUnavailable("Os insights gerados por IA estão temporariamente indisponíveis.");
+  } catch (error) {
+    console.error("Erro crítico na API de insight do professor:", error);
+    return NextResponse.json(FALLBACK_PROFESSOR, { status: 200 });
   }
 }

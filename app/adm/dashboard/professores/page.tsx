@@ -1311,7 +1311,7 @@ export default function GestaoProfessoresPage() {
                       <div className="px-4 py-3 border-b border-zinc-800 flex items-center gap-2">
                         <Sparkles className="w-4 h-4 text-zinc-400" />
                         <p className="text-xs font-medium uppercase tracking-widest text-zinc-400">
-                          Painel Preditivo · Groq / Llama 3
+                          Painel Preditivo · Gemini / Flash
                         </p>
                       </div>
 
@@ -1325,7 +1325,7 @@ export default function GestaoProfessoresPage() {
                             </div>
                             <div className="h-12 rounded-lg bg-zinc-950 border border-zinc-800" />
                             <p className="text-xs text-zinc-500 text-center pt-1">
-                              Consultando modelo analítico Llama 3 via Groq...
+                              Consultando modelo analítico Google Gemini...
                             </p>
                           </div>
                         ) : aiInsight ? (

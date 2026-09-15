@@ -500,7 +500,7 @@ export default function ProfessorInsightsPage() {
 
       const data = await response.json();
       if (!response.ok) {
-        throw new Error(data.error || "Falha na comunicação com o Groq.");
+        throw new Error(data.error || "Falha na comunicação com o Gemini.");
       }
 
       const reply =
@@ -735,6 +735,7 @@ export default function ProfessorInsightsPage() {
                         </p>
                       </div>
                     )}
+                  </div>
                 </div>
               )}
             </div>
@@ -747,7 +748,7 @@ export default function ProfessorInsightsPage() {
                 </div>
                 <div className="min-w-0">
                   <h2 className="text-sm font-semibold text-white">
-                    Assistente Pedagógico (Groq)
+                    Assistente Pedagógico (Google Gemini)
                   </h2>
                   <p className="text-xs text-zinc-500 truncate">
                     {alunoSelecionado
@@ -1025,7 +1026,7 @@ export default function ProfessorInsightsPage() {
               {carregandoMacro ? (
                 <div className="flex-1 space-y-3">
                   <p className="text-sm text-zinc-400 animate-pulse">
-                    O Groq está analisando as tendências da turma...
+                    O Gemini está analisando as tendências da turma...
                   </p>
                   <div className="h-3 rounded bg-zinc-800/80 animate-pulse w-full" />
                   <div className="h-3 rounded bg-zinc-800/80 animate-pulse w-11/12" />
