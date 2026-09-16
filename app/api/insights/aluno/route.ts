@@ -8,6 +8,7 @@ import {
 
 const genAI = createGenAI();
 
+/** Compatível com a UI do prontuário (AiInsightAluno). */
 const FALLBACK_ALUNO = {
   tipoAlerta: "ALERTA PREDITIVO",
   corAlerta: "amber",
@@ -16,9 +17,16 @@ const FALLBACK_ALUNO = {
   riscoLabel: "Indisponível",
   metricaLabel: "STATUS",
   metricaValor: "—",
+  // Chaves alternativas (degradação / contratos legados)
+  risco: "Indisponível",
+  recomendacao:
+    "Não foi possível gerar a análise da IA no momento. Tente novamente mais tarde.",
+  pontos_atencao: "Serviço de IA indisponível.",
 };
 
 export async function POST(req: NextRequest) {
+  console.log("Iniciando IA. Chave existe?", !!process.env.GEMINI_API_KEY);
+
   const denied = requireApiAuth(req);
   if (denied) return denied;
 

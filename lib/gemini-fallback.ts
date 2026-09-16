@@ -1,8 +1,9 @@
 import { GoogleGenerativeAI } from "@google/generative-ai";
 
 export const modelosFallback = [
-  "gemini-1.5-flash",
-  "gemini-pro",
+  "gemini-3.5-flash",
+  "gemini-3-flash",
+  "gemini-2.5-flash",
 ] as const;
 
 export const JSON_ONLY_INSTRUCTION =
@@ -37,8 +38,8 @@ export function parseJsonFromText(text: string): unknown {
 }
 
 /**
- * Loop de fallback Gemini: tenta cada modelo até obter JSON parseável.
- * Em falha total, relança o último erro para o catch da rota.
+ * Loop de fallback Gemini: tenta cada modelo permitido até obter JSON parseável.
+ * Em falha total, relança o último erro para o catch da rota (degradação graciosa).
  */
 export async function generateJsonWithFallback(
   genAI: GoogleGenerativeAI,
@@ -48,17 +49,22 @@ export async function generateJsonWithFallback(
 
   for (const modeloNome of modelosFallback) {
     try {
+      console.log(`Tentando o modelo: ${modeloNome}`);
       const model = genAI.getGenerativeModel({ model: modeloNome });
       const result = await model.generateContent(prompt);
       const text = result.response.text();
       const parsed = parseJsonFromText(text);
+
       if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
         throw new Error("JSON raiz inválido (esperado objeto).");
       }
+
+      console.log(`Modelo Gemini OK: ${modeloNome}`);
       return parsed as Record<string, unknown>;
-    } catch (e) {
-      console.warn(`Falha no modelo Gemini (${modeloNome}):`, e);
-      lastError = e;
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      console.warn(`Falha no modelo ${modeloNome}:`, message);
+      lastError = error;
     }
   }
 
