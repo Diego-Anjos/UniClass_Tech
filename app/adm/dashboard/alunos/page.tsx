@@ -89,6 +89,12 @@ type ProfessorDisponivel = {
   titulacao: string;
 };
 
+type ProfessorProntuario = {
+  id: string;
+  nome: string;
+  titulacao: string;
+};
+
 type FormDataAluno = {
   ra: string;
   nome: string;
@@ -228,6 +234,91 @@ function valorOpcaoProfessor(p: {
   const nome = p.nome.trim();
   if (!nome) return "";
   return titulo ? `${titulo} ${nome}` : nome;
+}
+
+/** Normaliza códigos/turmas atribuídas (array, JSON, CSV ou texto livre). */
+function parseTurmasAtribuidasProfessor(raw: unknown): string[] {
+  if (!raw) return [];
+  if (Array.isArray(raw)) {
+    return [
+      ...new Set(
+        raw
+          .map(String)
+          .map((s) => s.trim())
+          .filter(Boolean)
+          .flatMap((s) => parseTurmasAtribuidasProfessor(s))
+      ),
+    ];
+  }
+  if (typeof raw !== "string") return [];
+  const texto = raw.trim();
+  if (!texto || texto === "—") return [];
+
+  try {
+    const parsed = JSON.parse(texto);
+    if (Array.isArray(parsed)) return parseTurmasAtribuidasProfessor(parsed);
+  } catch {
+    // texto simples / CSV
+  }
+
+  return [
+    ...new Set(
+      texto
+        .split(",")
+        .map((s) => s.trim())
+        .filter(Boolean)
+    ),
+  ];
+}
+
+function professorTemTurma(
+  professor: { area_atuacao?: unknown; turmas?: unknown },
+  codigoTurma: string,
+  cursoAluno?: string,
+  modo: "codigo" | "curso" | "ambos" = "ambos"
+): boolean {
+  const codigo = codigoTurma.trim().toUpperCase();
+  const curso = (cursoAluno ?? "").trim().toLowerCase();
+  const atribuidas = [
+    ...parseTurmasAtribuidasProfessor(professor.turmas),
+    ...parseTurmasAtribuidasProfessor(professor.area_atuacao),
+    ...extrairSiglasTurma(professor.turmas),
+    ...extrairSiglasTurma(professor.area_atuacao),
+  ].map((t) => t.trim());
+
+  if (
+    (modo === "codigo" || modo === "ambos") &&
+    codigo &&
+    atribuidas.some((t) => {
+      const norm = t.toUpperCase();
+      return norm === codigo || norm.includes(codigo) || codigo.includes(norm);
+    })
+  ) {
+    return true;
+  }
+
+  if (modo === "codigo") return false;
+
+  // Legado: area_atuacao com nome do curso (mesmo critério da tela de Turmas)
+  if (curso) {
+    const area = String(professor.area_atuacao ?? "").toLowerCase();
+    if (
+      area &&
+      (area === curso || area.includes(curso) || curso.includes(area))
+    ) {
+      return true;
+    }
+    if (
+      atribuidas.some((t) => {
+        const norm = t.toLowerCase();
+        return norm === curso || norm.includes(curso) || curso.includes(norm);
+      })
+    ) {
+      return true;
+    }
+  }
+
+  return false;
 }
 
 /** Extrai siglas de turma (ex: CDIA-4A-N) de texto CSV, JSON ou livre. */
@@ -405,6 +496,8 @@ export default function GestaoAlunosPage() {
   const [drawerAberto, setDrawerAberto] = useState(false);
   const [abaProntuario, setAbaProntuario] = useState<AbaProntuario>("Cadastral");
   const [abaAtiva, setAbaAtiva] = useState<AbaCadastro>("academico");
+  const [professoresDaTurmaProntuario, setProfessoresDaTurmaProntuario] =
+    useState<ProfessorProntuario[]>([]);
   const [aiInsightAluno, setAiInsightAluno] = useState<AiInsightAluno | null>(
     null
   );
@@ -740,16 +833,122 @@ export default function GestaoAlunosPage() {
     };
   }, [alunoSelecionado?.id]);
 
+  async function carregarProfessoresDaTurmaProntuario(aluno: Aluno) {
+    const codigo =
+      extrairSiglaTurma(aluno.turma) ||
+      (aluno.turma && aluno.turma !== "—" ? aluno.turma.trim() : "");
+    const curso =
+      aluno.curso && aluno.curso !== "—" ? aluno.curso.trim() : "";
+
+    if (!codigo && !curso) {
+      setProfessoresDaTurmaProntuario([]);
+      return;
+    }
+
+    type ProfessorRow = {
+      id?: unknown;
+      nome?: unknown;
+      titulacao?: unknown;
+      area_atuacao?: unknown;
+      turmas?: unknown;
+    };
+
+    let rows: ProfessorRow[] = [];
+
+    // 1) Preferência: coluna array `turmas` (PostgREST .contains)
+    if (codigo) {
+      const porArray = await supabase
+        .from("professores")
+        .select("id, nome, titulacao, area_atuacao, turmas")
+        .contains("turmas", [codigo]);
+
+      if (!porArray.error && porArray.data) {
+        rows = porArray.data as ProfessorRow[];
+      }
+    }
+
+    // 2) Busca ampla + filtro local (CSV/JSON em area_atuacao ou turmas)
+    if (rows.length === 0) {
+      const { data, error } = await supabase
+        .from("professores")
+        .select("id, nome, titulacao, area_atuacao, turmas");
+
+      let todos: ProfessorRow[] = [];
+
+      if (error) {
+        // Coluna `turmas` pode não existir — tenta só area_atuacao
+        const fallback = await supabase
+          .from("professores")
+          .select("id, nome, titulacao, area_atuacao");
+
+        if (fallback.error) {
+          console.error(
+            "Erro ao buscar professores da turma no prontuário:",
+            fallback.error.message
+          );
+          setProfessoresDaTurmaProntuario([]);
+          return;
+        }
+        todos = (fallback.data ?? []) as ProfessorRow[];
+      } else {
+        todos = (data ?? []) as ProfessorRow[];
+      }
+
+      rows = todos.filter((p) =>
+        professorTemTurma(
+          { area_atuacao: p.area_atuacao, turmas: p.turmas },
+          codigo,
+          curso,
+          "codigo"
+        )
+      );
+
+      // Legado: se ninguém tiver o código da turma, usa o curso (tela de Turmas)
+      if (rows.length === 0 && curso) {
+        rows = todos.filter((p) =>
+          professorTemTurma(
+            { area_atuacao: p.area_atuacao, turmas: p.turmas },
+            codigo,
+            curso,
+            "curso"
+          )
+        );
+      }
+    }
+
+    const mapeados: ProfessorProntuario[] = [];
+    const vistos = new Set<string>();
+
+    for (const p of rows) {
+      const id = String(p.id ?? "");
+      const nome = String(p.nome ?? "").trim();
+      if (!nome) continue;
+      const chave = id || nome.toLowerCase();
+      if (vistos.has(chave)) continue;
+      vistos.add(chave);
+      mapeados.push({
+        id,
+        nome,
+        titulacao: String(p.titulacao ?? "").trim(),
+      });
+    }
+
+    setProfessoresDaTurmaProntuario(mapeados);
+  }
+
   function abrirProntuario(aluno: Aluno) {
     setAlunoSelecionado(aluno);
     setAbaProntuario("Cadastral");
+    setProfessoresDaTurmaProntuario([]);
     setDrawerAberto(true);
+    void carregarProfessoresDaTurmaProntuario(aluno);
   }
 
   function fecharProntuario() {
     setDrawerAberto(false);
     window.setTimeout(() => {
       setAlunoSelecionado(null);
+      setProfessoresDaTurmaProntuario([]);
       setAiInsightAluno(null);
       setCarregandoAiAluno(false);
       setNotificandoResend(false);
@@ -1486,8 +1685,21 @@ export default function GestaoAlunosPage() {
                         }
                       />
                       <Campo
-                        label="Professor(a) / Orientador"
-                        valor={alunoSelecionado.professor || "—"}
+                        label={
+                          professoresDaTurmaProntuario.length > 1
+                            ? "Professores / Orientadores"
+                            : "Professor(a) / Orientador"
+                        }
+                        valor={
+                          professoresDaTurmaProntuario.length > 0
+                            ? professoresDaTurmaProntuario
+                                .map(
+                                  (p) =>
+                                    `${p.titulacao ? `${p.titulacao} ` : ""}${p.nome}`
+                                )
+                                .join(", ")
+                            : "—"
+                        }
                       />
                       <Campo
                         label="Semestre atual"
