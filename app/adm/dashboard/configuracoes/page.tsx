@@ -4,7 +4,6 @@ import { useState, useEffect } from "react";
 import { supabase } from "@/lib/supabase";
 import {
   Building,
-  Sliders,
   Unplug,
   ShieldAlert,
   Upload,
@@ -21,7 +20,6 @@ import { ModalFeedback } from "@/components/ModalFeedback";
 
 type AbaConfig =
   | "Instituição"
-  | "Regras Acadêmicas"
   | "Integrações e APIs"
   | "Segurança e Logs";
 
@@ -37,7 +35,6 @@ type Integracao = {
 
 const abas: { id: AbaConfig; label: string; icon: typeof Building }[] = [
   { id: "Instituição", label: "Instituição", icon: Building },
-  { id: "Regras Acadêmicas", label: "Regras Acadêmicas", icon: Sliders },
   { id: "Integrações e APIs", label: "Integrações e APIs", icon: Unplug },
   { id: "Segurança e Logs", label: "Segurança e Logs", icon: ShieldAlert },
 ];
@@ -66,10 +63,6 @@ export default function ConfiguracoesSistemaPage() {
   const [nomeInstituicao, setNomeInstituicao] = useState("UniClass Tech University");
   const [cnpj, setCnpj] = useState("12.345.678/0001-90");
   const [logoNome, setLogoNome] = useState<string | null>(null);
-
-  const [mediaMinima, setMediaMinima] = useState("7.0");
-  const [limiteFaltas, setLimiteFaltas] = useState("25");
-  const [semestreVigente, setSemestreVigente] = useState("2026.1");
 
   const [modalFeedback, setModalFeedback] = useState<{
     aberto: boolean;
@@ -124,11 +117,6 @@ export default function ConfiguracoesSistemaPage() {
       if (data) {
         if (data.nome_instituicao) setNomeInstituicao(data.nome_instituicao);
         if (data.cnpj) setCnpj(data.cnpj);
-        if (data.media_aprovacao !== undefined && data.media_aprovacao !== null)
-          setMediaMinima(String(data.media_aprovacao));
-        if (data.limite_faltas !== undefined && data.limite_faltas !== null)
-          setLimiteFaltas(String(data.limite_faltas));
-        if (data.semestre_vigente) setSemestreVigente(data.semestre_vigente);
       }
     }
 
@@ -138,26 +126,16 @@ export default function ConfiguracoesSistemaPage() {
 
   // Salvar configurações no Supabase
   async function salvarConfiguracoes(aba: AbaConfig) {
+    if (aba !== "Instituição") return;
+
     setSalvando(true);
-
-    let updatePayload: Record<string, unknown> = {};
-
-    if (aba === "Instituição") {
-      updatePayload = {
-        nome_instituicao: nomeInstituicao,
-        cnpj: cnpj,
-      };
-    } else if (aba === "Regras Acadêmicas") {
-      updatePayload = {
-        media_aprovacao: parseFloat(mediaMinima),
-        limite_faltas: parseInt(limiteFaltas, 10),
-        semestre_vigente: semestreVigente,
-      };
-    }
 
     const { error } = await supabase
       .from("configuracoes")
-      .update(updatePayload)
+      .update({
+        nome_instituicao: nomeInstituicao,
+        cnpj: cnpj,
+      })
       .eq("id", 1);
 
     setSalvando(false);
@@ -171,10 +149,7 @@ export default function ConfiguracoesSistemaPage() {
       aberto: true,
       tipo: "sucesso",
       titulo: "Configurações salvas",
-      mensagem:
-        aba === "Instituição"
-          ? "Dados da instituição salvos com sucesso!"
-          : "Regras acadêmicas atualizadas!",
+      mensagem: "Dados da instituição salvos com sucesso!",
     });
   }
 
@@ -437,85 +412,6 @@ export default function ConfiguracoesSistemaPage() {
                     >
                       <Save className="w-4 h-4" />
                       {salvando ? "Salvando..." : "Salvar Instituição"}
-                    </button>
-                  </div>
-                </section>
-              )}
-
-              {abaAtiva === "Regras Acadêmicas" && (
-                <section className="rounded-xl bg-zinc-950 border border-zinc-800 p-6 space-y-6">
-                  <div>
-                    <h2 className="text-sm font-semibold text-white">
-                      Parâmetros Acadêmicos
-                    </h2>
-                    <p className="text-xs text-zinc-500 mt-1">
-                      Regras usadas pelo FastAPI e pelos alertas preditivos do Google Gemini.
-                    </p>
-                  </div>
-
-                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                    <div>
-                      <label className="block text-xs text-zinc-500 uppercase tracking-widest mb-2">
-                        Média Mínima para Aprovação
-                      </label>
-                      <input
-                        type="number"
-                        step="0.1"
-                        min="0"
-                        max="10"
-                        value={mediaMinima}
-                        onChange={(e) => setMediaMinima(e.target.value)}
-                        className="w-full px-4 py-2.5 rounded-lg bg-zinc-900 border border-zinc-800 text-sm text-white outline-none focus:border-zinc-600 transition-colors"
-                      />
-                      <p className="text-xs text-zinc-500 mt-1.5">Ex.: 7.0</p>
-                    </div>
-
-                    <div>
-                      <label className="block text-xs text-zinc-500 uppercase tracking-widest mb-2">
-                        Porcentagem Limite de Faltas
-                      </label>
-                      <div className="relative">
-                        <input
-                          type="number"
-                          step="1"
-                          min="0"
-                          max="100"
-                          value={limiteFaltas}
-                          onChange={(e) => setLimiteFaltas(e.target.value)}
-                          className="w-full px-4 py-2.5 pr-10 rounded-lg bg-zinc-900 border border-zinc-800 text-sm text-white outline-none focus:border-zinc-600 transition-colors"
-                        />
-                        <span className="absolute right-3 top-1/2 -translate-y-1/2 text-sm text-zinc-500">
-                          %
-                        </span>
-                      </div>
-                      <p className="text-xs text-zinc-500 mt-1.5">Ex.: 25%</p>
-                    </div>
-
-                    <div className="sm:col-span-2">
-                      <label className="block text-xs text-zinc-500 uppercase tracking-widest mb-2">
-                        Semestre Vigente
-                      </label>
-                      <select
-                        value={semestreVigente}
-                        onChange={(e) => setSemestreVigente(e.target.value)}
-                        className="w-full appearance-none px-4 py-2.5 rounded-lg bg-zinc-900 border border-zinc-800 text-sm text-white outline-none focus:border-zinc-600 transition-colors"
-                      >
-                        <option value="2025.2">2025.2</option>
-                        <option value="2026.1">2026.1</option>
-                        <option value="2026.2">2026.2</option>
-                      </select>
-                    </div>
-                  </div>
-
-                  <div className="pt-2">
-                    <button
-                      type="button"
-                      onClick={() => salvarConfiguracoes("Regras Acadêmicas")}
-                      disabled={salvando}
-                      className="inline-flex items-center gap-2 px-4 py-2.5 rounded-lg bg-white text-black text-sm font-medium hover:bg-zinc-200 transition-colors disabled:opacity-60 disabled:cursor-not-allowed"
-                    >
-                      <Save className="w-4 h-4" />
-                      {salvando ? "Salvando..." : "Salvar Alterações"}
                     </button>
                   </div>
                 </section>
