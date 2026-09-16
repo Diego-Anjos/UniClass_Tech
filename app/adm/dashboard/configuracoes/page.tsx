@@ -11,12 +11,12 @@ import {
   Save,
   Sparkles,
   Mail,
-  CalendarDays,
   CheckCircle2,
   XCircle,
   Plug,
   Database,
 } from "lucide-react";
+import { toast } from "sonner";
 import { ModalFeedback } from "@/components/ModalFeedback";
 
 type AbaConfig =
@@ -178,7 +178,7 @@ export default function ConfiguracoesSistemaPage() {
     });
   }
 
-  // Gemini e Resend/Google Calendar ficam separados: Gemini tem estado próprio
+  // Gemini e Resend ficam separados: Gemini tem estado próprio
   const [integracoes, setIntegracoes] = useState<Integracao[]>([
     {
       id: "resend",
@@ -186,13 +186,6 @@ export default function ConfiguracoesSistemaPage() {
       descricao: "E-mails transacionais e alertas",
       status: "Conectado",
       icon: Mail,
-    },
-    {
-      id: "gcal",
-      nome: "Google Calendar",
-      descricao: "Eventos de provas e sincronização",
-      status: "Desconectado",
-      icon: CalendarDays,
     },
   ]);
 
@@ -210,21 +203,53 @@ export default function ConfiguracoesSistemaPage() {
     setLogoNome(file ? file.name : null);
   }
 
-  function testarConexao(id: string) {
-    setTestando(id);
-    window.setTimeout(() => {
-      setIntegracoes((prev) =>
-        prev.map((item) =>
-          item.id === id
-            ? {
-                ...item,
-                status: item.status === "Conectado" ? "Conectado" : "Conectado",
-              }
-            : item
-        )
-      );
+  async function testarResend() {
+    setTestando("resend");
+
+    const promise = fetch("/api/settings/test-resend").then(async (res) => {
+      const payload = (await res.json().catch(() => ({}))) as {
+        error?: string;
+        message?: string;
+      };
+      if (!res.ok) {
+        throw new Error(
+          payload.error || "Falha ao conectar com o Resend. Verifique a chave."
+        );
+      }
+      return payload;
+    });
+
+    toast.promise(promise, {
+      loading: "Testando conexão com Resend...",
+      success: (data) => {
+        setIntegracoes((prev) =>
+          prev.map((item) =>
+            item.id === "resend" ? { ...item, status: "Conectado" } : item
+          )
+        );
+        return (
+          data.message || "Conexão com Resend estabelecida com sucesso!"
+        );
+      },
+      error: (err: unknown) => {
+        setIntegracoes((prev) =>
+          prev.map((item) =>
+            item.id === "resend" ? { ...item, status: "Desconectado" } : item
+          )
+        );
+        return err instanceof Error
+          ? err.message
+          : "Falha ao conectar com o Resend.";
+      },
+    });
+
+    try {
+      await promise;
+    } catch {
+      // feedback já tratado pelo toast.promise
+    } finally {
       setTestando(null);
-    }, 900);
+    }
   }
 
   async function testarConexaoSupabase() {
@@ -598,10 +623,11 @@ export default function ConfiguracoesSistemaPage() {
                       </button>
                     </div>
 
-                    {/* Cards de integrações externas (Resend, Google Calendar) */}
+                    {/* Card Resend E-mails */}
                     {integracoes.map((item) => {
                       const Icon = item.icon;
                       const conectado = item.status === "Conectado";
+                      const testandoResend = testando === "resend";
                       return (
                         <div
                           key={item.id}
@@ -637,12 +663,12 @@ export default function ConfiguracoesSistemaPage() {
 
                           <button
                             type="button"
-                            onClick={() => testarConexao(item.id)}
-                            disabled={testando === item.id}
+                            onClick={() => void testarResend()}
+                            disabled={testandoResend}
                             className="inline-flex items-center justify-center gap-2 px-4 py-2 rounded-lg bg-zinc-900 border border-zinc-800 text-sm text-zinc-200 hover:bg-zinc-800 hover:text-white transition-colors shrink-0 disabled:opacity-60"
                           >
                             <Plug className="w-4 h-4" />
-                            {testando === item.id ? "Testando..." : "Testar Conexão"}
+                            {testandoResend ? "Testando..." : "Testar Conexão"}
                           </button>
                         </div>
                       );
