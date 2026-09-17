@@ -54,6 +54,38 @@ export type ProfessorSession = {
   pesos?: PesosAvaliacao;
 };
 
+/** Normaliza códigos de turmas (array, JSON string ou CSV). */
+export function parseTurmasProfessor(raw: unknown): string[] {
+  if (!raw) return [];
+  if (Array.isArray(raw)) {
+    return [
+      ...new Set(
+        raw
+          .map(String)
+          .map((s) => s.trim())
+          .filter((s) => Boolean(s) && s !== "—")
+      ),
+    ];
+  }
+  if (typeof raw !== "string") return [];
+  const texto = raw.trim();
+  if (!texto || texto === "—") return [];
+  try {
+    const parsed = JSON.parse(texto);
+    if (Array.isArray(parsed)) return parseTurmasProfessor(parsed);
+  } catch {
+    // CSV / texto simples
+  }
+  return [
+    ...new Set(
+      texto
+        .split(",")
+        .map((s) => s.trim())
+        .filter(Boolean)
+    ),
+  ];
+}
+
 export function iniciaisDoProfessor(nome: string) {
   return nome
     .split(" ")

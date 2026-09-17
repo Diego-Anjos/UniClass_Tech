@@ -601,10 +601,10 @@ export default function ProfessorInsightsPage() {
           <div className="mb-8 flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
             <div className="min-w-0">
               <h1 className="text-2xl font-semibold tracking-tight text-white">
-                Análise Preditiva e Insights
+                Insights de Inteligência Artificial
               </h1>
               <p className="text-sm text-zinc-400 mt-1">
-                Conversa pedagógica com IA focada nos seus alunos e turmas.
+                Análise preditiva com Gemini sobre o desempenho das suas turmas.
               </p>
             </div>
 

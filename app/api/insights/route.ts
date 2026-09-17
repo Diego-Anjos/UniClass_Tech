@@ -17,11 +17,17 @@ export async function POST(req: NextRequest) {
 
   try {
     const { context, turmasAtivas } = await req.json();
+    const totalTurmas = Number(turmasAtivas) || 0;
+
+    const instrucaoTurmas =
+      totalTurmas > 0
+        ? `O professor tem ${totalTurmas} turma(s) ativa(s). NÃO diga que ele está sem turmas, sem disciplinas ou ocioso. Gere uma mensagem curta de bom dia, encorajando-o para as aulas, com uma dica prática de gestão de turma.`
+        : `O professor ainda não possui turmas ativas cadastradas. Gere uma mensagem curta e acolhedora de bom dia, incentivando-o a se preparar para quando as turmas forem vinculadas.`;
 
     const prompt = buildPrompt(
       `Você é um assistente acadêmico virtual da plataforma UniClassTech. Você fornece dicas úteis, curtas e profissionais para professores. Seja direto e não use formatação markdown especial, apenas texto limpo.
 Retorne no formato: { "insight": "suas duas frases aqui" }`,
-      `Gere uma análise motivacional ou dica de gestão em exatas DUAS frases curtas para o ${context}, considerando que ele possui ${turmasAtivas} turma(s) ativa(s) no momento.`
+      `Gere em exatas DUAS frases curtas para o ${context}. ${instrucaoTurmas}`
     );
 
     const data = await generateJsonWithFallback(genAI, prompt);

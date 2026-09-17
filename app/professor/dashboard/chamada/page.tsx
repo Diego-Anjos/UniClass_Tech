@@ -20,10 +20,13 @@ import {
   X,
   Search,
   Calendar,
+  Mail,
 } from "lucide-react";
+import { toast } from "sonner";
 import { supabase } from "@/lib/supabase";
 import { ProfessorSettingsControl } from "@/components/professor/config-modal";
 import { ModalFeedback } from "@/components/ModalFeedback";
+import { Button } from "@/components/ui/button";
 import { PaginationFooter } from "@/components/ui/pagination-footer";
 import {
   iniciaisDoProfessor,
@@ -52,6 +55,9 @@ type AlunoChamada = {
   id: string;
   nome: string;
   ra: string;
+  email_institucional?: string;
+  email_pessoal?: string;
+  email?: string;
 };
 
 type StatusChamada = "presente" | "falta";
@@ -139,6 +145,27 @@ function iniciaisDoNome(nome: string) {
     .join("");
 }
 
+function escaparHtml(texto: string) {
+  return texto
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;");
+}
+
+function emailDoAluno(aluno: AlunoChamada) {
+  const candidatos = [
+    aluno.email_pessoal,
+    aluno.email_institucional,
+    aluno.email,
+  ];
+  for (const valor of candidatos) {
+    const email = (valor ?? "").trim();
+    if (email && email !== "—") return email;
+  }
+  return "";
+}
+
 export default function ProfessorChamadaPage() {
   const { professorLogado, carregandoSessao } = useProfessorSession();
   const [turmas, setTurmas] = useState<TurmaOption[]>([]);
@@ -191,11 +218,12 @@ export default function ProfessorChamadaPage() {
   const alunosExibidos = alunosFiltrados.slice(indiceInicial, indiceFinal);
 
   const totalAlunos = alunosTurma.length;
-  const presentes = Object.values(chamadaStatus).filter(
-    (s) => s === "presente"
+  // Contagem alinhada à lista atual da turma (evita chaves stale em chamadaStatus)
+  const presentes = alunosTurma.filter(
+    (aluno) => (chamadaStatus[aluno.ra] ?? "presente") === "presente"
   ).length;
-  const faltas = Object.values(chamadaStatus).filter(
-    (s) => s === "falta"
+  const faltas = alunosTurma.filter(
+    (aluno) => (chamadaStatus[aluno.ra] ?? "presente") === "falta"
   ).length;
 
   const engajamentoAlto =
@@ -293,6 +321,111 @@ export default function ProfessorChamadaPage() {
       : 0;
   }
 
+  async function notificarFrequencia(aluno: AlunoChamada) {
+    let destinatario = emailDoAluno(aluno);
+
+    if (!destinatario && aluno.ra) {
+      const { data } = await supabase
+        .from("alunos")
+        .select("email_institucional, email_pessoal")
+        .eq("ra", aluno.ra)
+        .maybeSingle();
+
+      if (data) {
+        destinatario = emailDoAluno({
+          ...aluno,
+          email_institucional: data.email_institucional
+            ? String(data.email_institucional).trim()
+            : undefined,
+          email_pessoal: data.email_pessoal
+            ? String(data.email_pessoal).trim()
+            : undefined,
+        });
+      }
+    }
+
+    if (!destinatario) {
+      toast.error("Este aluno não possui e-mail cadastrado.");
+      return;
+    }
+
+    const turma = turmas.find((t) => t.id === turmaSelecionada);
+    const nomeTurma = turma ? labelTurma(turma) : "Turma não informada";
+    const porcentagemFaltas = calcularFrequencia(aluno.ra);
+    const nomeSeguro = escaparHtml(aluno.nome || "aluno(a)");
+    const turmaSegura = escaparHtml(nomeTurma);
+    const dataEnvio = new Date().toLocaleDateString("pt-BR");
+    const corFrequencia = porcentagemFaltas >= 25 ? "#ef4444" : "#4ade80";
+    const mensagemFrequencia =
+      porcentagemFaltas >= 25
+        ? "⚠️ <strong>Atenção:</strong> Você atingiu ou ultrapassou o limite de faltas permitido. O risco de reprovação por ausência é alto. Procure a secretaria ou seu professor imediatamente."
+        : "✅ Sua frequência está dentro do limite aceitável. Continue participando das aulas!";
+
+    const html = `
+<div style="background-color: #000000; padding: 40px 20px; font-family: sans-serif; color: #ffffff;">
+  <div style="max-width: 600px; margin: 0 auto; background-color: #141414; border: 1px solid #333; border-radius: 8px; padding: 30px;">
+    <h2 style="margin-top: 0; font-size: 24px; font-weight: bold;">UniClassTech</h2>
+    <h3 style="font-size: 18px; font-weight: 600; margin-top: 20px;">Olá, ${nomeSeguro}! Aqui está o seu extrato de frequência.</h3>
+    <p style="font-size: 15px; color: #cccccc;">Turma: <strong>${turmaSegura}</strong></p>
+    
+    <div style="background-color: #1e1e1e; padding: 20px; border-radius: 6px; margin-top: 20px;">
+      <p style="margin: 5px 0; color: #ccc;">Frequência Atual (Faltas): <strong style="color: ${corFrequencia};">${porcentagemFaltas}%</strong></p>
+      <hr style="border: 0; border-top: 1px solid #333; margin: 15px 0;" />
+      <p style="margin: 5px 0; color: #ccc; font-size: 14px; line-height: 1.5;">
+        ${mensagemFrequencia}
+      </p>
+    </div>
+    
+    <p style="font-size: 13px; color: #888; margin-top: 25px;">
+      Este é um alerta automático enviado pelo seu professor via UniClassTech em ${dataEnvio}.
+    </p>
+  </div>
+</div>
+    `.trim();
+
+    const promise = fetch("/api/email", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        to: destinatario,
+        subject: "Extrato de Frequência - UniClassTech",
+        html,
+        text:
+          `Olá, ${aluno.nome}!\n\n` +
+          `Turma: ${nomeTurma}\n` +
+          `Frequência Atual (Faltas): ${porcentagemFaltas}%\n` +
+          (porcentagemFaltas >= 25
+            ? "Atenção: Você atingiu ou ultrapassou o limite de faltas permitido."
+            : "Sua frequência está dentro do limite aceitável."),
+      }),
+    }).then(async (res) => {
+      const payload = (await res.json().catch(() => ({}))) as {
+        error?: unknown;
+      };
+      if (!res.ok) {
+        const msg =
+          typeof payload.error === "string"
+            ? payload.error
+            : "Erro ao enviar e-mail.";
+        throw new Error(msg);
+      }
+      return payload;
+    });
+
+    toast.promise(promise, {
+      loading: "Disparando e-mail...",
+      success: "Alerta enviado!",
+      error: (err: unknown) =>
+        err instanceof Error ? err.message : "Erro ao enviar",
+    });
+
+    try {
+      await promise;
+    } catch {
+      // feedback já tratado pelo toast.promise
+    }
+  }
+
   async function salvarChamada() {
     if (!turmaSelecionada) {
       mostrarFeedback(
@@ -383,11 +516,13 @@ export default function ProfessorChamadaPage() {
 
       setTurmas(lista);
 
-      // Auto-select apenas quando houver uma única turma do professor
+      // Auto-select se só houver uma turma; senão preserva seleção válida
       if (lista.length === 1) {
         setTurmaSelecionada(lista[0].id);
       } else {
-        setTurmaSelecionada("");
+        setTurmaSelecionada((prev) =>
+          prev && lista.some((t) => t.id === prev) ? prev : ""
+        );
       }
     }
 
@@ -395,53 +530,86 @@ export default function ProfessorChamadaPage() {
   }, [professorLogado]);
 
   useEffect(() => {
-    if (!turmaSelecionada || !professorLogado) {
-      setAlunosTurma([]);
-      setHistoricoTurma([]);
-      return;
-    }
+    let cancelado = false;
 
-    const turma = turmas.find((t) => t.id === turmaSelecionada);
-    if (!turma) {
-      setAlunosTurma([]);
-      setHistoricoTurma([]);
-      return;
-    }
+    // Feedback visual imediato ao trocar a turma
+    setAlunosTurma([]);
+    setHistoricoTurma([]);
+    setChamadaStatus({});
 
-    async function fetchAlunos() {
-      const cursoTurma = turma!.curso;
-      const vinculoProfessor = professorLogado!.nomeCompletoTitulo;
-
-      // Prioriza alunos do curso da turma selecionada
-      let { data, error } = await supabase
-        .from("alunos")
-        .select("id, nome, ra, professor, curso")
-        .eq("curso", cursoTurma)
-        .order("nome", { ascending: true });
-
-      // Fallback: alunos vinculados ao professor logado
-      if (error || !data || data.length === 0) {
-        const porProfessor = await supabase
-          .from("alunos")
-          .select("id, nome, ra, professor, curso")
-          .eq("professor", vinculoProfessor)
-          .order("nome", { ascending: true });
-
-        if (porProfessor.error) {
-          console.error(
-            "Erro ao buscar alunos:",
-            error?.message ?? porProfessor.error.message
-          );
+    async function buscarAlunosDaTurma(turmaId: string) {
+      const turma = turmas.find((t) => t.id === turmaId);
+      if (!turma || !professorLogado) {
+        if (!cancelado) {
           setAlunosTurma([]);
           setHistoricoTurma([]);
-          return;
         }
-
-        data = porProfessor.data;
+        return;
       }
 
+      const codigoTurma = turma.codigo.trim();
+      const cursoTurma = turma.curso;
+      const vinculoProfessor = professorLogado.nomeCompletoTitulo;
+      const selectCols =
+        "id, nome, ra, professor, curso, email_institucional, email_pessoal";
+
+      // Prioriza vínculo real: alunos.turma = código da turma (ex: GTI-5A-N)
+      let { data, error } = await supabase
+        .from("alunos")
+        .select(selectCols)
+        .eq("turma", codigoTurma)
+        .order("nome", { ascending: true });
+
+      // Fallback 1: mesmo curso da turma
+      if (error || !data || data.length === 0) {
+        const porCurso = await supabase
+          .from("alunos")
+          .select(selectCols)
+          .eq("curso", cursoTurma)
+          .order("nome", { ascending: true });
+
+        if (!porCurso.error && porCurso.data && porCurso.data.length > 0) {
+          data = porCurso.data;
+          error = porCurso.error;
+        } else {
+          // Fallback 2: alunos vinculados ao professor logado
+          const porProfessor = await supabase
+            .from("alunos")
+            .select(selectCols)
+            .eq("professor", vinculoProfessor)
+            .order("nome", { ascending: true });
+
+          if (porProfessor.error) {
+            if (!cancelado) {
+              console.error(
+                "Erro ao buscar alunos:",
+                error?.message ??
+                  porCurso.error?.message ??
+                  porProfessor.error.message
+              );
+              setAlunosTurma([]);
+              setHistoricoTurma([]);
+            }
+            return;
+          }
+
+          data = porProfessor.data;
+          error = porProfessor.error;
+        }
+      }
+
+      if (cancelado) return;
+
       // Histórico completo de chamadas da turma (frequência real)
-      await carregarHistoricoTurma(turmaSelecionada);
+      await carregarHistoricoTurma(turmaId);
+
+      if (cancelado) return;
+
+      if (error) {
+        console.error("Erro ao buscar alunos:", error.message);
+        setAlunosTurma([]);
+        return;
+      }
 
       if (!data || data.length === 0) {
         setAlunosTurma([]);
@@ -458,13 +626,25 @@ export default function ProfessorChamadaPage() {
               (aluno as { matricula?: string }).matricula ||
               "RA-"
           ),
+          email_institucional: aluno.email_institucional
+            ? String(aluno.email_institucional).trim()
+            : undefined,
+          email_pessoal: aluno.email_pessoal
+            ? String(aluno.email_pessoal).trim()
+            : undefined,
         };
       });
 
       setAlunosTurma(mapeados);
     }
 
-    void fetchAlunos();
+    if (turmaSelecionada) {
+      void buscarAlunosDaTurma(turmaSelecionada);
+    }
+
+    return () => {
+      cancelado = true;
+    };
   }, [turmaSelecionada, professorLogado, turmas]);
 
   // Carrega status da chamada para a turma + data selecionadas
@@ -523,40 +703,60 @@ export default function ProfessorChamadaPage() {
     }
   }, [paginaAtual, totalPaginas]);
 
-  // Análise de IA com debounce (1.5s)
+  async function gerarInsightIA(dados: {
+    turma: string;
+    totalAlunos: number;
+    presentes: number;
+    faltas: number;
+  }) {
+    const response = await fetch("/api/insights/chamada", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        turma: dados.turma,
+        presentes: dados.presentes,
+        faltas: dados.faltas,
+        total: dados.totalAlunos,
+      }),
+    });
+
+    const data = await response.json();
+    return {
+      tipoAlerta: (data.tipoAlerta as string) || "ALERTA DE FREQUÊNCIA",
+      mensagem:
+        (data.mensagem as string) ||
+        "Presença registrada. Acompanhe os alunos recorrentemente ausentes para evitar evasão.",
+    } satisfies AiInsightChamada;
+  }
+
+  // Análise de IA com debounce (1.5s) — só após status sincronizado com a lista
   useEffect(() => {
-    if (
-      !turmaSelecionada ||
-      totalAlunos === 0 ||
-      Object.keys(chamadaStatus).length === 0
-    ) {
+    const statusSincronizado =
+      totalAlunos > 0 &&
+      alunosTurma.every((aluno) => aluno.ra in chamadaStatus);
+
+    if (!turmaSelecionada || !statusSincronizado) {
       setAiInsight(null);
       setIsLoadingAi(false);
       return;
     }
 
+    const turma = turmas.find((t) => t.id === turmaSelecionada);
+    const nomeTurma = turma ? labelTurma(turma) : turmaSelecionada;
+
+    // Snapshot dos números no momento do agendamento (evita closure stale)
+    const payload = {
+      turma: nomeTurma,
+      totalAlunos,
+      presentes,
+      faltas,
+    };
+
     const timeoutId = window.setTimeout(async () => {
       setIsLoadingAi(true);
       try {
-        const response = await fetch("/api/insights/chamada", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            turma: turmaSelecionada,
-            presentes,
-            faltas,
-            total: totalAlunos,
-          }),
-        });
-
-        const data = await response.json();
-        setAiInsight({
-          tipoAlerta:
-            (data.tipoAlerta as string) || "ALERTA DE FREQUÊNCIA",
-          mensagem:
-            (data.mensagem as string) ||
-            "Presença registrada. Acompanhe os alunos recorrentemente ausentes para evitar evasão.",
-        });
+        const insight = await gerarInsightIA(payload);
+        setAiInsight(insight);
       } catch (err) {
         console.error("Erro ao gerar insight da chamada:", err);
         setAiInsight({
@@ -572,7 +772,15 @@ export default function ProfessorChamadaPage() {
     return () => {
       window.clearTimeout(timeoutId);
     };
-  }, [turmaSelecionada, presentes, faltas, totalAlunos, chamadaStatus]);
+  }, [
+    turmaSelecionada,
+    turmas,
+    alunosTurma,
+    chamadaStatus,
+    presentes,
+    faltas,
+    totalAlunos,
+  ]);
 
   if (carregandoSessao || !professorLogado) {
     return (
@@ -688,7 +896,15 @@ export default function ProfessorChamadaPage() {
                 <div className="relative inline-block">
                   <select
                     value={turmaSelecionada}
-                    onChange={(e) => setTurmaSelecionada(e.target.value)}
+                    onChange={(e) => {
+                      const value = e.target.value;
+                      setTurmaSelecionada(value);
+                      setAlunosTurma([]);
+                      setHistoricoTurma([]);
+                      setChamadaStatus({});
+                      setTermoBusca("");
+                      setPaginaAtual(1);
+                    }}
                     className="appearance-none bg-zinc-950 border border-zinc-700 text-sm text-white font-medium rounded-lg pl-4 pr-10 py-2.5 focus:outline-none focus:ring-1 focus:ring-zinc-500 cursor-pointer hover:border-zinc-600 transition-colors min-w-[260px]"
                   >
                     {turmas.length === 0 ? (
@@ -955,7 +1171,7 @@ export default function ProfessorChamadaPage() {
                             </span>
                           </td>
                           <td className="px-6 py-4">
-                            <div className="flex justify-end">
+                            <div className="flex gap-2 items-center justify-end">
                               <div className="inline-flex rounded-lg overflow-hidden border border-zinc-800">
                                 <button
                                   type="button"
@@ -986,6 +1202,17 @@ export default function ProfessorChamadaPage() {
                                   Falta
                                 </button>
                               </div>
+                              <Button
+                                type="button"
+                                variant="ghost"
+                                size="icon"
+                                title="Enviar relatório de presença"
+                                aria-label={`Enviar relatório de presença para ${aluno.nome}`}
+                                className="h-8 w-8 size-auto"
+                                onClick={() => void notificarFrequencia(aluno)}
+                              >
+                                <Mail className="h-4 w-4 text-gray-400 hover:text-white" />
+                              </Button>
                             </div>
                           </td>
                         </tr>

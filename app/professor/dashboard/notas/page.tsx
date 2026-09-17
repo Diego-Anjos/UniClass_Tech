@@ -1,6 +1,6 @@
 "use client";
 
-import { Fragment, useEffect, useMemo, useState } from "react";
+import { Fragment, useEffect, useState } from "react";
 import Link from "next/link";
 import {
   LayoutDashboard,
@@ -16,9 +16,13 @@ import {
   Loader2,
   ChevronDown,
   ChevronUp,
+  Mail,
+  Check,
 } from "lucide-react";
+import { toast } from "sonner";
 import { ProfessorSettingsControl } from "@/components/professor/config-modal";
 import { ModalFeedback } from "@/components/ModalFeedback";
+import { Button } from "@/components/ui/button";
 import { supabase } from "@/lib/supabase";
 import {
   iniciaisDoProfessor,
@@ -42,6 +46,13 @@ const navItems = [
 
 type CampoNota = "atv1" | "atv2" | "atv3" | "atv4" | "prova";
 
+type TurmaOption = {
+  id: string;
+  codigo: string;
+  curso: string;
+  turno?: string;
+};
+
 type AlunoTurma = {
   ra: string;
   nome: string;
@@ -51,6 +62,9 @@ type AlunoTurma = {
   atv4: number;
   prova: number;
   faltas: number;
+  email_institucional?: string;
+  email_pessoal?: string;
+  email?: string;
 };
 
 const LABELS_COMPOSICAO: Record<CampoNota, string> = {
@@ -63,27 +77,9 @@ const LABELS_COMPOSICAO: Record<CampoNota, string> = {
 
 const CAMPOS_PESO: CampoNota[] = ["atv1", "atv2", "atv3", "atv4", "prova"];
 
-/** Parse turmas vindas do Supabase/sessão (array, JSON ou CSV). */
-function parseTurmasProfessor(raw: unknown): string[] {
-  if (!raw) return [];
-  if (Array.isArray(raw)) {
-    return raw.map(String).map((s) => s.trim()).filter(Boolean);
-  }
-  if (typeof raw !== "string") return [];
-  const texto = raw.trim();
-  if (!texto || texto === "—") return [];
-  try {
-    const parsed = JSON.parse(texto);
-    if (Array.isArray(parsed)) {
-      return parsed.map(String).map((s) => s.trim()).filter(Boolean);
-    }
-  } catch {
-    // CSV / texto simples
-  }
-  return texto
-    .split(",")
-    .map((s) => s.trim())
-    .filter(Boolean);
+function labelTurma(turma: TurmaOption) {
+  const turno = turma.turno ? ` (${turma.turno})` : "";
+  return `${turma.curso} - Turma ${turma.codigo}${turno}`;
 }
 
 function toNumber(valor: unknown): number {
@@ -101,7 +97,35 @@ function mapAlunoTurma(row: Record<string, unknown>): AlunoTurma {
     atv4: toNumber(row.atv4),
     prova: toNumber(row.prova),
     faltas: toNumber(row.faltas),
+    email_institucional: row.email_institucional
+      ? String(row.email_institucional).trim()
+      : undefined,
+    email_pessoal: row.email_pessoal
+      ? String(row.email_pessoal).trim()
+      : undefined,
+    email: row.email ? String(row.email).trim() : undefined,
   };
+}
+
+function escaparHtml(texto: string) {
+  return texto
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;");
+}
+
+function emailDoAluno(aluno: AlunoTurma) {
+  const candidatos = [
+    aluno.email_pessoal,
+    aluno.email_institucional,
+    aluno.email,
+  ];
+  for (const valor of candidatos) {
+    const email = (valor ?? "").trim();
+    if (email && email !== "—") return email;
+  }
+  return "";
 }
 
 function totalN1(aluno: AlunoTurma): number {
@@ -146,16 +170,25 @@ const inputComposicaoClass =
 const inputComposicaoErroClass =
   "w-full rounded-md bg-zinc-950 border border-red-500/70 text-white text-sm text-center px-2 py-2 outline-none focus:border-red-400 focus:ring-1 focus:ring-red-500/40 [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none";
 
+const inputNotaComCheckClass =
+  "w-full rounded-md bg-zinc-950 border border-zinc-700 text-white text-sm text-center pl-2 pr-8 py-2 outline-none focus:border-zinc-500 focus:ring-1 focus:ring-zinc-500 [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none";
+
+const inputNotaComCheckErroClass =
+  "w-full rounded-md bg-zinc-950 border border-red-500/70 text-white text-sm text-center pl-2 pr-8 py-2 outline-none focus:border-red-400 focus:ring-1 focus:ring-red-500/40 [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none";
+
 const inputDisabledClass =
   "w-full appearance-none bg-zinc-900/80 border border-zinc-800 text-sm text-zinc-300 rounded-lg px-4 py-2.5 cursor-not-allowed";
 
 export default function DiarioDeClassePage() {
   const { professorLogado, carregandoSessao } = useProfessorSession();
   const [turmaSelecionada, setTurmaSelecionada] = useState("");
+  const [turmas, setTurmas] = useState<TurmaOption[]>([]);
+  const [carregandoTurmas, setCarregandoTurmas] = useState(true);
   const [alunosTurma, setAlunosTurma] = useState<AlunoTurma[]>([]);
   const [loadingAlunos, setLoadingAlunos] = useState(false);
   const [alunoExpandido, setAlunoExpandido] = useState<string | null>(null);
   const [salvando, setSalvando] = useState(false);
+  const [salvandoNotaKey, setSalvandoNotaKey] = useState<string | null>(null);
   const [pesos, setPesos] = useState<PesosAvaliacao>(PESOS_AVALIACAO_PADRAO);
   const [isConfigurandoPesos, setIsConfigurandoPesos] = useState(false);
   const [salvandoPesos, setSalvandoPesos] = useState(false);
@@ -172,17 +205,67 @@ export default function DiarioDeClassePage() {
     mensagem: "",
   });
 
-  const turmasDoProfessor = useMemo(
-    () =>
-      parseTurmasProfessor(
-        professorLogado?.turmas ?? professorLogado?.area_atuacao
-      ),
-    [professorLogado?.turmas, professorLogado?.area_atuacao]
-  );
-
   const disciplinaProfessor = professorLogado?.disciplina?.trim() || "";
   const totalDistribuicao = somaPesos(pesos);
   const pesosValidos = totalDistribuicao === 10;
+
+  // Mesma lógica estrutural de chamada/page.tsx: turmas da área do professor
+  useEffect(() => {
+    if (!professorLogado) {
+      setTurmas([]);
+      setCarregandoTurmas(false);
+      return;
+    }
+
+    let cancelado = false;
+
+    async function fetchTurmas() {
+      setCarregandoTurmas(true);
+      const areaAtuacao = professorLogado!.area_atuacao?.trim() ?? "";
+
+      const { data, error } = await supabase
+        .from("turmas")
+        .select("*")
+        .ilike("curso", `%${areaAtuacao}%`);
+
+      if (cancelado) return;
+
+      if (error) {
+        console.error("Erro ao buscar turmas:", error.message);
+        setTurmas([]);
+        setTurmaSelecionada("");
+        setCarregandoTurmas(false);
+        return;
+      }
+
+      const lista = ((data ?? []) as Record<string, unknown>[]).map(
+        (turma) => ({
+          id: String(turma.id),
+          codigo: String(turma.codigo ?? ""),
+          curso: String(turma.curso ?? ""),
+          turno: turma.turno ? String(turma.turno) : undefined,
+        })
+      );
+
+      setTurmas(lista);
+
+      // Auto-select apenas quando houver uma única turma do professor
+      if (lista.length === 1) {
+        setTurmaSelecionada(lista[0].codigo);
+      } else {
+        setTurmaSelecionada((prev) =>
+          prev && lista.some((t) => t.codigo === prev) ? prev : ""
+        );
+      }
+      setCarregandoTurmas(false);
+    }
+
+    void fetchTurmas();
+
+    return () => {
+      cancelado = true;
+    };
+  }, [professorLogado]);
 
   useEffect(() => {
     if (!professorLogado) return;
@@ -222,23 +305,57 @@ export default function DiarioDeClassePage() {
   useEffect(() => {
     let cancelado = false;
 
-    async function carregarAlunosDaTurma() {
-      if (!turmaSelecionada) {
-        setAlunosTurma([]);
-        setAlunoExpandido(null);
-        setLoadingAlunos(false);
+    // Feedback visual imediato ao trocar a turma
+    setAlunosTurma([]);
+    setAlunoExpandido(null);
+    setErrosNota({});
+
+    async function buscarAlunosDaTurma(codigoTurma: string) {
+      const turma = turmas.find((t) => t.codigo === codigoTurma);
+      if (!turma) {
+        if (!cancelado) {
+          setAlunosTurma([]);
+          setLoadingAlunos(false);
+        }
         return;
       }
 
       setLoadingAlunos(true);
-      setAlunoExpandido(null);
-      setErrosNota({});
 
-      const { data, error } = await supabase
+      // Prioriza alunos vinculados ao código da turma (ex: GTI-5A-N)
+      let { data, error } = await supabase
         .from("alunos")
-        .select("ra, nome, atv1, atv2, atv3, atv4, prova, faltas, n1")
-        .eq("turma", turmaSelecionada)
+        .select(
+          "ra, nome, atv1, atv2, atv3, atv4, prova, faltas, n1, email_institucional, email_pessoal"
+        )
+        .eq("turma", codigoTurma)
         .order("nome", { ascending: true });
+
+      // Fallback: alunos do mesmo curso da turma
+      if (error || !data || data.length === 0) {
+        const porCurso = await supabase
+          .from("alunos")
+          .select(
+            "ra, nome, atv1, atv2, atv3, atv4, prova, faltas, n1, email_institucional, email_pessoal"
+          )
+          .eq("curso", turma.curso)
+          .order("nome", { ascending: true });
+
+        if (porCurso.error) {
+          if (!cancelado) {
+            console.error(
+              "Erro ao buscar alunos da turma:",
+              error?.message ?? porCurso.error.message
+            );
+            setAlunosTurma([]);
+            setLoadingAlunos(false);
+          }
+          return;
+        }
+
+        data = porCurso.data;
+        error = porCurso.error;
+      }
 
       if (cancelado) return;
 
@@ -261,12 +378,16 @@ export default function DiarioDeClassePage() {
       setLoadingAlunos(false);
     }
 
-    void carregarAlunosDaTurma();
+    if (turmaSelecionada) {
+      void buscarAlunosDaTurma(turmaSelecionada.trim());
+    } else {
+      setLoadingAlunos(false);
+    }
 
     return () => {
       cancelado = true;
     };
-  }, [turmaSelecionada]);
+  }, [turmaSelecionada, turmas]);
 
   function atualizarPeso(campo: CampoNota, valor: string) {
     const numerico = valor === "" ? 0 : Number(valor);
@@ -312,6 +433,172 @@ export default function DiarioDeClassePage() {
 
   function toggleExpandir(ra: string) {
     setAlunoExpandido((prev) => (prev === ra ? null : ra));
+  }
+
+  async function notificarNotas(aluno: AlunoTurma) {
+    let destinatario = emailDoAluno(aluno);
+
+    // Garante e-mail atualizado do banco caso a lista tenha vindo sem o campo
+    if (!destinatario && aluno.ra) {
+      const { data } = await supabase
+        .from("alunos")
+        .select("email_institucional, email_pessoal")
+        .eq("ra", aluno.ra)
+        .maybeSingle();
+
+      if (data) {
+        destinatario = emailDoAluno({
+          ...aluno,
+          email_institucional: data.email_institucional
+            ? String(data.email_institucional).trim()
+            : undefined,
+          email_pessoal: data.email_pessoal
+            ? String(data.email_pessoal).trim()
+            : undefined,
+        });
+      }
+    }
+
+    if (!destinatario) {
+      toast.error("Este aluno não possui e-mail cadastrado.");
+      return;
+    }
+
+    const nomeDaDisciplina =
+      disciplinaProfessor.trim() || "Disciplina não informada";
+    const notaTotal = formatNota(totalN1(aluno));
+    const nomeSeguro = escaparHtml(aluno.nome || "aluno(a)");
+    const disciplinaSegura = escaparHtml(nomeDaDisciplina);
+    const dataEnvio = new Date().toLocaleDateString("pt-BR");
+
+    const html = `
+<div style="background-color: #000000; padding: 40px 20px; font-family: sans-serif; color: #ffffff;">
+  <div style="max-width: 600px; margin: 0 auto; background-color: #141414; border: 1px solid #333; border-radius: 8px; padding: 30px;">
+    <h2 style="margin-top: 0; font-size: 24px; font-weight: bold;">UniClassTech</h2>
+    <h3 style="font-size: 18px; font-weight: 600; margin-top: 20px;">Olá, ${nomeSeguro}! Aqui está o seu extrato de notas.</h3>
+    <p style="font-size: 15px; color: #cccccc;">Disciplina: <strong>${disciplinaSegura}</strong></p>
+    
+    <div style="background-color: #1e1e1e; padding: 20px; border-radius: 6px; margin-top: 20px;">
+      <p style="margin: 5px 0; color: #ccc;">Atividade 1: <strong style="color: #fff;">${formatNota(aluno.atv1)}</strong></p>
+      <p style="margin: 5px 0; color: #ccc;">Atividade 2: <strong style="color: #fff;">${formatNota(aluno.atv2)}</strong></p>
+      <p style="margin: 5px 0; color: #ccc;">Atividade 3: <strong style="color: #fff;">${formatNota(aluno.atv3)}</strong></p>
+      <p style="margin: 5px 0; color: #ccc;">Atividade 4: <strong style="color: #fff;">${formatNota(aluno.atv4)}</strong></p>
+      <p style="margin: 5px 0; color: #ccc;">Prova Semestral: <strong style="color: #fff;">${formatNota(aluno.prova)}</strong></p>
+      <hr style="border: 0; border-top: 1px solid #333; margin: 15px 0;" />
+      <p style="margin: 5px 0; color: #ccc;">Faltas Registradas: <strong style="color: #fff;">${aluno.faltas}</strong></p>
+      <hr style="border: 0; border-top: 1px solid #333; margin: 15px 0;" />
+      <p style="margin: 5px 0; color: #ccc;">Soma das Atividades + Prova: <strong style="color: #4ade80;">${notaTotal} / 10.0</strong></p>
+    </div>
+    
+    <p style="font-size: 13px; color: #888; margin-top: 25px;">
+      Este é um e-mail automático enviado pelo seu professor via UniClassTech em ${dataEnvio}.
+    </p>
+  </div>
+</div>
+    `.trim();
+
+    const promise = fetch("/api/email", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        to: destinatario,
+        subject: `Atualização de Notas: ${nomeDaDisciplina}`,
+        html,
+        text:
+          `Olá, ${aluno.nome}!\n\n` +
+          `Disciplina: ${nomeDaDisciplina}\n` +
+          `Atividade 1: ${formatNota(aluno.atv1)}\n` +
+          `Atividade 2: ${formatNota(aluno.atv2)}\n` +
+          `Atividade 3: ${formatNota(aluno.atv3)}\n` +
+          `Atividade 4: ${formatNota(aluno.atv4)}\n` +
+          `Prova Semestral: ${formatNota(aluno.prova)}\n` +
+          `Faltas: ${aluno.faltas}\n` +
+          `Total N1: ${notaTotal} / 10.0\n`,
+      }),
+    }).then(async (res) => {
+      const payload = (await res.json().catch(() => ({}))) as {
+        error?: unknown;
+      };
+      if (!res.ok) {
+        const msg =
+          typeof payload.error === "string"
+            ? payload.error
+            : "Erro ao enviar e-mail.";
+        throw new Error(msg);
+      }
+      return payload;
+    });
+
+    toast.promise(promise, {
+      loading: "Enviando e-mail...",
+      success: "E-mail enviado!",
+      error: (err: unknown) =>
+        err instanceof Error ? err.message : "Erro ao enviar",
+    });
+
+    try {
+      await promise;
+    } catch {
+      // feedback já tratado pelo toast.promise
+    }
+  }
+
+  async function salvarNotaEspecifica(ra: string, campo: CampoNota) {
+    if (!turmaSelecionada) {
+      toast.error("Selecione a turma antes de salvar a nota.");
+      return;
+    }
+
+    const chaveErro = `${ra}-${campo}`;
+    if (errosNota[chaveErro]) {
+      toast.error(errosNota[chaveErro]);
+      return;
+    }
+
+    const aluno = alunosTurma.find((a) => a.ra === ra);
+    if (!aluno) {
+      toast.error("Aluno não encontrado na turma.");
+      return;
+    }
+
+    const chaveSalvar = `${ra}-${campo}`;
+    if (salvandoNotaKey === chaveSalvar) return;
+
+    const valor = aluno[campo];
+    const n1 = totalN1(aluno);
+    const label = LABELS_COMPOSICAO[campo];
+
+    setSalvandoNotaKey(chaveSalvar);
+
+    const promise = (async () => {
+      const { error } = await supabase
+        .from("alunos")
+        .update({
+          [campo]: valor,
+          n1,
+        })
+        .eq("ra", ra)
+        .eq("turma", turmaSelecionada);
+
+      if (error) throw new Error(error.message);
+      return { label, valor };
+    })();
+
+    toast.promise(promise, {
+      loading: `Salvando ${label}...`,
+      success: (data) =>
+        `${data.label} salva: ${formatNota(data.valor)}`,
+      error: (err: unknown) =>
+        err instanceof Error ? err.message : "Erro ao salvar nota.",
+    });
+
+    try {
+      await promise;
+    } catch {
+      // feedback já tratado pelo toast.promise
+    } finally {
+      setSalvandoNotaKey(null);
+    }
   }
 
   async function handleSalvarPesos() {
@@ -527,20 +814,31 @@ export default function DiarioDeClassePage() {
               <select
                 id="filtro-turma"
                 value={turmaSelecionada}
-                onChange={(e) => setTurmaSelecionada(e.target.value)}
-                className="w-full appearance-none bg-zinc-950 border border-zinc-700 text-sm text-white rounded-lg px-4 py-2.5 focus:outline-none focus:ring-1 focus:ring-zinc-500 cursor-pointer hover:border-zinc-600 transition-colors"
+                onChange={(e) => {
+                  const value = e.target.value;
+                  setTurmaSelecionada(value);
+                  setAlunosTurma([]);
+                  setAlunoExpandido(null);
+                  setErrosNota({});
+                }}
+                disabled={carregandoTurmas}
+                className="w-full appearance-none bg-zinc-950 border border-zinc-700 text-sm text-white rounded-lg px-4 py-2.5 focus:outline-none focus:ring-1 focus:ring-zinc-500 cursor-pointer hover:border-zinc-600 transition-colors disabled:opacity-60 disabled:cursor-not-allowed"
               >
-                <option value="">Selecione a Turma</option>
-                {turmasDoProfessor.length === 0 ? (
-                  <option value="" disabled>
-                    Nenhuma turma atribuída ao docente
-                  </option>
+                {carregandoTurmas ? (
+                  <option value="">Carregando turmas...</option>
+                ) : turmas.length === 0 ? (
+                  <option value="">Nenhuma turma da sua área</option>
                 ) : (
-                  turmasDoProfessor.map((turma) => (
-                    <option key={turma} value={turma}>
-                      {turma}
-                    </option>
-                  ))
+                  <>
+                    {turmas.length > 1 && (
+                      <option value="">Selecione a Turma</option>
+                    )}
+                    {turmas.map((turma) => (
+                      <option key={turma.id} value={turma.codigo}>
+                        {labelTurma(turma)}
+                      </option>
+                    ))}
+                  </>
                 )}
               </select>
             </div>
@@ -726,18 +1024,31 @@ export default function DiarioDeClassePage() {
                               {aluno.faltas}
                             </td>
                             <td className="px-6 py-3 text-right">
-                              <button
-                                type="button"
-                                onClick={() => toggleExpandir(aluno.ra)}
-                                className="inline-flex items-center gap-1.5 rounded-lg border border-zinc-700 bg-zinc-900 px-3 py-1.5 text-xs font-medium text-white hover:border-zinc-500 hover:bg-zinc-800 transition-colors cursor-pointer"
-                              >
-                                Lançar Notas
-                                {expandido ? (
-                                  <ChevronUp className="h-3.5 w-3.5" />
-                                ) : (
-                                  <ChevronDown className="h-3.5 w-3.5" />
-                                )}
-                              </button>
+                              <div className="flex gap-2 items-center justify-end">
+                                <button
+                                  type="button"
+                                  onClick={() => toggleExpandir(aluno.ra)}
+                                  className="inline-flex items-center gap-1.5 rounded-lg border border-zinc-700 bg-zinc-900 px-3 py-1.5 text-xs font-medium text-white hover:border-zinc-500 hover:bg-zinc-800 transition-colors cursor-pointer"
+                                >
+                                  Lançar Notas
+                                  {expandido ? (
+                                    <ChevronUp className="h-3.5 w-3.5" />
+                                  ) : (
+                                    <ChevronDown className="h-3.5 w-3.5" />
+                                  )}
+                                </button>
+                                <Button
+                                  type="button"
+                                  variant="ghost"
+                                  size="icon"
+                                  title={`Enviar extrato de notas para ${aluno.nome}`}
+                                  aria-label={`Enviar extrato de notas para ${aluno.nome}`}
+                                  className="h-8 w-8 size-auto border border-zinc-700 bg-zinc-900 hover:bg-zinc-800 hover:text-white"
+                                  onClick={() => void notificarNotas(aluno)}
+                                >
+                                  <Mail className="h-4 w-4" />
+                                </Button>
+                              </div>
                             </td>
                           </tr>
 
@@ -752,6 +1063,8 @@ export default function DiarioDeClassePage() {
                                     const max = pesos[campo];
                                     const chaveErro = `${aluno.ra}-${campo}`;
                                     const temErro = Boolean(errosNota[chaveErro]);
+                                    const salvandoEste =
+                                      salvandoNotaKey === `${aluno.ra}-${campo}`;
 
                                     return (
                                       <div key={campo}>
@@ -762,26 +1075,49 @@ export default function DiarioDeClassePage() {
                                           {LABELS_COMPOSICAO[campo]} (Máx{" "}
                                           {formatNota(max)})
                                         </label>
-                                        <input
-                                          id={`${aluno.ra}-${campo}`}
-                                          type="number"
-                                          min={0}
-                                          max={max}
-                                          step={0.1}
-                                          value={aluno[campo]}
-                                          onChange={(e) =>
-                                            atualizarAluno(
-                                              aluno.ra,
-                                              campo,
-                                              e.target.value
-                                            )
-                                          }
-                                          className={
-                                            temErro
-                                              ? inputComposicaoErroClass
-                                              : inputComposicaoClass
-                                          }
-                                        />
+                                        <div className="relative flex items-center">
+                                          <input
+                                            id={`${aluno.ra}-${campo}`}
+                                            type="number"
+                                            min={0}
+                                            max={max}
+                                            step={0.1}
+                                            value={aluno[campo]}
+                                            onChange={(e) =>
+                                              atualizarAluno(
+                                                aluno.ra,
+                                                campo,
+                                                e.target.value
+                                              )
+                                            }
+                                            className={
+                                              temErro
+                                                ? inputNotaComCheckErroClass
+                                                : inputNotaComCheckClass
+                                            }
+                                          />
+                                          <Button
+                                            type="button"
+                                            size="icon"
+                                            variant="ghost"
+                                            title={`Salvar ${LABELS_COMPOSICAO[campo]}`}
+                                            aria-label={`Salvar ${LABELS_COMPOSICAO[campo]} de ${aluno.nome}`}
+                                            disabled={salvandoEste || temErro}
+                                            className="absolute right-1 h-6 w-6 size-auto text-green-500 hover:text-green-400 hover:bg-green-500/10 disabled:opacity-40"
+                                            onClick={() =>
+                                              void salvarNotaEspecifica(
+                                                aluno.ra,
+                                                campo
+                                              )
+                                            }
+                                          >
+                                            {salvandoEste ? (
+                                              <Loader2 className="h-4 w-4 animate-spin" />
+                                            ) : (
+                                              <Check className="h-4 w-4" />
+                                            )}
+                                          </Button>
+                                        </div>
                                         {temErro && (
                                           <p className="mt-1 text-[10px] text-red-400">
                                             {errosNota[chaveErro]}

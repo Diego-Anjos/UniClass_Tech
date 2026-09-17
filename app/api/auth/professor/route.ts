@@ -1,17 +1,35 @@
 import { NextResponse } from "next/server";
 import { createClient } from "@supabase/supabase-js";
 
-function parseTurmas(areaAtuacao: unknown): string[] {
-  if (Array.isArray(areaAtuacao)) {
-    return areaAtuacao.map((t) => String(t).trim()).filter(Boolean);
+function parseTurmas(raw: unknown): string[] {
+  if (!raw) return [];
+  if (Array.isArray(raw)) {
+    return [
+      ...new Set(
+        raw
+          .map(String)
+          .map((t) => t.trim())
+          .filter((t) => Boolean(t) && t !== "—")
+      ),
+    ];
   }
-  if (typeof areaAtuacao === "string") {
-    return areaAtuacao
-      .split(",")
-      .map((t) => t.trim())
-      .filter(Boolean);
+  if (typeof raw !== "string") return [];
+  const texto = raw.trim();
+  if (!texto || texto === "—") return [];
+  try {
+    const parsed = JSON.parse(texto);
+    if (Array.isArray(parsed)) return parseTurmas(parsed);
+  } catch {
+    // CSV / texto simples
   }
-  return [];
+  return [
+    ...new Set(
+      texto
+        .split(",")
+        .map((t) => t.trim())
+        .filter(Boolean)
+    ),
+  ];
 }
 
 export async function POST(request: Request) {
@@ -71,7 +89,14 @@ export async function POST(request: Request) {
         nomeCompletoTitulo: `${data.titulacao} ${data.nome}`,
         turno_aula: data.turno_aula ?? "Noite",
         dias_aula: Array.isArray(data.dias_aula) ? data.dias_aula : [],
-        turmas: parseTurmas(data.area_atuacao),
+        // Preferir coluna turmas; area_atuacao só entra se parecer código (ex: CDIA-4A-N)
+        turmas: (() => {
+          const daColuna = parseTurmas(data.turmas);
+          if (daColuna.length > 0) return daColuna;
+          return parseTurmas(data.area_atuacao).filter(
+            (t) => /[A-Za-z].*-.*\d|\d.*-.*[A-Za-z]/.test(t)
+          );
+        })(),
         disciplina: data.disciplina ?? "",
         pesos: {
           atv1: lerPeso("atv1", pesosPadrao.atv1),

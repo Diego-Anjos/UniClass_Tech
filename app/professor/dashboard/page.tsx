@@ -23,6 +23,7 @@ import { ProfessorSettingsControl } from "@/components/professor/config-modal";
 import {
   iniciaisDoProfessor,
   limparSessaoProfessor,
+  parseTurmasProfessor,
   useProfessorSession,
 } from "@/lib/professor-session";
 
@@ -51,6 +52,16 @@ type TurmaResumo = {
   codigo: string;
   curso: string;
   turno?: string;
+};
+
+type ProfessorDb = {
+  id?: unknown;
+  nome?: unknown;
+  titulacao?: unknown;
+  area_atuacao?: unknown;
+  dias_aula?: unknown;
+  turno_aula?: unknown;
+  disciplina?: unknown;
 };
 
 type AgendaItem = {
@@ -132,34 +143,93 @@ export default function ProfessorDashboardPage() {
     async function fetchDadosBase() {
       setCarregando(true);
 
-      const areaAtuacao = professorLogado!.area_atuacao?.trim() ?? "";
       const nomeContexto =
         professorLogado!.nomeCompletoTitulo || professorLogado!.nome;
 
       try {
-        const { data: turmasData, error: turmasError } = await supabase
-          .from("turmas")
-          .select("*")
-          .ilike("curso", `%${areaAtuacao}%`);
+        // Fonte de verdade: turmas vinculadas ao professor no banco (area_atuacao = CSV de códigos)
+        let prof: ProfessorDb | null = null;
 
-        if (turmasError) {
-          console.error("Erro ao buscar turmas:", turmasError.message);
+        if (professorLogado!.id) {
+          const { data: profRaw, error: profError } = await supabase
+            .from("professores")
+            .select(
+              "id, nome, titulacao, area_atuacao, dias_aula, turno_aula, disciplina"
+            )
+            .eq("id", professorLogado!.id)
+            .single();
+
+          if (profError) {
+            console.error("Erro ao buscar professor:", profError.message);
+          } else {
+            prof = (profRaw ?? null) as ProfessorDb | null;
+          }
         }
 
-        const turmas: TurmaResumo[] = ((turmasData ?? []) as Record<string, unknown>[]).map(
-          (turma) => ({
-            id: String(turma.id),
-            codigo: String(turma.codigo ?? ""),
-            curso: String(turma.curso ?? ""),
-            turno: turma.turno ? String(turma.turno) : undefined,
-          })
+        const codigosTurmas = parseTurmasProfessor(
+          prof?.area_atuacao ??
+            professorLogado!.turmas ??
+            professorLogado!.area_atuacao
         );
+        const totalTurmas = codigosTurmas.length;
+        setTurmasAtivas(totalTurmas);
 
-        setTurmasAtivas(turmas.length);
+        let turmas: TurmaResumo[] = [];
+
+        if (codigosTurmas.length > 0) {
+          const { data: turmasData, error: turmasError } = await supabase
+            .from("turmas")
+            .select("id, codigo, curso, turno")
+            .in("codigo", codigosTurmas);
+
+          if (turmasError) {
+            console.error("Erro ao buscar turmas:", turmasError.message);
+          } else if (turmasData && turmasData.length > 0) {
+            turmas = (turmasData as Record<string, unknown>[]).map((turma) => ({
+              id: String(turma.id),
+              codigo: String(turma.codigo ?? ""),
+              curso: String(turma.curso ?? ""),
+              turno: turma.turno ? String(turma.turno) : undefined,
+            }));
+          } else {
+            // Fallback legado: area_atuacao com nome de curso (não código)
+            const areaTexto = String(
+              prof?.area_atuacao ?? professorLogado!.area_atuacao ?? ""
+            ).trim();
+            if (areaTexto && !areaTexto.includes(",")) {
+              const { data: porCurso, error: erroCurso } = await supabase
+                .from("turmas")
+                .select("id, codigo, curso, turno")
+                .ilike("curso", `%${areaTexto}%`);
+
+              if (erroCurso) {
+                console.error(
+                  "Erro ao buscar turmas por curso:",
+                  erroCurso.message
+                );
+              } else {
+                turmas = ((porCurso ?? []) as Record<string, unknown>[]).map(
+                  (turma) => ({
+                    id: String(turma.id),
+                    codigo: String(turma.codigo ?? ""),
+                    curso: String(turma.curso ?? ""),
+                    turno: turma.turno ? String(turma.turno) : undefined,
+                  })
+                );
+                if (turmas.length > 0) {
+                  setTurmasAtivas(turmas.length);
+                }
+              }
+            }
+          }
+        }
 
         // Agenda de hoje: cruza dia da semana com dias_aula do professor
+        const diasAula = Array.isArray(prof?.dias_aula)
+          ? (prof.dias_aula as string[])
+          : (professorLogado!.dias_aula ?? []);
         const diaSemanaHoje = new Date().getDay();
-        const diasPermitidos = (professorLogado!.dias_aula ?? [])
+        const diasPermitidos = diasAula
           .map((dia) => diasMapa[dia])
           .filter((n): n is number => typeof n === "number");
         const daAulaHoje =
@@ -239,7 +309,7 @@ export default function ProfessorDashboardPage() {
           }
         }
 
-        if (notas.length === 0) {
+        if (turmaIds.length > 0 && notas.length === 0) {
           listaPendencias.push({
             id: "lembrete-notas",
             titulo: "Lançamento de notas pendente para este bimestre.",
@@ -248,7 +318,10 @@ export default function ProfessorDashboardPage() {
         }
 
         setPendencias(listaPendencias);
-        await fetchAiInsight(turmas.length, nomeContexto);
+        await fetchAiInsight(
+          totalTurmas > 0 ? totalTurmas : turmas.length,
+          nomeContexto
+        );
       } catch (err) {
         console.error("Erro ao carregar dashboard:", err);
         setTurmasAtivas(0);

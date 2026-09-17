@@ -1,6 +1,6 @@
 "use client";
 
-import { FormEvent, useEffect, useMemo, useState } from "react";
+import { FormEvent, useEffect, useState } from "react";
 import Link from "next/link";
 import {
   LayoutDashboard,
@@ -43,6 +43,13 @@ const TIPOS_EVENTO = [
 
 type TipoEvento = (typeof TIPOS_EVENTO)[number];
 
+type TurmaOption = {
+  id: string;
+  codigo: string;
+  curso: string;
+  turno?: string;
+};
+
 type EventoAgenda = {
   id: string;
   titulo: string;
@@ -53,27 +60,9 @@ type EventoAgenda = {
   disciplina: string | null;
 };
 
-/** Parse turmas vindas do Supabase/sessão (array, JSON ou CSV). */
-function parseTurmasProfessor(raw: unknown): string[] {
-  if (!raw) return [];
-  if (Array.isArray(raw)) {
-    return raw.map(String).map((s) => s.trim()).filter(Boolean);
-  }
-  if (typeof raw !== "string") return [];
-  const texto = raw.trim();
-  if (!texto || texto === "—") return [];
-  try {
-    const parsed = JSON.parse(texto);
-    if (Array.isArray(parsed)) {
-      return parsed.map(String).map((s) => s.trim()).filter(Boolean);
-    }
-  } catch {
-    // CSV / texto simples
-  }
-  return texto
-    .split(",")
-    .map((s) => s.trim())
-    .filter(Boolean);
+function labelTurma(turma: TurmaOption) {
+  const turno = turma.turno ? ` (${turma.turno})` : "";
+  return `${turma.curso} - Turma ${turma.codigo}${turno}`;
 }
 
 const MESES_CURTOS = [
@@ -105,6 +94,8 @@ const inputDisabledClass =
 
 export default function AgendaSemestralPage() {
   const { professorLogado, carregandoSessao } = useProfessorSession();
+  const [turmas, setTurmas] = useState<TurmaOption[]>([]);
+  const [carregandoTurmas, setCarregandoTurmas] = useState(false);
   const [turmaSelecionada, setTurmaSelecionada] = useState("");
   const [titulo, setTitulo] = useState("");
   const [tipo, setTipo] = useState<TipoEvento | "">("");
@@ -115,30 +106,86 @@ export default function AgendaSemestralPage() {
   const [salvando, setSalvando] = useState(false);
   const [excluindoId, setExcluindoId] = useState<string | null>(null);
 
-  const turmasDoProfessor = useMemo(
-    () =>
-      parseTurmasProfessor(
-        professorLogado?.turmas ?? professorLogado?.area_atuacao
-      ),
-    [professorLogado?.turmas, professorLogado?.area_atuacao]
-  );
-
   const disciplinaProfessor = professorLogado?.disciplina?.trim() || "";
 
+  // Mesma lógica de chamada/notas: turmas da área do professor no Supabase
   useEffect(() => {
-    if (!turmaSelecionada) {
-      setEventos([]);
+    if (!professorLogado) {
+      setTurmas([]);
+      setCarregandoTurmas(false);
       return;
     }
 
     let cancelado = false;
 
-    async function carregarEventos() {
+    async function fetchTurmas() {
+      setCarregandoTurmas(true);
+      const areaAtuacao = professorLogado!.area_atuacao?.trim() ?? "";
+
+      const { data, error } = await supabase
+        .from("turmas")
+        .select("*")
+        .ilike("curso", `%${areaAtuacao}%`);
+
+      if (cancelado) return;
+
+      if (error) {
+        console.error("Erro ao buscar turmas:", error.message);
+        setTurmas([]);
+        setTurmaSelecionada("");
+        setCarregandoTurmas(false);
+        return;
+      }
+
+      const lista = ((data ?? []) as Record<string, unknown>[]).map(
+        (turma) => ({
+          id: String(turma.id),
+          codigo: String(turma.codigo ?? ""),
+          curso: String(turma.curso ?? ""),
+          turno: turma.turno ? String(turma.turno) : undefined,
+        })
+      );
+
+      setTurmas(lista);
+
+      // Auto-select se só houver uma turma; senão preserva seleção válida
+      // Usa codigo (compatível com calendario_academico.turma / alunos.turma)
+      if (lista.length === 1) {
+        setTurmaSelecionada(lista[0].codigo);
+      } else {
+        setTurmaSelecionada((prev) =>
+          prev && lista.some((t) => t.codigo === prev) ? prev : ""
+        );
+      }
+      setCarregandoTurmas(false);
+    }
+
+    void fetchTurmas();
+
+    return () => {
+      cancelado = true;
+    };
+  }, [professorLogado]);
+
+  // Recarrega eventos ao trocar a turma
+  useEffect(() => {
+    let cancelado = false;
+
+    setEventos([]);
+
+    if (!turmaSelecionada) {
+      setCarregandoEventos(false);
+      return;
+    }
+
+    async function carregarEventos(codigoTurma: string) {
       setCarregandoEventos(true);
       const { data, error } = await supabase
         .from("calendario_academico")
-        .select("id, titulo, tipo_evento, data_evento, descricao, turma, disciplina")
-        .eq("turma", turmaSelecionada)
+        .select(
+          "id, titulo, tipo_evento, data_evento, descricao, turma, disciplina"
+        )
+        .eq("turma", codigoTurma)
         .order("data_evento", { ascending: true });
 
       if (cancelado) return;
@@ -154,7 +201,7 @@ export default function AgendaSemestralPage() {
       setCarregandoEventos(false);
     }
 
-    void carregarEventos();
+    void carregarEventos(turmaSelecionada);
 
     return () => {
       cancelado = true;
@@ -347,20 +394,32 @@ export default function AgendaSemestralPage() {
               <select
                 id="filtro-turma"
                 value={turmaSelecionada}
-                onChange={(e) => setTurmaSelecionada(e.target.value)}
-                className={inputClass + " cursor-pointer"}
+                onChange={(e) => {
+                  const value = e.target.value;
+                  setTurmaSelecionada(value);
+                  setEventos([]);
+                }}
+                disabled={carregandoTurmas}
+                className={
+                  inputClass +
+                  " cursor-pointer disabled:opacity-60 disabled:cursor-not-allowed"
+                }
               >
-                <option value="">Selecione a Turma</option>
-                {turmasDoProfessor.length === 0 ? (
-                  <option value="" disabled>
-                    Nenhuma turma atribuída ao docente
-                  </option>
+                {carregandoTurmas ? (
+                  <option value="">Carregando turmas...</option>
+                ) : turmas.length === 0 ? (
+                  <option value="">Nenhuma turma da sua área</option>
                 ) : (
-                  turmasDoProfessor.map((turma) => (
-                    <option key={turma} value={turma}>
-                      {turma}
-                    </option>
-                  ))
+                  <>
+                    {turmas.length > 1 && (
+                      <option value="">Selecione a Turma</option>
+                    )}
+                    {turmas.map((turma) => (
+                      <option key={turma.id} value={turma.codigo}>
+                        {labelTurma(turma)}
+                      </option>
+                    ))}
+                  </>
                 )}
               </select>
             </div>

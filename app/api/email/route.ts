@@ -36,9 +36,14 @@ export async function POST(req: Request) {
       );
     }
 
+    const destinatario =
+      process.env.NODE_ENV === "development"
+        ? "diego2000gomes@gmail.com"
+        : to;
+
     const { data, error } = await resend.emails.send({
       from: "UniClassTech <onboarding@resend.dev>",
-      to: [to],
+      to: [destinatario],
       subject,
       ...(text ? { text } : {}),
       ...(html ? { html } : {}),
