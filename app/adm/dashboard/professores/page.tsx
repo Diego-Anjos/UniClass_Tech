@@ -16,10 +16,11 @@ import {
   Clock,
   Pencil,
   Trash2,
-  AlertTriangle,
 } from "lucide-react";
+import { toast } from "sonner";
 import { supabase } from "@/lib/supabase";
 import { ModalFeedback } from "@/components/ModalFeedback";
+import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import {
   ANDARES,
   chaveAlocacao,
@@ -304,7 +305,10 @@ export default function GestaoProfessoresPage() {
   );
   const [turmaAlocadaId, setTurmaAlocadaId] = useState<string | null>(null);
   const [editingId, setEditingId] = useState<string | null>(null);
-  const [itemToDelete, setItemToDelete] = useState<string | null>(null);
+  const [professorToDelete, setProfessorToDelete] = useState<string | null>(
+    null
+  );
+  const [excluindoProfessor, setExcluindoProfessor] = useState(false);
   const [turmasDisponiveis, setTurmasDisponiveis] = useState<TurmaDisponivel[]>([]);
   const [modalFeedback, setModalFeedback] = useState<{
     aberto: boolean;
@@ -726,15 +730,21 @@ export default function GestaoProfessoresPage() {
   }
 
   async function confirmDelete() {
-    if (!itemToDelete) return;
-    const { error } = await supabase.from("professores").delete().eq("id", itemToDelete);
+    if (!professorToDelete || excluindoProfessor) return;
+    setExcluindoProfessor(true);
+    const { error } = await supabase
+      .from("professores")
+      .delete()
+      .eq("id", professorToDelete);
+    setExcluindoProfessor(false);
     if (error) {
       console.error("Erro ao excluir professor:", error.message);
-      setItemToDelete(null);
+      toast.error("Não foi possível excluir o professor.");
       return;
     }
-    setItemToDelete(null);
+    setProfessorToDelete(null);
     await fetchProfessores();
+    toast.success("Professor excluído com sucesso!");
   }
 
   function handleEdit(prof: Professor) {
@@ -1093,7 +1103,10 @@ export default function GestaoProfessoresPage() {
                             </button>
                             <button
                               type="button"
-                              onClick={(e) => { e.stopPropagation(); setItemToDelete(prof.id); }}
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                setProfessorToDelete(prof.id);
+                              }}
                               className="p-1.5 rounded-md text-zinc-500 hover:text-red-500 hover:bg-zinc-800 transition-colors"
                               aria-label="Excluir professor"
                             >
@@ -1936,40 +1949,16 @@ export default function GestaoProfessoresPage() {
             </div>
           </div>
         )}
-        {/* Modal Confirmação de Exclusão */}
-        {itemToDelete && (
-          <div className="fixed inset-0 z-[70] flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm">
-            <div className="bg-zinc-900 border border-zinc-800 rounded-xl p-6 w-full max-w-md shadow-2xl">
-              <div className="flex flex-col items-center text-center gap-4">
-                <div className="w-12 h-12 rounded-full bg-red-950/60 border border-red-900/50 flex items-center justify-center">
-                  <AlertTriangle className="w-6 h-6 text-red-500" />
-                </div>
-                <div>
-                  <h3 className="text-lg font-semibold text-white">Confirmar Exclusão</h3>
-                  <p className="text-sm text-zinc-400 mt-1">
-                    Esta ação é irreversível. O professor será removido permanentemente do sistema.
-                  </p>
-                </div>
-                <div className="flex gap-3 w-full mt-2">
-                  <button
-                    type="button"
-                    onClick={() => setItemToDelete(null)}
-                    className="flex-1 px-4 py-2.5 rounded-lg bg-zinc-800 hover:bg-zinc-700 text-white text-sm font-medium transition-colors"
-                  >
-                    Cancelar
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => void confirmDelete()}
-                    className="flex-1 px-4 py-2.5 rounded-lg bg-red-600 hover:bg-red-700 text-white text-sm font-medium transition-colors"
-                  >
-                    Sim, Excluir
-                  </button>
-                </div>
-              </div>
-            </div>
-          </div>
-        )}
+        <ConfirmDialog
+          isOpen={!!professorToDelete}
+          onClose={() => {
+            if (!excluindoProfessor) setProfessorToDelete(null);
+          }}
+          onConfirm={() => void confirmDelete()}
+          title="Tem certeza?"
+          description="Esta ação é irreversível. O professor será removido permanentemente do sistema."
+          loading={excluindoProfessor}
+        />
 
         <ModalFeedback
           aberto={modalFeedback.aberto}

@@ -20,6 +20,7 @@ import {
 import { toast } from "sonner";
 import { supabase } from "@/lib/supabase";
 import { ModalFeedback } from "@/components/ModalFeedback";
+import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import type { BoletimNota } from "@/components/pdf/BoletimPDF";
 
 const BoletimDownloadButton = dynamic(
@@ -474,7 +475,8 @@ export default function GestaoAlunosPage() {
   const [formError, setFormError] = useState<string | null>(null);
   const [formData, setFormData] = useState<FormDataAluno>(formInicial);
   const [editingId, setEditingId] = useState<string | null>(null);
-  const [itemToDelete, setItemToDelete] = useState<string | null>(null);
+  const [alunoToDelete, setAlunoToDelete] = useState<string | null>(null);
+  const [excluindoAluno, setExcluindoAluno] = useState(false);
   const [modalFeedback, setModalFeedback] = useState<{
     aberto: boolean;
     tipo: "sucesso" | "erro" | "atencao";
@@ -853,67 +855,42 @@ export default function GestaoAlunosPage() {
       turmas?: unknown;
     };
 
-    let rows: ProfessorRow[] = [];
+    // Turmas atribuídas são salvas em `area_atuacao` (CSV) na tela de professores.
+    // Evita `.contains('turmas', ...)` — coluna pode não ser array e gera 400 no PostgREST.
+    const { data, error } = await supabase
+      .from("professores")
+      .select("id, nome, titulacao, area_atuacao");
 
-    // 1) Preferência: coluna array `turmas` (PostgREST .contains)
-    if (codigo) {
-      const porArray = await supabase
-        .from("professores")
-        .select("id, nome, titulacao, area_atuacao, turmas")
-        .contains("turmas", [codigo]);
-
-      if (!porArray.error && porArray.data) {
-        rows = porArray.data as ProfessorRow[];
-      }
+    if (error) {
+      console.error(
+        "Erro ao buscar professores da turma no prontuário:",
+        error.message
+      );
+      setProfessoresDaTurmaProntuario([]);
+      return;
     }
 
-    // 2) Busca ampla + filtro local (CSV/JSON em area_atuacao ou turmas)
-    if (rows.length === 0) {
-      const { data, error } = await supabase
-        .from("professores")
-        .select("id, nome, titulacao, area_atuacao, turmas");
+    const todos = (data ?? []) as ProfessorRow[];
 
-      let todos: ProfessorRow[] = [];
+    let rows = todos.filter((p) =>
+      professorTemTurma(
+        { area_atuacao: p.area_atuacao, turmas: p.turmas },
+        codigo,
+        curso,
+        "codigo"
+      )
+    );
 
-      if (error) {
-        // Coluna `turmas` pode não existir — tenta só area_atuacao
-        const fallback = await supabase
-          .from("professores")
-          .select("id, nome, titulacao, area_atuacao");
-
-        if (fallback.error) {
-          console.error(
-            "Erro ao buscar professores da turma no prontuário:",
-            fallback.error.message
-          );
-          setProfessoresDaTurmaProntuario([]);
-          return;
-        }
-        todos = (fallback.data ?? []) as ProfessorRow[];
-      } else {
-        todos = (data ?? []) as ProfessorRow[];
-      }
-
+    // Legado: se ninguém tiver o código da turma, usa o curso (tela de Turmas)
+    if (rows.length === 0 && curso) {
       rows = todos.filter((p) =>
         professorTemTurma(
           { area_atuacao: p.area_atuacao, turmas: p.turmas },
           codigo,
           curso,
-          "codigo"
+          "curso"
         )
       );
-
-      // Legado: se ninguém tiver o código da turma, usa o curso (tela de Turmas)
-      if (rows.length === 0 && curso) {
-        rows = todos.filter((p) =>
-          professorTemTurma(
-            { area_atuacao: p.area_atuacao, turmas: p.turmas },
-            codigo,
-            curso,
-            "curso"
-          )
-        );
-      }
     }
 
     const mapeados: ProfessorProntuario[] = [];
@@ -990,13 +967,39 @@ export default function GestaoAlunosPage() {
 
     setEnviandoEmail(aluno.id);
     try {
+      const nomeAluno = aluno.nome.trim() || "aluno(a)";
+      const nomeSeguro = nomeAluno
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;")
+        .replace(/"/g, "&quot;");
+      const texto =
+        `Olá, ${nomeAluno}! Bem-vindo(a) a bordo.\n\n` +
+        "As portas do conhecimento estão oficialmente abertas. Sua conta no UniClassTech foi configurada com sucesso. " +
+        "A partir de agora, seu Diário de Classe, Boletim Inteligente e Mapa de Salas estão a um clique de distância.";
+      const html = `
+<div style="background-color: #000000; padding: 40px 20px; font-family: sans-serif; color: #ffffff;">
+  <div style="max-width: 600px; margin: 0 auto; background-color: #141414; border: 1px solid #333; border-radius: 8px; padding: 30px;">
+    <h2 style="margin-top: 0; font-size: 24px; font-weight: bold;">UniClassTech</h2>
+    <h3 style="font-size: 18px; font-weight: 600; margin-top: 20px;">Olá, ${nomeSeguro}! Bem-vindo(a) a bordo. 🚀</h3>
+    <p style="font-size: 15px; line-height: 1.6; color: #cccccc; margin-top: 15px;">
+      As portas do conhecimento estão oficialmente abertas. Sua conta no UniClassTech foi configurada com sucesso. A partir de agora, seu Diário de Classe, Boletim Inteligente e Mapa de Salas estão a um clique de distância.
+    </p>
+    <a href="#" style="display: inline-block; background-color: #ffffff; color: #000000; text-decoration: none; padding: 12px 24px; border-radius: 6px; font-weight: bold; margin-top: 25px; font-size: 14px;">
+      Acessar Portal do Aluno
+    </a>
+  </div>
+</div>
+      `.trim();
+
       const res = await fetch("/api/email", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          para: destinatario,
-          assunto: "Bem-vindo ao UniClassTech! 🚀",
-          nomeAluno: aluno.nome,
+          to: destinatario,
+          subject: "Bem-vindo ao UniClassTech! 🚀",
+          text: texto,
+          html,
         }),
       });
 
@@ -1115,15 +1118,21 @@ export default function GestaoAlunosPage() {
   }
 
   async function confirmDelete() {
-    if (!itemToDelete) return;
-    const { error } = await supabase.from("alunos").delete().eq("id", itemToDelete);
+    if (!alunoToDelete || excluindoAluno) return;
+    setExcluindoAluno(true);
+    const { error } = await supabase
+      .from("alunos")
+      .delete()
+      .eq("id", alunoToDelete);
+    setExcluindoAluno(false);
     if (error) {
       console.error("Erro ao excluir aluno:", error.message);
-      setItemToDelete(null);
+      toast.error("Não foi possível excluir o aluno.");
       return;
     }
-    setItemToDelete(null);
+    setAlunoToDelete(null);
     await fetchAlunos();
+    toast.success("Aluno excluído com sucesso!");
   }
 
   async function handleEdit(aluno: Aluno) {
@@ -1500,7 +1509,10 @@ export default function GestaoAlunosPage() {
                             </button>
                             <button
                               type="button"
-                              onClick={(e) => { e.stopPropagation(); setItemToDelete(aluno.id); }}
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                setAlunoToDelete(aluno.id);
+                              }}
                               className="p-1.5 rounded-md text-zinc-500 hover:text-red-500 hover:bg-zinc-800 transition-colors"
                               aria-label="Excluir aluno"
                             >
@@ -2355,40 +2367,16 @@ export default function GestaoAlunosPage() {
             </div>
           </div>
         )}
-        {/* Modal Confirmação de Exclusão */}
-        {itemToDelete && (
-          <div className="fixed inset-0 z-[70] flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm">
-            <div className="bg-zinc-900 border border-zinc-800 rounded-xl p-6 w-full max-w-md shadow-2xl">
-              <div className="flex flex-col items-center text-center gap-4">
-                <div className="w-12 h-12 rounded-full bg-red-950/60 border border-red-900/50 flex items-center justify-center">
-                  <AlertTriangle className="w-6 h-6 text-red-500" />
-                </div>
-                <div>
-                  <h3 className="text-lg font-semibold text-white">Confirmar Exclusão</h3>
-                  <p className="text-sm text-zinc-400 mt-1">
-                    Esta ação é irreversível. O aluno será removido permanentemente do sistema.
-                  </p>
-                </div>
-                <div className="flex gap-3 w-full mt-2">
-                  <button
-                    type="button"
-                    onClick={() => setItemToDelete(null)}
-                    className="flex-1 px-4 py-2.5 rounded-lg bg-zinc-800 hover:bg-zinc-700 text-white text-sm font-medium transition-colors"
-                  >
-                    Cancelar
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => void confirmDelete()}
-                    className="flex-1 px-4 py-2.5 rounded-lg bg-red-600 hover:bg-red-700 text-white text-sm font-medium transition-colors"
-                  >
-                    Sim, Excluir
-                  </button>
-                </div>
-              </div>
-            </div>
-          </div>
-        )}
+        <ConfirmDialog
+          isOpen={!!alunoToDelete}
+          onClose={() => {
+            if (!excluindoAluno) setAlunoToDelete(null);
+          }}
+          onConfirm={() => void confirmDelete()}
+          title="Tem certeza?"
+          description="Esta ação é irreversível. O aluno será removido permanentemente do sistema."
+          loading={excluindoAluno}
+        />
 
         <ModalFeedback
           aberto={modalFeedback.aberto}

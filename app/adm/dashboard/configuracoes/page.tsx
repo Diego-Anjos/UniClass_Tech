@@ -3,11 +3,8 @@
 import { useState, useEffect } from "react";
 import { supabase } from "@/lib/supabase";
 import {
-  Building,
   Unplug,
   ShieldAlert,
-  Upload,
-  Save,
   Sparkles,
   Mail,
   CheckCircle2,
@@ -18,10 +15,7 @@ import {
 import { toast } from "sonner";
 import { ModalFeedback } from "@/components/ModalFeedback";
 
-type AbaConfig =
-  | "Instituição"
-  | "Integrações e APIs"
-  | "Segurança e Logs";
+type AbaConfig = "Integrações e APIs" | "Segurança e Logs";
 
 type StatusConexao = "Conectado" | "Desconectado";
 
@@ -33,8 +27,7 @@ type Integracao = {
   icon: typeof Sparkles;
 };
 
-const abas: { id: AbaConfig; label: string; icon: typeof Building }[] = [
-  { id: "Instituição", label: "Instituição", icon: Building },
+const abas: { id: AbaConfig; label: string; icon: typeof Unplug }[] = [
   { id: "Integrações e APIs", label: "Integrações e APIs", icon: Unplug },
   { id: "Segurança e Logs", label: "Segurança e Logs", icon: ShieldAlert },
 ];
@@ -58,11 +51,7 @@ type LogAuditoria = {
 };
 
 export default function ConfiguracoesSistemaPage() {
-  const [abaAtiva, setAbaAtiva] = useState<AbaConfig>("Instituição");
-
-  const [nomeInstituicao, setNomeInstituicao] = useState("UniClass Tech University");
-  const [cnpj, setCnpj] = useState("12.345.678/0001-90");
-  const [logoNome, setLogoNome] = useState<string | null>(null);
+  const [abaAtiva, setAbaAtiva] = useState<AbaConfig>("Integrações e APIs");
 
   const [modalFeedback, setModalFeedback] = useState<{
     aberto: boolean;
@@ -75,7 +64,6 @@ export default function ConfiguracoesSistemaPage() {
     titulo: "",
     mensagem: "",
   });
-  const [salvando, setSalvando] = useState(false);
 
   function fecharFeedback() {
     setModalFeedback((prev) => ({ ...prev, aberto: false }));
@@ -100,58 +88,9 @@ export default function ConfiguracoesSistemaPage() {
     setCarregandoLogs(false);
   }
 
-  // Carregar configurações e logs do Supabase ao montar a página
   useEffect(() => {
-    async function carregarConfiguracoes() {
-      const { data, error } = await supabase
-        .from("configuracoes")
-        .select("*")
-        .eq("id", 1)
-        .single();
-
-      if (error) {
-        console.error("Erro ao carregar configurações:", error.message);
-        return;
-      }
-
-      if (data) {
-        if (data.nome_instituicao) setNomeInstituicao(data.nome_instituicao);
-        if (data.cnpj) setCnpj(data.cnpj);
-      }
-    }
-
-    carregarConfiguracoes();
     fetchLogs();
   }, []);
-
-  // Salvar configurações no Supabase
-  async function salvarConfiguracoes(aba: AbaConfig) {
-    if (aba !== "Instituição") return;
-
-    setSalvando(true);
-
-    const { error } = await supabase
-      .from("configuracoes")
-      .update({
-        nome_instituicao: nomeInstituicao,
-        cnpj: cnpj,
-      })
-      .eq("id", 1);
-
-    setSalvando(false);
-
-    if (error) {
-      console.error("Erro ao salvar configurações:", error.message);
-      return;
-    }
-
-    setModalFeedback({
-      aberto: true,
-      tipo: "sucesso",
-      titulo: "Configurações salvas",
-      mensagem: "Dados da instituição salvos com sucesso!",
-    });
-  }
 
   // Gemini e Resend ficam separados: Gemini tem estado próprio
   const [integracoes, setIntegracoes] = useState<Integracao[]>([
@@ -173,10 +112,6 @@ export default function ConfiguracoesSistemaPage() {
   const [geminiStatus, setGeminiStatus] = useState<
     "Conectado" | "Desconectado" | "Testando..."
   >("Conectado");
-
-  function handleLogoChange(file: File | null) {
-    setLogoNome(file ? file.name : null);
-  }
 
   async function testarResend() {
     setTestando("resend");
@@ -335,88 +270,6 @@ export default function ConfiguracoesSistemaPage() {
 
             {/* Área de conteúdo */}
             <div className="flex-1 min-w-0">
-              {abaAtiva === "Instituição" && (
-                <section className="rounded-xl bg-zinc-950 border border-zinc-800 p-6 space-y-6">
-                  <div>
-                    <h2 className="text-sm font-semibold text-white">Dados da Instituição</h2>
-                    <p className="text-xs text-zinc-500 mt-1">
-                      Informações exibidas em documentos e comunicações oficiais.
-                    </p>
-                  </div>
-
-                  <div className="space-y-4">
-                    <div>
-                      <label className="block text-xs text-zinc-500 uppercase tracking-widest mb-2">
-                        Nome da Instituição
-                      </label>
-                      <input
-                        type="text"
-                        value={nomeInstituicao}
-                        onChange={(e) => setNomeInstituicao(e.target.value)}
-                        className="w-full px-4 py-2.5 rounded-lg bg-zinc-900 border border-zinc-800 text-sm text-white outline-none focus:border-zinc-600 transition-colors"
-                      />
-                    </div>
-
-                    <div>
-                      <label className="block text-xs text-zinc-500 uppercase tracking-widest mb-2">
-                        CNPJ
-                      </label>
-                      <input
-                        type="text"
-                        value={cnpj}
-                        onChange={(e) => setCnpj(e.target.value)}
-                        className="w-full px-4 py-2.5 rounded-lg bg-zinc-900 border border-zinc-800 text-sm text-white outline-none focus:border-zinc-600 transition-colors"
-                      />
-                    </div>
-
-                    <div>
-                      <label className="block text-xs text-zinc-500 uppercase tracking-widest mb-2">
-                        Logo da Instituição
-                      </label>
-                      <label className="flex flex-col items-center justify-center gap-3 w-full min-h-[140px] rounded-xl border border-dashed border-zinc-700 bg-zinc-900/60 hover:bg-zinc-900 hover:border-zinc-500 transition-colors cursor-pointer px-6 py-8">
-                        <div className="w-10 h-10 rounded-lg bg-zinc-950 border border-zinc-800 flex items-center justify-center">
-                          <Upload className="w-5 h-5 text-zinc-400" />
-                        </div>
-                        <div className="text-center">
-                          <p className="text-sm text-zinc-300">
-                            Arraste e solte a logo aqui, ou{" "}
-                            <span className="text-white font-medium underline underline-offset-2">
-                              escolha um arquivo
-                            </span>
-                          </p>
-                          <p className="text-xs text-zinc-500 mt-1">
-                            PNG ou SVG · máx. 2 MB
-                          </p>
-                          {logoNome && (
-                            <p className="text-xs text-green-400 mt-2">{logoNome}</p>
-                          )}
-                        </div>
-                        <input
-                          type="file"
-                          accept="image/png,image/svg+xml,image/jpeg"
-                          className="hidden"
-                          onChange={(e) =>
-                            handleLogoChange(e.target.files?.[0] ?? null)
-                          }
-                        />
-                      </label>
-                    </div>
-                  </div>
-
-                  <div className="pt-2">
-                    <button
-                      type="button"
-                      onClick={() => salvarConfiguracoes("Instituição")}
-                      disabled={salvando}
-                      className="inline-flex items-center gap-2 px-4 py-2.5 rounded-lg bg-white text-black text-sm font-medium hover:bg-zinc-200 transition-colors disabled:opacity-60 disabled:cursor-not-allowed"
-                    >
-                      <Save className="w-4 h-4" />
-                      {salvando ? "Salvando..." : "Salvar Instituição"}
-                    </button>
-                  </div>
-                </section>
-              )}
-
               {abaAtiva === "Integrações e APIs" && (
                 <section className="space-y-4">
                   <div className="mb-2">
