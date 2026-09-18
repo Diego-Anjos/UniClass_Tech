@@ -5,6 +5,8 @@ import {
   createGenAI,
   generateJsonWithFallback,
 } from "@/lib/gemini-fallback";
+import { blocoPreferenciasIa } from "@/lib/professor-preferencias";
+import { buscarPreferenciasProfessor } from "@/lib/professor-preferencias-server";
 
 const genAI = createGenAI();
 
@@ -16,10 +18,12 @@ export async function POST(req: NextRequest) {
   if (denied) return denied;
 
   try {
-    const { turma, totalAlunos, totalFaltas } = await req.json();
+    const { turma, totalAlunos, totalFaltas, professorId } = await req.json();
+    const prefs = await buscarPreferenciasProfessor(professorId);
 
     const prompt = buildPrompt(
       `Você é um assistente pedagógico. Analise os dados de presença da turma e gere um alerta conciso de até duas frases para o professor sobre retenção, engajamento ou acompanhamento de faltas. Não use markdown especial.
+${blocoPreferenciasIa(prefs)}
 Retorne no formato: { "insight": "seu alerta aqui" }`,
       `Na turma ${turma}, de ${totalAlunos} alunos registrados hoje, houve ${totalFaltas} falta(s). Dê uma orientação direta ao professor sobre o engajamento desta aula.`
     );

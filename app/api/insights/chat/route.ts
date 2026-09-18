@@ -5,6 +5,8 @@ import {
   createGenAI,
   generateJsonWithFallback,
 } from "@/lib/gemini-fallback";
+import { blocoPreferenciasIa } from "@/lib/professor-preferencias";
+import { buscarPreferenciasProfessor } from "@/lib/professor-preferencias-server";
 
 const genAI = createGenAI();
 
@@ -16,7 +18,15 @@ export async function POST(req: NextRequest) {
   if (denied) return denied;
 
   try {
-    const { messages, professor, contextoAluno } = await req.json();
+    const {
+      messages,
+      professor,
+      professorId,
+      contextoAluno,
+      aluno,
+    } = await req.json();
+
+    const prefs = await buscarPreferenciasProfessor(professorId);
 
     const historico = Array.isArray(messages)
       ? messages
@@ -27,13 +37,22 @@ export async function POST(req: NextRequest) {
           .join("\n")
       : "";
 
+    const fatosAluno =
+      aluno && typeof aluno === "object"
+        ? `\nFatos estruturados (fonte do ERP — não invente valores fora disso):
+${JSON.stringify(aluno)}`
+        : "";
+
     const prompt = buildPrompt(
       `Você é um assistente pedagógico de Inteligência Artificial integrado ao ERP UniClassTech, auxiliando o(a) ${professor}.
 Seu objetivo é responder dúvidas sobre o desempenho, faltas e perfil do aluno selecionado.
 Aja de forma natural, consultiva e direta, como um colega de trabalho humano conversando no chat. Não use roteiros engessados.
+${blocoPreferenciasIa(prefs)}
+REGRAS: use APENAS os dados fornecidos no contexto; se faltar informação, diga que não há dado no sistema — nunca invente notas, faltas ou percentuais.
 
 Contexto atual do aluno selecionado no painel do professor:
-${contextoAluno}
+${contextoAluno || "(sem contexto textual)"}
+${fatosAluno}
 
 Responda sempre em português do Brasil de forma clara e sem usar formatações excessivas.
 Retorne no formato: { "reply": "sua resposta aqui" }`,

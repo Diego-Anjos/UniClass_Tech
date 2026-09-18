@@ -5,6 +5,8 @@ import {
   createGenAI,
   generateJsonWithFallback,
 } from "@/lib/gemini-fallback";
+import { blocoPreferenciasIa } from "@/lib/professor-preferencias";
+import { buscarPreferenciasProfessor } from "@/lib/professor-preferencias-server";
 
 const genAI = createGenAI();
 
@@ -26,6 +28,7 @@ export async function POST(req: NextRequest) {
 
   try {
     const body = await req.json();
+    const prefs = await buscarPreferenciasProfessor(body.professorId);
 
     const turma = String(body.turma ?? "Turma não informada").trim();
     let total = toNonNegInt(body.total);
@@ -37,7 +40,6 @@ export async function POST(req: NextRequest) {
       total = presentes + faltas;
     }
     if (presentes + faltas !== total && total > 0) {
-      // Prioriza os contadores enviados e recalcula total se necessário
       if (presentes + faltas > 0) {
         total = presentes + faltas;
       } else {
@@ -49,12 +51,13 @@ export async function POST(req: NextRequest) {
     const taxaPresenca =
       total > 0 ? Math.round((presentes / total) * 100) : 0;
     const taxaFalta = total > 0 ? Math.round((faltas / total) * 100) : 0;
+    const limiarEvasao = prefs.regua_evasao;
 
-    // Classificação determinística — a IA não decide o tipo com base em números inventados
+    // Classificação determinística — usa a régua de evasão do docente
     const tipoAlerta =
       faltas === 0 && total > 0
         ? "ENGAJAMENTO ALTO"
-        : taxaFalta >= 20
+        : taxaFalta >= limiarEvasao
           ? "ALERTA DE FREQUÊNCIA"
           : taxaPresenca >= 90
             ? "ENGAJAMENTO ALTO"
@@ -63,6 +66,7 @@ export async function POST(req: NextRequest) {
     const prompt = buildPrompt(
       `Você é um assistente pedagógico da UniClassTech.
 Gere UM insight curto (máximo 2 frases) sobre a chamada de HOJE.
+${blocoPreferenciasIa(prefs)}
 
 REGRAS OBRIGATÓRIAS:
 - Use EXATAMENTE os números fornecidos abaixo. NÃO invente, arredonde de outra forma nem alucine totais, presenças, faltas ou porcentagens.
@@ -70,7 +74,7 @@ REGRAS OBRIGATÓRIAS:
 - Mencione na mensagem: total de alunos, presentes e faltas (os valores literais recebidos).
 - tipoAlerta deve ser exatamente: "${tipoAlerta}"
 - Retorne APENAS JSON: { "tipoAlerta": "${tipoAlerta}", "mensagem": "texto aqui" }`,
-      `A turma "${turma}" tem ${total} alunos. Hoje tivemos ${presentes} presenças e ${faltas} faltas (taxa de presença ${taxaPresenca}%, taxa de ausência ${taxaFalta}%). Com base nisso, gere um alerta curto sobre o engajamento de hoje.`
+      `A turma "${turma}" tem ${total} alunos. Hoje tivemos ${presentes} presenças e ${faltas} faltas (taxa de presença ${taxaPresenca}%, taxa de ausência ${taxaFalta}%). Limiar de alerta de evasão do docente: ${limiarEvasao}%. Com base nisso, gere um alerta curto sobre o engajamento de hoje.`
     );
 
     const data = await generateJsonWithFallback(genAI, prompt);

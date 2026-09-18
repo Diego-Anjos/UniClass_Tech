@@ -5,6 +5,8 @@ import {
   createGenAI,
   generateJsonWithFallback,
 } from "@/lib/gemini-fallback";
+import { blocoPreferenciasIa } from "@/lib/professor-preferencias";
+import { buscarPreferenciasProfessor } from "@/lib/professor-preferencias-server";
 
 const genAI = createGenAI();
 
@@ -19,6 +21,7 @@ export async function POST(req: NextRequest) {
     const body = await req.json();
     const {
       professor,
+      professorId,
       filtros,
       metricasGlobais,
       codigo,
@@ -29,16 +32,19 @@ export async function POST(req: NextRequest) {
       capacidade,
     } = body;
 
+    const prefs = await buscarPreferenciasProfessor(professorId);
+
     // Payload do painel do professor (métricas filtradas)
     if (metricasGlobais || filtros) {
       const prompt = buildPrompt(
         `Você é um analista de dados educacionais ajudando o(a) ${professor}.
 Com base nas métricas globais da turma (médias de notas e frequência) filtradas por ${filtros?.ano} e ${filtros?.semestre}, faça uma breve análise de desempenho (máximo de 3 frases).
 Aponte tendências e dê uma recomendação rápida.
+${blocoPreferenciasIa(prefs)}
 REGRAS OBRIGATÓRIAS:
 1. RESPONDA ESTRITAMENTE EM PORTUGUÊS DO BRASIL.
 2. NUNCA utilize palavras em inglês.
-3. Mantenha um tom profissional e direto.
+3. Mantenha o tom definido nas preferências do docente.
 Retorne no formato: { "analise": "seu texto aqui", "insight": "mesmo texto aqui" }`,
         `Métricas atuais: ${JSON.stringify(metricasGlobais)}`
       );
@@ -55,6 +61,7 @@ Retorne no formato: { "analise": "seu texto aqui", "insight": "mesmo texto aqui"
     const prompt = buildPrompt(
       `Você é um analista acadêmico do ERP UniClassTech.
 Analise a turma e retorne um parágrafo curto (máximo 3 frases) em português do Brasil sobre ocupação, engajamento e recomendações de gestão. Sem markdown.
+${blocoPreferenciasIa(prefs)}
 Retorne no formato: { "analise": "seu texto aqui", "insight": "mesmo texto aqui" }`,
       `Turma: ${codigo}
 Curso: ${curso}

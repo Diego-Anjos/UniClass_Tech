@@ -5,6 +5,8 @@ import {
   createGenAI,
   generateJsonWithFallback,
 } from "@/lib/gemini-fallback";
+import { blocoPreferenciasIa } from "@/lib/professor-preferencias";
+import { buscarPreferenciasProfessor } from "@/lib/professor-preferencias-server";
 
 const genAI = createGenAI();
 
@@ -16,10 +18,13 @@ export async function POST(req: NextRequest) {
   if (denied) return denied;
 
   try {
-    const { escopo, totalTurmas, alunosEmRisco } = await req.json();
+    const { escopo, totalTurmas, alunosEmRisco, professorId } =
+      await req.json();
+    const prefs = await buscarPreferenciasProfessor(professorId);
 
     const prompt = buildPrompt(
       `Você é um especialista em análise preditiva educacional da plataforma UniClassTech. Com base nos dados fornecidos, gere um resumo executivo de exatamente DUAS frases com métricas ou ações preventivas (sem formatação markdown).
+${blocoPreferenciasIa(prefs)}
 Retorne no formato: { "insight": "seu resumo aqui" }`,
       `Escopo: ${escopo}. Total de turmas ativas: ${totalTurmas}. Alunos detectados em situação de risco: ${alunosEmRisco}. Destaque uma recomendação preditiva rápida para evitar evasão e melhorar o aproveitamento.`
     );

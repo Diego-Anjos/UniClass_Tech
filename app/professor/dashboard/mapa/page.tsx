@@ -14,8 +14,8 @@ import {
 } from "lucide-react";
 import { MapaSalas } from "@/components/MapaSalas";
 import { ProfessorSettingsControl } from "@/components/professor/config-modal";
+import { ProfessorAvatar } from "@/components/professor/professor-avatar";
 import {
-  iniciaisDoProfessor,
   limparSessaoProfessor,
   useProfessorSession,
 } from "@/lib/professor-session";
@@ -41,9 +41,6 @@ export default function ProfessorMapaPage() {
     );
   }
 
-  const iniciais = iniciaisDoProfessor(
-    professorLogado.nome || professorLogado.nomeCompletoTitulo
-  );
 
   return (
     <div className="flex h-screen bg-black text-white overflow-hidden">
@@ -61,9 +58,11 @@ export default function ProfessorMapaPage() {
         <div className="px-4 py-5 border-b border-zinc-800">
           <div className="flex items-center justify-between gap-3">
             <div className="flex items-center gap-3 min-w-0">
-              <div className="w-10 h-10 rounded-full bg-zinc-800 flex items-center justify-center text-sm font-semibold text-white shrink-0">
-                {iniciais || "PR"}
-              </div>
+              <ProfessorAvatar
+                nome={professorLogado.nome || professorLogado.nomeCompletoTitulo}
+                fotoUrl={professorLogado.foto_url}
+                className="w-10 h-10 text-sm"
+              />
               <div className="min-w-0">
                 <p className="text-sm font-medium truncate">
                   {professorLogado.nomeCompletoTitulo}

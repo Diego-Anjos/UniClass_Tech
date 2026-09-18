@@ -18,14 +18,21 @@ import {
   ChevronUp,
   Mail,
   Check,
+  Lock,
 } from "lucide-react";
 import { toast } from "sonner";
 import { ProfessorSettingsControl } from "@/components/professor/config-modal";
+import { ProfessorAvatar } from "@/components/professor/professor-avatar";
 import { ModalFeedback } from "@/components/ModalFeedback";
 import { Button } from "@/components/ui/button";
 import { supabase } from "@/lib/supabase";
 import {
-  iniciaisDoProfessor,
+  EVENTO_PREFS_ATUALIZADAS,
+  lerPreferenciasLocal,
+  normalizarPreferencias,
+  type PreferenciasProfessor,
+} from "@/lib/professor-preferencias";
+import {
   limparSessaoProfessor,
   lerSessaoProfessor,
   normalizarPesosAvaliacao,
@@ -51,6 +58,7 @@ type TurmaOption = {
   codigo: string;
   curso: string;
   turno?: string;
+  diario_fechado?: boolean;
 };
 
 type AlunoTurma = {
@@ -171,10 +179,10 @@ const inputComposicaoErroClass =
   "w-full rounded-md bg-zinc-950 border border-red-500/70 text-white text-sm text-center px-2 py-2 outline-none focus:border-red-400 focus:ring-1 focus:ring-red-500/40 [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none";
 
 const inputNotaComCheckClass =
-  "w-full rounded-md bg-zinc-950 border border-zinc-700 text-white text-sm text-center pl-2 pr-8 py-2 outline-none focus:border-zinc-500 focus:ring-1 focus:ring-zinc-500 [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none";
+  "w-full rounded-md bg-zinc-950 border border-zinc-700 text-white text-sm text-center pl-2 pr-8 py-2 outline-none focus:border-zinc-500 focus:ring-1 focus:ring-zinc-500 disabled:opacity-50 disabled:cursor-not-allowed disabled:bg-zinc-900/80 [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none";
 
 const inputNotaComCheckErroClass =
-  "w-full rounded-md bg-zinc-950 border border-red-500/70 text-white text-sm text-center pl-2 pr-8 py-2 outline-none focus:border-red-400 focus:ring-1 focus:ring-red-500/40 [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none";
+  "w-full rounded-md bg-zinc-950 border border-red-500/70 text-white text-sm text-center pl-2 pr-8 py-2 outline-none focus:border-red-400 focus:ring-1 focus:ring-red-500/40 disabled:opacity-50 disabled:cursor-not-allowed [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none";
 
 const inputDisabledClass =
   "w-full appearance-none bg-zinc-900/80 border border-zinc-800 text-sm text-zinc-300 rounded-lg px-4 py-2.5 cursor-not-allowed";
@@ -193,6 +201,7 @@ export default function DiarioDeClassePage() {
   const [isConfigurandoPesos, setIsConfigurandoPesos] = useState(false);
   const [salvandoPesos, setSalvandoPesos] = useState(false);
   const [errosNota, setErrosNota] = useState<Record<string, string>>({});
+  const [travarEdicaoNotas, setTravarEdicaoNotas] = useState(false);
   const [modalFeedback, setModalFeedback] = useState<{
     aberto: boolean;
     tipo: "sucesso" | "erro" | "atencao";
@@ -208,6 +217,9 @@ export default function DiarioDeClassePage() {
   const disciplinaProfessor = professorLogado?.disciplina?.trim() || "";
   const totalDistribuicao = somaPesos(pesos);
   const pesosValidos = totalDistribuicao === 10;
+  const turmaAtual = turmas.find((t) => t.codigo === turmaSelecionada);
+  const diarioPublicado = Boolean(turmaAtual?.diario_fechado);
+  const notasBloqueadas = travarEdicaoNotas && diarioPublicado;
 
   // Mesma lógica estrutural de chamada/page.tsx: turmas da área do professor
   useEffect(() => {
@@ -244,6 +256,7 @@ export default function DiarioDeClassePage() {
           codigo: String(turma.codigo ?? ""),
           curso: String(turma.curso ?? ""),
           turno: turma.turno ? String(turma.turno) : undefined,
+          diario_fechado: Boolean(turma.diario_fechado ?? false),
         })
       );
 
@@ -272,19 +285,27 @@ export default function DiarioDeClassePage() {
 
     setPesos(normalizarPesosAvaliacao(professorLogado.pesos));
 
+    const prefsLocais = lerPreferenciasLocal(professorLogado.id);
+    if (prefsLocais) {
+      setTravarEdicaoNotas(prefsLocais.travar_edicao_notas);
+    }
+
     let cancelado = false;
 
-    async function carregarPesosDoBanco() {
+    async function carregarPesosEPreferencias() {
       const { data, error } = await supabase
         .from("professores")
-        .select("pesos")
+        .select("pesos, preferencias")
         .eq("id", professorLogado!.id)
         .maybeSingle();
 
       if (cancelado) return;
 
       if (error) {
-        console.warn("Não foi possível carregar pesos do professor:", error.message);
+        console.warn(
+          "Não foi possível carregar pesos/preferências do professor:",
+          error.message
+        );
         return;
       }
 
@@ -293,12 +314,29 @@ export default function DiarioDeClassePage() {
         setPesos(normalizados);
         atualizarSessaoPesos(normalizados);
       }
+
+      if (data?.preferencias != null) {
+        const prefs = normalizarPreferencias(data.preferencias);
+        setTravarEdicaoNotas(prefs.travar_edicao_notas);
+      } else if (!prefsLocais) {
+        setTravarEdicaoNotas(false);
+      }
     }
 
-    void carregarPesosDoBanco();
+    void carregarPesosEPreferencias();
+
+    function onPrefsAtualizadas(event: Event) {
+      const detail = (event as CustomEvent<PreferenciasProfessor>).detail;
+      if (detail && typeof detail.travar_edicao_notas === "boolean") {
+        setTravarEdicaoNotas(detail.travar_edicao_notas);
+      }
+    }
+
+    window.addEventListener(EVENTO_PREFS_ATUALIZADAS, onPrefsAtualizadas);
 
     return () => {
       cancelado = true;
+      window.removeEventListener(EVENTO_PREFS_ATUALIZADAS, onPrefsAtualizadas);
     };
   }, [professorLogado]);
 
@@ -396,6 +434,8 @@ export default function DiarioDeClassePage() {
   }
 
   function atualizarAluno(ra: string, campo: CampoNota, valor: string) {
+    if (notasBloqueadas) return;
+
     const chaveErro = `${ra}-${campo}`;
     const numerico = valor === "" ? 0 : Number(valor);
     if (Number.isNaN(numerico)) return;
@@ -544,6 +584,11 @@ export default function DiarioDeClassePage() {
   }
 
   async function salvarNotaEspecifica(ra: string, campo: CampoNota) {
+    if (notasBloqueadas) {
+      toast.error("Notas bloqueadas: o diário desta turma já foi publicado.");
+      return;
+    }
+
     if (!turmaSelecionada) {
       toast.error("Selecione a turma antes de salvar a nota.");
       return;
@@ -656,6 +701,17 @@ export default function DiarioDeClassePage() {
   }
 
   async function handleSalvarLancamentos() {
+    if (notasBloqueadas) {
+      setModalFeedback({
+        aberto: true,
+        tipo: "atencao",
+        titulo: "Notas bloqueadas",
+        mensagem:
+          "A edição está travada porque o diário desta turma já foi publicado oficialmente.",
+      });
+      return;
+    }
+
     if (!turmaSelecionada) {
       setModalFeedback({
         aberto: true,
@@ -727,10 +783,6 @@ export default function DiarioDeClassePage() {
     );
   }
 
-  const iniciais = iniciaisDoProfessor(
-    professorLogado.nome || professorLogado.nomeCompletoTitulo
-  );
-
   return (
     <div className="flex h-screen bg-black text-white overflow-hidden">
       <aside className="hidden md:flex flex-col w-64 shrink-0 bg-zinc-950 border-r border-zinc-800">
@@ -747,9 +799,11 @@ export default function DiarioDeClassePage() {
         <div className="px-4 py-5 border-b border-zinc-800">
           <div className="flex items-center justify-between gap-3">
             <div className="flex items-center gap-3 min-w-0">
-              <div className="w-10 h-10 rounded-full bg-zinc-800 flex items-center justify-center text-sm font-semibold text-white shrink-0">
-                {iniciais || "PR"}
-              </div>
+              <ProfessorAvatar
+                nome={professorLogado.nome || professorLogado.nomeCompletoTitulo}
+                fotoUrl={professorLogado.foto_url}
+                className="w-10 h-10 text-sm"
+              />
               <div className="min-w-0">
                 <p className="text-sm font-medium truncate">
                   {professorLogado.nomeCompletoTitulo}
@@ -795,11 +849,21 @@ export default function DiarioDeClassePage() {
       <main className="flex-1 overflow-y-auto bg-black">
         <div className="max-w-6xl mx-auto p-8">
           <div className="mb-8">
-            <h1 className="text-2xl font-semibold tracking-tight text-white">
-              Diário de Classe
-            </h1>
+            <div className="flex flex-wrap items-center gap-3">
+              <h1 className="text-2xl font-semibold tracking-tight text-white">
+                Diário de Classe
+              </h1>
+              {notasBloqueadas && (
+                <span className="inline-flex items-center gap-1.5 rounded-full border border-amber-500/40 bg-amber-500/10 px-2.5 py-1 text-[11px] font-medium text-amber-300">
+                  <Lock className="h-3 w-3" />
+                  Notas Bloqueadas
+                </span>
+              )}
+            </div>
             <p className="text-sm text-zinc-400 mt-1">
-              Gerencie notas e frequência dos alunos
+              {notasBloqueadas
+                ? "Edição travada: o diário desta turma já foi publicado oficialmente."
+                : "Gerencie notas e frequência dos alunos"}
             </p>
           </div>
 
@@ -1083,6 +1147,8 @@ export default function DiarioDeClassePage() {
                                             max={max}
                                             step={0.1}
                                             value={aluno[campo]}
+                                            disabled={notasBloqueadas}
+                                            readOnly={notasBloqueadas}
                                             onChange={(e) =>
                                               atualizarAluno(
                                                 aluno.ra,
@@ -1100,9 +1166,21 @@ export default function DiarioDeClassePage() {
                                             type="button"
                                             size="icon"
                                             variant="ghost"
-                                            title={`Salvar ${LABELS_COMPOSICAO[campo]}`}
-                                            aria-label={`Salvar ${LABELS_COMPOSICAO[campo]} de ${aluno.nome}`}
-                                            disabled={salvandoEste || temErro}
+                                            title={
+                                              notasBloqueadas
+                                                ? "Notas bloqueadas após publicação"
+                                                : `Salvar ${LABELS_COMPOSICAO[campo]}`
+                                            }
+                                            aria-label={
+                                              notasBloqueadas
+                                                ? `Notas bloqueadas para ${aluno.nome}`
+                                                : `Salvar ${LABELS_COMPOSICAO[campo]} de ${aluno.nome}`
+                                            }
+                                            disabled={
+                                              notasBloqueadas ||
+                                              salvandoEste ||
+                                              temErro
+                                            }
                                             className="absolute right-1 h-6 w-6 size-auto text-green-500 hover:text-green-400 hover:bg-green-500/10 disabled:opacity-40"
                                             onClick={() =>
                                               void salvarNotaEspecifica(
@@ -1154,15 +1232,26 @@ export default function DiarioDeClassePage() {
               <button
                 type="button"
                 onClick={() => void handleSalvarLancamentos()}
-                disabled={salvando || loadingAlunos || !turmaSelecionada}
+                disabled={
+                  notasBloqueadas ||
+                  salvando ||
+                  loadingAlunos ||
+                  !turmaSelecionada
+                }
                 className="inline-flex items-center gap-2 rounded-lg bg-white text-black text-sm font-medium px-4 py-2.5 hover:bg-zinc-200 transition-colors disabled:opacity-60 disabled:cursor-not-allowed cursor-pointer"
               >
                 {salvando ? (
                   <Loader2 className="w-4 h-4 animate-spin" />
+                ) : notasBloqueadas ? (
+                  <Lock className="w-4 h-4" />
                 ) : (
                   <Save className="w-4 h-4" />
                 )}
-                {salvando ? "Salvando..." : "Salvar Lançamentos"}
+                {salvando
+                  ? "Salvando..."
+                  : notasBloqueadas
+                    ? "Notas Bloqueadas"
+                    : "Salvar Lançamentos"}
               </button>
             </div>
           </div>

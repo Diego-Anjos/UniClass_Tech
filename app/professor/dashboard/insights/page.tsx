@@ -30,8 +30,8 @@ import {
 } from "recharts";
 import { supabase } from "@/lib/supabase";
 import { ProfessorSettingsControl } from "@/components/professor/config-modal";
+import { ProfessorAvatar } from "@/components/professor/professor-avatar";
 import {
-  iniciaisDoProfessor,
   limparSessaoProfessor,
   useProfessorSession,
 } from "@/lib/professor-session";
@@ -59,6 +59,14 @@ type AlunoInsight = {
   curso: string;
   semestre: number;
   professor: string;
+  n1: number | null;
+};
+
+type TurmaOption = {
+  id: string;
+  codigo: string;
+  curso: string;
+  turno?: string;
 };
 
 type ChatMessage = {
@@ -71,6 +79,7 @@ type ResumoEngajamento = {
   presentes: number;
   faltas: number;
   taxaPresenca: number;
+  taxaFaltas: number;
   fonte: "registro_chamada";
   resumo: string;
 };
@@ -85,6 +94,34 @@ type DadoGraficoMacro = {
   notaMedia: number;
   frequencia: number;
 };
+
+type MesSerie = { mes: string; n: number };
+
+const MSG_IA_INDISPONIVEL =
+  "O assistente atingiu o limite de uso gratuito temporário do Google. Por favor, tente novamente em alguns minutos.";
+
+const MESES_1_SEMESTRE: MesSerie[] = [
+  { mes: "Jan", n: 1 },
+  { mes: "Fev", n: 2 },
+  { mes: "Mar", n: 3 },
+  { mes: "Abr", n: 4 },
+  { mes: "Mai", n: 5 },
+  { mes: "Jun", n: 6 },
+];
+
+const MESES_2_SEMESTRE: MesSerie[] = [
+  { mes: "Jul", n: 7 },
+  { mes: "Ago", n: 8 },
+  { mes: "Set", n: 9 },
+  { mes: "Out", n: 10 },
+  { mes: "Nov", n: 11 },
+  { mes: "Dez", n: 12 },
+];
+
+function labelTurma(turma: TurmaOption) {
+  const turno = turma.turno ? ` (${turma.turno})` : "";
+  return `${turma.curso} - Turma ${turma.codigo}${turno}`;
+}
 
 function iniciaisDoNome(nome: string) {
   return nome
@@ -102,14 +139,53 @@ function mensagemInicialIA(nomeAluno: string): ChatMessage {
   };
 }
 
+/** 1º Semestre: Jan–Jun · 2º Semestre: Jul–Dez. */
+function rangeDoSemestre(ano: number, semestre: string) {
+  const eSegundo = semestre === "2º Semestre";
+  return {
+    meses: eSegundo ? MESES_2_SEMESTRE : MESES_1_SEMESTRE,
+    inicio: eSegundo ? `${ano}-07-01T00:00:00Z` : `${ano}-01-01T00:00:00Z`,
+    fim: eSegundo ? `${ano}-12-31T23:59:59Z` : `${ano}-06-30T23:59:59Z`,
+  };
+}
+
+function parseDataISO(raw: unknown): Date | null {
+  const s = String(raw ?? "").trim();
+  if (!s) return null;
+  const d = new Date(s.includes("T") ? s : `${s}T12:00:00`);
+  return Number.isNaN(d.getTime()) ? null : d;
+}
+
+function mediaNumeros(valores: number[]): number {
+  if (valores.length === 0) return 0;
+  return Number(
+    (valores.reduce((acc, v) => acc + v, 0) / valores.length).toFixed(1)
+  );
+}
+
+function mensagemErroChat(status: number, payload: Record<string, unknown>) {
+  const reply =
+    typeof payload.reply === "string" ? payload.reply.trim() : "";
+  if (reply) return reply;
+  const error =
+    typeof payload.error === "string" ? payload.error.trim() : "";
+  if (status === 429 || status === 503) return MSG_IA_INDISPONIVEL;
+  if (error) return error;
+  return MSG_IA_INDISPONIVEL;
+}
+
 export default function ProfessorInsightsPage() {
   const { professorLogado, carregandoSessao } = useProfessorSession();
+  const [turmas, setTurmas] = useState<TurmaOption[]>([]);
+  const [turmaSelecionada, setTurmaSelecionada] = useState("");
+  const [carregandoTurmas, setCarregandoTurmas] = useState(true);
   const [alunos, setAlunos] = useState<AlunoInsight[]>([]);
   const [alunoSelecionado, setAlunoSelecionado] = useState<AlunoInsight | null>(
     null
   );
   const [resumoAluno, setResumoAluno] = useState<ResumoEngajamento | null>(null);
-  const [carregandoAlunos, setCarregandoAlunos] = useState(true);
+  const [mediaAluno, setMediaAluno] = useState<number | null>(null);
+  const [carregandoAlunos, setCarregandoAlunos] = useState(false);
   const [carregandoResumo, setCarregandoResumo] = useState(false);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [inputChat, setInputChat] = useState("");
@@ -124,79 +200,164 @@ export default function ProfessorInsightsPage() {
   const [carregandoMacro, setCarregandoMacro] = useState(false);
   const chatScrollRef = useRef<HTMLDivElement>(null);
 
+  const alunoRa = alunoSelecionado?.ra ?? "";
+  const alunoId = alunoSelecionado?.id ?? "";
+  const professorId = professorLogado?.id ?? "";
+  const professorTitulo = professorLogado?.nomeCompletoTitulo ?? "";
+  const professorArea = professorLogado?.area_atuacao ?? "";
+
+  const ano = filtrosMacro.ano;
+  const semestre = filtrosMacro.semestre;
+
+  const turmaMeta = useMemo(
+    () => turmas.find((t) => t.codigo === turmaSelecionada) ?? null,
+    [turmas, turmaSelecionada]
+  );
+  const turmaId = turmaMeta?.id ?? "";
+
   const contextoAluno = useMemo(() => {
     if (!alunoSelecionado) {
       return "Nenhum aluno específico selecionado. Fale sobre a turma em geral.";
     }
 
-    const resumo =
-      resumoAluno?.resumo ??
-      "Resumo de frequência ainda não disponível para este aluno.";
+    const taxaFaltas = resumoAluno?.taxaFaltas;
+    const taxaPresenca = resumoAluno?.taxaPresenca;
+    const media =
+      mediaAluno ??
+      (alunoSelecionado.n1 != null && Number.isFinite(alunoSelecionado.n1)
+        ? alunoSelecionado.n1
+        : null);
 
     return [
       `Nome: ${alunoSelecionado.nome}`,
       `RA: ${alunoSelecionado.ra}`,
       `Curso: ${alunoSelecionado.curso}`,
-      `Semestre: ${alunoSelecionado.semestre}`,
+      `Semestre do aluno: ${alunoSelecionado.semestre}`,
+      `Turma selecionada: ${turmaSelecionada || "—"}`,
       `Professor vinculado: ${alunoSelecionado.professor || "—"}`,
-      `Engajamento/Frequência: ${resumo}`,
+      media != null
+        ? `Média recente (N1/média): ${media.toFixed(1)}`
+        : "Média recente: indisponível no banco",
+      taxaPresenca != null
+        ? `Taxa de presença: ${taxaPresenca}%`
+        : "Taxa de presença: indisponível",
+      taxaFaltas != null
+        ? `Taxa de faltas: ${taxaFaltas}%`
+        : "Taxa de faltas: indisponível",
       resumoAluno
-        ? `Métricas: ${resumoAluno.presentes} presentes, ${resumoAluno.faltas} faltas, ${resumoAluno.taxaPresenca}% de presença (dados reais).`
-        : null,
+        ? `Registros de chamada: ${resumoAluno.presentes} presentes, ${resumoAluno.faltas} faltas em ${resumoAluno.totalRegistros} aula(s).`
+        : "Sem registros de chamada carregados.",
+      resumoAluno?.resumo ? `Resumo: ${resumoAluno.resumo}` : null,
+      "Use APENAS estes dados reais. Não invente notas, faltas ou eventos.",
     ]
       .filter(Boolean)
       .join("\n");
-  }, [alunoSelecionado, resumoAluno]);
+  }, [alunoSelecionado, resumoAluno, mediaAluno, turmaSelecionada]);
+
+  function limparContextoIndividual() {
+    setAlunoSelecionado(null);
+    setResumoAluno(null);
+    setMediaAluno(null);
+    setMessages([]);
+    setInputChat("");
+    setIsTyping(false);
+  }
 
   useEffect(() => {
-    if (!professorLogado) return;
+    if (!professorLogado) {
+      setTurmas([]);
+      setTurmaSelecionada("");
+      setCarregandoTurmas(false);
+      return;
+    }
 
-    async function carregarAlunosDoProfessor() {
-      setCarregandoAlunos(true);
-      const vinculoProfessor = professorLogado!.nomeCompletoTitulo;
-      const nomeProfessor = professorLogado!.nome;
+    let cancelado = false;
+
+    async function fetchTurmas() {
+      setCarregandoTurmas(true);
       const areaAtuacao = professorLogado!.area_atuacao?.trim() ?? "";
 
-      const [porTitulo, porNome, porCurso] = await Promise.all([
-        supabase
-          .from("alunos")
-          .select("id, nome, ra, professor, curso, semestre")
-          .eq("professor", vinculoProfessor)
-          .order("nome", { ascending: true }),
-        nomeProfessor
-          ? supabase
-              .from("alunos")
-              .select("id, nome, ra, professor, curso, semestre")
-              .eq("professor", nomeProfessor)
-              .order("nome", { ascending: true })
-          : Promise.resolve({ data: [], error: null }),
-        areaAtuacao
-          ? supabase
-              .from("alunos")
-              .select("id, nome, ra, professor, curso, semestre")
-              .eq("curso", areaAtuacao)
-              .order("nome", { ascending: true })
-          : Promise.resolve({ data: [], error: null }),
-      ]);
+      const { data, error } = await supabase
+        .from("turmas")
+        .select("*")
+        .ilike("curso", `%${areaAtuacao}%`);
 
-      if (porTitulo.error) {
-        console.error("Erro ao buscar alunos do professor:", porTitulo.error.message);
+      if (cancelado) return;
+
+      if (error) {
+        console.error("Erro ao buscar turmas:", error.message);
+        setTurmas([]);
+        setTurmaSelecionada("");
+        setCarregandoTurmas(false);
+        return;
       }
-      if ("error" in porNome && porNome.error) {
-        console.error("Erro ao buscar alunos por nome:", porNome.error.message);
+
+      const lista = ((data ?? []) as Record<string, unknown>[]).map(
+        (turma) => ({
+          id: String(turma.id),
+          codigo: String(turma.codigo ?? ""),
+          curso: String(turma.curso ?? ""),
+          turno: turma.turno ? String(turma.turno) : undefined,
+        })
+      );
+
+      setTurmas(lista);
+
+      if (lista.length === 1) {
+        setTurmaSelecionada(lista[0].codigo);
+      } else {
+        setTurmaSelecionada((prev) =>
+          prev && lista.some((t) => t.codigo === prev) ? prev : ""
+        );
       }
-      if ("error" in porCurso && porCurso.error) {
-        console.error("Erro ao buscar alunos por curso:", porCurso.error.message);
+      setCarregandoTurmas(false);
+    }
+
+    void fetchTurmas();
+
+    return () => {
+      cancelado = true;
+    };
+  }, [professorLogado]);
+
+  // 1. Cascata Turma → Aluno: reset exclusivo (deps limpas)
+  useEffect(() => {
+    setAlunoSelecionado(null);
+    setResumoAluno(null);
+    setMediaAluno(null);
+    setMessages([]);
+    setInputChat("");
+    setIsTyping(false);
+  }, [turmaSelecionada]);
+
+  // Lista de alunos da turma (separado do reset para não misturar responsabilidades)
+  useEffect(() => {
+    let cancelado = false;
+
+    async function buscarAlunosDaTurma(codigoTurma: string) {
+      setCarregandoAlunos(true);
+      setAlunos([]);
+
+      const { data, error } = await supabase
+        .from("alunos")
+        .select("id, nome, ra, professor, curso, semestre, n1")
+        .eq("turma", codigoTurma)
+        .order("nome", { ascending: true });
+
+      if (cancelado) return;
+
+      if (error) {
+        console.error("Erro ao buscar alunos da turma:", error.message);
+        setAlunos([]);
+        setCarregandoAlunos(false);
+        return;
       }
 
       const mapa = new Map<string, AlunoInsight>();
-      for (const row of [
-        ...(porTitulo.data ?? []),
-        ...(porNome.data ?? []),
-        ...(porCurso.data ?? []),
-      ]) {
+      for (const row of data ?? []) {
         const id = String(row.id);
         if (mapa.has(id)) continue;
+        const n1Raw = Number(row.n1);
         mapa.set(id, {
           id,
           nome: String(row.nome ?? ""),
@@ -208,89 +369,128 @@ export default function ProfessorInsightsPage() {
           curso: String(row.curso ?? "—"),
           semestre: Number(row.semestre ?? 1) || 1,
           professor: String(row.professor ?? ""),
+          n1: Number.isFinite(n1Raw) ? n1Raw : null,
         });
       }
 
-      const lista = Array.from(mapa.values()).sort((a, b) =>
-        a.nome.localeCompare(b.nome, "pt-BR")
+      setAlunos(
+        Array.from(mapa.values()).sort((a, b) =>
+          a.nome.localeCompare(b.nome, "pt-BR")
+        )
       );
-      setAlunos(lista);
       setCarregandoAlunos(false);
     }
 
-    void carregarAlunosDoProfessor();
-  }, [professorLogado]);
+    if (!turmaSelecionada) {
+      setAlunos([]);
+      setCarregandoAlunos(false);
+      return;
+    }
 
+    void buscarAlunosDaTurma(turmaSelecionada.trim());
+
+    return () => {
+      cancelado = true;
+    };
+  }, [turmaSelecionada]);
+
+  // Raio-X: frequência + média real do aluno selecionado
   useEffect(() => {
-    if (!alunoSelecionado) {
+    if (!alunoRa) {
       setResumoAluno(null);
+      setMediaAluno(null);
       return;
     }
 
     let cancelado = false;
 
-    async function carregarResumo() {
+    async function carregarRaioX() {
       setCarregandoResumo(true);
-      const { data, error } = await supabase
-        .from("registro_chamada")
-        .select("status")
-        .eq("aluno_ra", alunoSelecionado!.ra);
+
+      const [chamadaRes, notasRes] = await Promise.all([
+        supabase
+          .from("registro_chamada")
+          .select("status")
+          .eq("aluno_ra", alunoRa),
+        supabase
+          .from("notas")
+          .select("media_final")
+          .eq("ra_aluno", alunoRa),
+      ]);
 
       if (cancelado) return;
 
-      if (error) {
-        console.error("Erro ao buscar registro_chamada:", error.message);
+      if (chamadaRes.error) {
+        console.error(
+          "Erro ao buscar registro_chamada:",
+          chamadaRes.error.message
+        );
         setResumoAluno(null);
-        setCarregandoResumo(false);
-        return;
+      } else if (!chamadaRes.data || chamadaRes.data.length === 0) {
+        setResumoAluno(null);
+      } else {
+        const presentes = chamadaRes.data.filter(
+          (r) => String(r.status ?? "").toLowerCase() === "presente"
+        ).length;
+        const faltas = chamadaRes.data.filter(
+          (r) => String(r.status ?? "").toLowerCase() === "falta"
+        ).length;
+        const total = chamadaRes.data.length;
+        const taxaPresenca = Math.round((presentes / (total || 1)) * 100);
+        const taxaFaltas = Math.round((faltas / (total || 1)) * 100);
+
+        setResumoAluno({
+          totalRegistros: total,
+          presentes,
+          faltas,
+          taxaPresenca,
+          taxaFaltas,
+          fonte: "registro_chamada",
+          resumo:
+            taxaPresenca >= 85
+              ? `Boa frequência: ${taxaPresenca}% de presença em ${total} registro(s) de chamada.`
+              : taxaPresenca >= 70
+                ? `Frequência moderada: ${taxaPresenca}% de presença, com ${faltas} falta(s) registradas.`
+                : `Alerta de frequência: apenas ${taxaPresenca}% de presença e ${faltas} falta(s) em ${total} aula(s).`,
+        });
       }
 
-      if (!data || data.length === 0) {
-        setResumoAluno(null);
-        setCarregandoResumo(false);
-        return;
+      if (notasRes.error) {
+        console.error("Erro ao buscar média do aluno:", notasRes.error.message);
+        setMediaAluno(alunoSelecionado?.n1 ?? null);
+      } else {
+        const medias = (notasRes.data ?? [])
+          .map((r) => Number(r.media_final))
+          .filter((v) => Number.isFinite(v));
+        if (medias.length > 0) {
+          setMediaAluno(mediaNumeros(medias));
+        } else {
+          setMediaAluno(alunoSelecionado?.n1 ?? null);
+        }
       }
 
-      const presentes = data.filter(
-        (r) => String(r.status ?? "").toLowerCase() === "presente"
-      ).length;
-      const faltas = data.filter(
-        (r) => String(r.status ?? "").toLowerCase() === "falta"
-      ).length;
-      const total = data.length;
-      const taxaPresenca = Math.round((presentes / (total || 1)) * 100);
-
-      setResumoAluno({
-        totalRegistros: total,
-        presentes,
-        faltas,
-        taxaPresenca,
-        fonte: "registro_chamada",
-        resumo:
-          taxaPresenca >= 85
-            ? `Boa frequência: ${taxaPresenca}% de presença em ${total} registro(s) de chamada.`
-            : taxaPresenca >= 70
-              ? `Frequência moderada: ${taxaPresenca}% de presença, com ${faltas} falta(s) registradas.`
-              : `Alerta de frequência: apenas ${taxaPresenca}% de presença e ${faltas} falta(s) em ${total} aula(s).`,
-      });
       setCarregandoResumo(false);
     }
 
-    void carregarResumo();
+    void carregarRaioX();
     return () => {
       cancelado = true;
     };
-  }, [alunoSelecionado]);
+  }, [alunoRa, alunoSelecionado?.n1]);
 
   useEffect(() => {
-    if (!alunoSelecionado) {
+    if (!alunoId) {
       setMessages([]);
+      setInputChat("");
+      setIsTyping(false);
       return;
     }
-    setMessages([mensagemInicialIA(alunoSelecionado.nome)]);
+    const nome = alunoSelecionado?.nome ?? "o aluno";
+    setMessages([mensagemInicialIA(nome)]);
     setInputChat("");
     setIsTyping(false);
-  }, [alunoSelecionado?.id]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [alunoId]);
 
   useEffect(() => {
     const el = chatScrollRef.current;
@@ -298,109 +498,144 @@ export default function ProfessorInsightsPage() {
     el.scrollTop = el.scrollHeight;
   }, [messages, isTyping]);
 
+  // 2. Fetch macro (gráficos + síntese) — deps de tamanho fixo
   useEffect(() => {
-    if (!professorLogado) return;
+    if (!turmaSelecionada || !ano || !semestre) {
+      setDadosGrafico([]);
+      setCarregandoGrafico(false);
+      setCarregandoMacro(false);
+      setAnaliseMacroIA(
+        "Selecione uma turma para gerar a visão geral de desempenho."
+      );
+      return;
+    }
+
+    if (!professorId) {
+      setDadosGrafico([]);
+      setCarregandoGrafico(false);
+      setCarregandoMacro(false);
+      return;
+    }
 
     let cancelado = false;
+    const anoNum = Number.parseInt(ano, 10) || anoAtual;
+    const { meses, inicio, fim } = rangeDoSemestre(anoNum, semestre);
 
     async function carregarSerieEAnaliseMacro() {
       setCarregandoGrafico(true);
       setCarregandoMacro(true);
+      setDadosGrafico([]);
+      setAnaliseMacroIA("");
 
       try {
-        const ras = alunos.map((a) => a.ra).filter(Boolean);
-        let serie: DadoGraficoMacro[] = [];
+        // RAs da turma (self-contained — não depende de estado de alunos no dep array)
+        const { data: alunosTurma, error: alunosError } = await supabase
+          .from("alunos")
+          .select("ra, n1")
+          .eq("turma", turmaSelecionada.trim());
 
-        if (ras.length > 0) {
-          const { data: notasRows, error: notasError } = await supabase
-            .from("notas")
-            .select("media_final, created_at, updated_at")
-            .in("ra_aluno", ras);
+        if (cancelado) return;
 
-          if (notasError) {
-            console.error("Erro ao agregar notas macro:", notasError.message);
-          }
+        if (alunosError) {
+          console.error("Erro ao listar RAs da turma:", alunosError.message);
+        }
 
-          const { data: chamadaRows, error: chamadaError } = await supabase
-            .from("registro_chamada")
-            .select("status, data")
-            .in("aluno_ra", ras);
+        const ras = Array.from(
+          new Set(
+            (alunosTurma ?? [])
+              .map((a) => String(a.ra ?? "").trim())
+              .filter(Boolean)
+          )
+        );
 
-          if (chamadaError) {
-            console.error(
-              "Erro ao agregar frequência macro:",
-              chamadaError.message
-            );
-          }
+        const mediaN1Fallback = mediaNumeros(
+          (alunosTurma ?? [])
+            .map((a) => Number(a.n1))
+            .filter((v) => Number.isFinite(v))
+        );
 
-          const meses =
-            filtrosMacro.semestre === "2º Semestre"
-              ? [
-                  { mes: "Ago", n: 8 },
-                  { mes: "Set", n: 9 },
-                  { mes: "Out", n: 10 },
-                  { mes: "Nov", n: 11 },
-                  { mes: "Dez", n: 12 },
-                ]
-              : [
-                  { mes: "Fev", n: 2 },
-                  { mes: "Mar", n: 3 },
-                  { mes: "Abr", n: 4 },
-                  { mes: "Mai", n: 5 },
-                  { mes: "Jun", n: 6 },
-                ];
-
-          const anoNum = Number(filtrosMacro.ano) || anoAtual;
-
-          serie = meses.map(({ mes, n }) => {
-            const notasDoMes = (notasRows ?? []).filter((row) => {
-              const raw = String(row.updated_at ?? row.created_at ?? "");
-              const d = new Date(raw);
-              return (
-                !Number.isNaN(d.getTime()) &&
-                d.getFullYear() === anoNum &&
-                d.getMonth() + 1 === n
-              );
-            });
-            const medias = notasDoMes
-              .map((r) => Number(r.media_final))
-              .filter((v) => Number.isFinite(v));
-            const notaMedia =
-              medias.length > 0
-                ? Number(
-                    (
-                      medias.reduce((acc, v) => acc + v, 0) / medias.length
-                    ).toFixed(1)
-                  )
-                : 0;
-
-            const chamadasDoMes = (chamadaRows ?? []).filter((row) => {
-              const d = new Date(String(row.data ?? ""));
-              return (
-                !Number.isNaN(d.getTime()) &&
-                d.getFullYear() === anoNum &&
-                d.getMonth() + 1 === n
-              );
-            });
-            const presentes = chamadasDoMes.filter(
-              (r) => String(r.status ?? "").toLowerCase() === "presente"
-            ).length;
-            const frequencia =
-              chamadasDoMes.length > 0
-                ? Math.round((presentes / chamadasDoMes.length) * 100)
-                : 0;
-
-            return { mes, notaMedia, frequencia };
-          });
-
-          const temDado = serie.some(
-            (p) => p.notaMedia > 0 || p.frequencia > 0
+        if (ras.length === 0) {
+          setDadosGrafico([]);
+          setAnaliseMacroIA(
+            "Nenhum aluno encontrado nesta turma para gerar a análise macro."
           );
-          if (!temDado) serie = [];
+          return;
+        }
+
+        const { data: notasRows, error: notasError } = await supabase
+          .from("notas")
+          .select("media_final")
+          .in("ra_aluno", ras);
+
+        if (notasError) {
+          console.error("Erro ao agregar notas macro:", notasError.message);
+        }
+
+        let notaMediaTurma = mediaNumeros(
+          (notasRows ?? [])
+            .map((r) => Number(r.media_final))
+            .filter((v) => Number.isFinite(v))
+        );
+
+        if (notaMediaTurma <= 0 && mediaN1Fallback > 0) {
+          notaMediaTurma = mediaN1Fallback;
+        }
+
+        // Frequência no range real do semestre (data_aula)
+        let chamadaQuery = supabase
+          .from("registro_chamada")
+          .select("status, data_aula")
+          .in("aluno_ra", ras)
+          .gte("data_aula", inicio)
+          .lte("data_aula", fim);
+
+        if (turmaId) {
+          chamadaQuery = chamadaQuery.eq("turma_curso", turmaId);
+        }
+
+        const { data: chamadaRows, error: chamadaError } = await chamadaQuery;
+
+        if (chamadaError) {
+          console.error(
+            "Erro ao agregar frequência macro:",
+            chamadaError.message
+          );
+        }
+
+        let serie: DadoGraficoMacro[] = meses.map(({ mes, n }) => {
+          const chamadasDoMes = (chamadaRows ?? []).filter((row) => {
+            const d = parseDataISO(row.data_aula);
+            return (
+              d != null && d.getFullYear() === anoNum && d.getMonth() + 1 === n
+            );
+          });
+          const presentes = chamadasDoMes.filter(
+            (r) => String(r.status ?? "").toLowerCase() === "presente"
+          ).length;
+          const frequencia =
+            chamadasDoMes.length > 0
+              ? Math.round((presentes / chamadasDoMes.length) * 100)
+              : 0;
+
+          return {
+            mes,
+            notaMedia: notaMediaTurma,
+            frequencia,
+          };
+        });
+
+        const temFrequencia = serie.some((p) => p.frequencia > 0);
+        const temNota = notaMediaTurma > 0;
+        if (!temFrequencia && !temNota) {
+          serie = [];
+        } else if (!temFrequencia && temNota) {
+          serie = [{ mes: "Atual", notaMedia: notaMediaTurma, frequencia: 0 }];
         }
 
         if (cancelado) return;
         setDadosGrafico(serie);
+        // Libera os gráficos imediatamente — não espera o Gemini
+        setCarregandoGrafico(false);
 
         if (serie.length === 0) {
           setAnaliseMacroIA(
@@ -412,39 +647,55 @@ export default function ProfessorInsightsPage() {
         const mediaNotas =
           serie.reduce((acc, item) => acc + item.notaMedia, 0) /
           (serie.length || 1);
+        const pontosFreq = serie.filter((p) => p.frequencia > 0);
         const mediaFrequencia =
-          serie.reduce((acc, item) => acc + item.frequencia, 0) /
-          (serie.length || 1);
+          pontosFreq.length > 0
+            ? pontosFreq.reduce((acc, item) => acc + item.frequencia, 0) /
+              pontosFreq.length
+            : 0;
 
         const response = await fetch("/api/insights/turma", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
-            professor: professorLogado!.nomeCompletoTitulo,
-            filtros: filtrosMacro,
+            professor: professorTitulo,
+            professorId,
+            filtros: {
+              ano,
+              semestre,
+              turma: turmaSelecionada,
+            },
             metricasGlobais: {
               serieMensal: serie,
               mediaNotas: Number(mediaNotas.toFixed(1)),
               mediaFrequencia: Math.round(mediaFrequencia),
-              totalAlunos: alunos.length,
-              area: professorLogado!.area_atuacao,
+              totalAlunos: ras.length,
+              area: professorArea,
+              periodo: { inicio, fim },
+              notaSemHistoricoTemporal: true,
             },
           }),
         });
 
-        const data = await response.json();
+        const data = (await response.json().catch(() => ({}))) as Record<
+          string,
+          unknown
+        >;
         if (cancelado) return;
         if (!response.ok) {
           setAnaliseMacroIA(
-            String(data.error ?? "Análise indisponível no momento.")
+            mensagemErroChat(response.status, data) ||
+              "Análise indisponível no momento."
           );
           return;
         }
         setAnaliseMacroIA(
-          (data.analise as string) || "Análise indisponível no momento."
+          (typeof data.analise === "string" && data.analise) ||
+            (typeof data.reply === "string" && data.reply) ||
+            "Análise indisponível no momento."
         );
       } catch (err) {
-        console.error("Erro na análise macro da turma:", err);
+        console.error("Erro ao carregar dados macro:", err);
         if (!cancelado) {
           setDadosGrafico([]);
           setAnaliseMacroIA(
@@ -463,21 +714,31 @@ export default function ProfessorInsightsPage() {
     return () => {
       cancelado = true;
     };
-  }, [filtrosMacro, professorLogado, alunos]);
+    // Array de tamanho fixo — sem objetos/arrays dinâmicos
+  }, [turmaSelecionada, ano, semestre, professorId, turmaId, professorTitulo, professorArea]);
 
-  function handleSelecionarAluno(alunoId: string) {
-    if (!alunoId) {
-      setAlunoSelecionado(null);
+  function handleSelecionarAluno(alunoIdSelecionado: string) {
+    if (!alunoIdSelecionado) {
+      limparContextoIndividual();
       return;
     }
-    const aluno = alunos.find((a) => a.id === alunoId) ?? null;
+    const aluno = alunos.find((a) => a.id === alunoIdSelecionado) ?? null;
     setAlunoSelecionado(aluno);
+    if (!aluno) {
+      setResumoAluno(null);
+      setMediaAluno(null);
+      setMessages([]);
+    }
+  }
+
+  function handleSelecionarTurma(codigo: string) {
+    setTurmaSelecionada(codigo);
   }
 
   async function enviarMensagem(e?: FormEvent) {
     e?.preventDefault();
     const texto = inputChat.trim();
-    if (!texto || isTyping || !professorLogado) return;
+    if (!texto || isTyping || !professorLogado || !alunoSelecionado) return;
 
     const novasMensagens: ChatMessage[] = [
       ...messages,
@@ -487,24 +748,59 @@ export default function ProfessorInsightsPage() {
     setInputChat("");
     setIsTyping(true);
 
+    // 3. Payload blindado: contexto + métricas reais do aluno
+    const payload = {
+      messages: novasMensagens,
+      professor: professorLogado.nomeCompletoTitulo,
+      professorId: professorLogado.id,
+      mensagem: texto,
+      contextoAluno,
+      aluno: {
+        nome: alunoSelecionado.nome,
+        ra: alunoSelecionado.ra,
+        curso: alunoSelecionado.curso,
+        turma: turmaSelecionada,
+        mediaRecente: mediaAluno ?? alunoSelecionado.n1,
+        taxaPresenca: resumoAluno?.taxaPresenca ?? null,
+        taxaFaltas: resumoAluno?.taxaFaltas ?? null,
+        presentes: resumoAluno?.presentes ?? null,
+        faltas: resumoAluno?.faltas ?? null,
+      },
+      contextoAlunoObj: {
+        nome: alunoSelecionado.nome,
+        ra: alunoSelecionado.ra,
+        turma: turmaSelecionada,
+        media: mediaAluno ?? alunoSelecionado.n1,
+        faltas: resumoAluno?.faltas ?? null,
+        taxaPresenca: resumoAluno?.taxaPresenca ?? null,
+      },
+    };
+
     try {
       const response = await fetch("/api/insights/chat", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          messages: novasMensagens,
-          professor: professorLogado.nomeCompletoTitulo,
-          contextoAluno,
-        }),
+        body: JSON.stringify(payload),
       });
 
-      const data = await response.json();
+      const data = (await response.json().catch(() => ({}))) as Record<
+        string,
+        unknown
+      >;
+
       if (!response.ok) {
-        throw new Error(data.error || "Falha na comunicação com o Gemini.");
+        setMessages((prev) => [
+          ...prev,
+          {
+            role: "assistant",
+            content: mensagemErroChat(response.status, data),
+          },
+        ]);
+        return;
       }
 
       const reply =
-        (data.reply as string) ||
+        (typeof data.reply === "string" && data.reply) ||
         "Desculpe, não consegui processar a análise agora.";
 
       setMessages((prev) => [...prev, { role: "assistant", content: reply }]);
@@ -514,8 +810,7 @@ export default function ProfessorInsightsPage() {
         ...prev,
         {
           role: "assistant",
-          content:
-            "Não foi possível obter a resposta da IA no momento. Tente novamente em instantes.",
+          content: MSG_IA_INDISPONIVEL,
         },
       ]);
     } finally {
@@ -530,10 +825,6 @@ export default function ProfessorInsightsPage() {
       </div>
     );
   }
-
-  const iniciais = iniciaisDoProfessor(
-    professorLogado.nome || professorLogado.nomeCompletoTitulo
-  );
 
   return (
     <div className="flex h-screen bg-black text-white overflow-hidden">
@@ -551,9 +842,11 @@ export default function ProfessorInsightsPage() {
         <div className="px-4 py-5 border-b border-zinc-800">
           <div className="flex items-center justify-between gap-3">
             <div className="flex items-center gap-3 min-w-0">
-              <div className="w-10 h-10 rounded-full bg-zinc-800 flex items-center justify-center text-sm font-semibold text-white shrink-0">
-                {iniciais || "PR"}
-              </div>
+              <ProfessorAvatar
+                nome={professorLogado.nome || professorLogado.nomeCompletoTitulo}
+                fotoUrl={professorLogado.foto_url}
+                className="w-10 h-10 text-sm"
+              />
               <div className="min-w-0">
                 <p className="text-sm font-medium truncate">
                   {professorLogado.nomeCompletoTitulo}
@@ -608,25 +901,58 @@ export default function ProfessorInsightsPage() {
               </p>
             </div>
 
-            <div className="relative inline-block shrink-0">
-              <select
-                value={alunoSelecionado?.id ?? ""}
-                onChange={(e) => handleSelecionarAluno(e.target.value)}
-                disabled={carregandoAlunos}
-                className="appearance-none bg-zinc-950 border border-zinc-700 text-sm text-white font-medium rounded-lg pl-4 pr-10 py-2.5 focus:outline-none focus:ring-1 focus:ring-zinc-500 cursor-pointer hover:border-zinc-600 transition-colors min-w-[280px] disabled:opacity-60"
-              >
-                <option value="">
-                  {carregandoAlunos
-                    ? "Carregando alunos..."
-                    : "Filtrar por Aluno"}
-                </option>
-                {alunos.map((aluno) => (
-                  <option key={aluno.id} value={aluno.id}>
-                    {aluno.nome} — RA {aluno.ra}
+            <div className="flex flex-wrap gap-4 items-center shrink-0">
+              <div className="relative inline-block">
+                <select
+                  value={turmaSelecionada}
+                  onChange={(e) => handleSelecionarTurma(e.target.value)}
+                  disabled={carregandoTurmas}
+                  className="appearance-none bg-zinc-950 border border-zinc-700 text-sm text-white font-medium rounded-lg pl-4 pr-10 py-2.5 focus:outline-none focus:ring-1 focus:ring-zinc-500 cursor-pointer hover:border-zinc-600 transition-colors min-w-[240px] disabled:opacity-60"
+                >
+                  {carregandoTurmas ? (
+                    <option value="">Carregando turmas...</option>
+                  ) : turmas.length === 0 ? (
+                    <option value="">Nenhuma turma da sua área</option>
+                  ) : (
+                    <>
+                      {turmas.length > 1 && (
+                        <option value="">Selecione a Turma</option>
+                      )}
+                      {turmas.map((turma) => (
+                        <option key={turma.id} value={turma.codigo}>
+                          {labelTurma(turma)}
+                        </option>
+                      ))}
+                    </>
+                  )}
+                </select>
+                <ChevronDown className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 w-4 h-4 text-zinc-400" />
+              </div>
+
+              <div className="relative inline-block">
+                <select
+                  value={alunoSelecionado?.id ?? ""}
+                  onChange={(e) => handleSelecionarAluno(e.target.value)}
+                  disabled={!turmaSelecionada || carregandoAlunos}
+                  className="appearance-none bg-zinc-950 border border-zinc-700 text-sm text-white font-medium rounded-lg pl-4 pr-10 py-2.5 focus:outline-none focus:ring-1 focus:ring-zinc-500 cursor-pointer hover:border-zinc-600 transition-colors min-w-[280px] disabled:opacity-60"
+                >
+                  <option value="">
+                    {!turmaSelecionada
+                      ? "Selecione a turma primeiro"
+                      : carregandoAlunos
+                        ? "Carregando alunos..."
+                        : alunos.length === 0
+                          ? "Nenhum aluno nesta turma"
+                          : "Filtrar por Aluno"}
                   </option>
-                ))}
-              </select>
-              <ChevronDown className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 w-4 h-4 text-zinc-400" />
+                  {alunos.map((aluno) => (
+                    <option key={aluno.id} value={aluno.id}>
+                      {aluno.nome} — RA {aluno.ra}
+                    </option>
+                  ))}
+                </select>
+                <ChevronDown className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 w-4 h-4 text-zinc-400" />
+              </div>
             </div>
           </div>
 
@@ -650,8 +976,9 @@ export default function ProfessorInsightsPage() {
               {!alunoSelecionado ? (
                 <div className="rounded-lg border border-dashed border-gray-800 bg-black/40 px-4 py-10 text-center">
                   <p className="text-sm text-zinc-500">
-                    Selecione um aluno no filtro acima para visualizar o
-                    diagnóstico individual.
+                    {!turmaSelecionada
+                      ? "Selecione a turma e o aluno nos filtros acima para visualizar o diagnóstico individual."
+                      : "Selecione um aluno no filtro acima para visualizar o diagnóstico individual."}
                   </p>
                 </div>
               ) : (
@@ -685,6 +1012,20 @@ export default function ProfessorInsightsPage() {
                       </p>
                       <p className="text-sm text-zinc-200">
                         {alunoSelecionado.semestre}º
+                      </p>
+                    </div>
+                    <div className="rounded-lg bg-black/50 border border-gray-800 p-3 col-span-2">
+                      <p className="text-[11px] uppercase tracking-wide text-zinc-500 mb-1">
+                        Média recente
+                      </p>
+                      <p className="text-sm text-zinc-200">
+                        {carregandoResumo
+                          ? "…"
+                          : mediaAluno != null
+                            ? mediaAluno.toFixed(1)
+                            : alunoSelecionado.n1 != null
+                              ? Number(alunoSelecionado.n1).toFixed(1)
+                              : "Sem nota registrada"}
                       </p>
                     </div>
                   </div>
@@ -753,7 +1094,9 @@ export default function ProfessorInsightsPage() {
                   <p className="text-xs text-zinc-500 truncate">
                     {alunoSelecionado
                       ? `Contexto: ${alunoSelecionado.nome}`
-                      : "Selecione um aluno para contextualizar a conversa"}
+                      : !turmaSelecionada
+                        ? "Selecione a turma e o aluno para contextualizar a conversa"
+                        : "Selecione um aluno para contextualizar a conversa"}
                   </p>
                 </div>
               </div>
@@ -765,8 +1108,9 @@ export default function ProfessorInsightsPage() {
                 {!alunoSelecionado ? (
                   <div className="h-full flex items-center justify-center px-6 text-center">
                     <p className="text-sm text-zinc-500">
-                      Escolha um aluno no filtro para iniciar a análise
-                      conversacional com a IA.
+                      {!turmaSelecionada
+                        ? "Selecione a turma e o aluno nos filtros acima para iniciar a análise conversacional com a IA."
+                        : "Escolha um aluno no filtro para iniciar a análise conversacional com a IA."}
                     </p>
                   </div>
                 ) : (
@@ -812,7 +1156,9 @@ export default function ProfessorInsightsPage() {
                   placeholder={
                     alunoSelecionado
                       ? "Pergunte sobre desempenho, faltas ou engajamento..."
-                      : "Selecione um aluno para conversar"
+                      : !turmaSelecionada
+                        ? "Selecione a turma e o aluno para conversar"
+                        : "Selecione um aluno para conversar"
                   }
                   className="flex-1 bg-black border border-gray-800 rounded-lg px-3 py-2.5 text-sm text-white placeholder:text-zinc-600 outline-none focus:border-purple-500 disabled:opacity-50"
                 />
@@ -838,13 +1184,14 @@ export default function ProfessorInsightsPage() {
                 Visão Geral de Desempenho
               </h2>
               <p className="text-sm text-zinc-500 mt-0.5">
-                Desempenho Global da Turma — médias de notas e frequência
+                Frequência mensal via data_aula no semestre · média de notas atual
+                da turma (sem histórico temporal no banco)
               </p>
             </div>
             <div className="flex flex-wrap items-center gap-3">
               <div className="relative inline-block">
                 <select
-                  value={filtrosMacro.ano}
+                  value={ano}
                   onChange={(e) =>
                     setFiltrosMacro((prev) => ({
                       ...prev,
@@ -853,9 +1200,9 @@ export default function ProfessorInsightsPage() {
                   }
                   className="appearance-none bg-zinc-950 border border-zinc-700 text-sm text-white rounded-lg pl-3 pr-9 py-2 focus:outline-none focus:ring-1 focus:ring-zinc-500 cursor-pointer"
                 >
-                  {anosDisponiveis.map((ano) => (
-                    <option key={ano} value={ano}>
-                      {ano}
+                  {anosDisponiveis.map((anoOpt) => (
+                    <option key={anoOpt} value={anoOpt}>
+                      {anoOpt}
                     </option>
                   ))}
                 </select>
@@ -863,7 +1210,7 @@ export default function ProfessorInsightsPage() {
               </div>
               <div className="relative inline-block">
                 <select
-                  value={filtrosMacro.semestre}
+                  value={semestre}
                   onChange={(e) =>
                     setFiltrosMacro((prev) => ({
                       ...prev,
@@ -1018,7 +1365,7 @@ export default function ProfessorInsightsPage() {
                     Síntese Preditiva da Turma
                   </h3>
                   <p className="text-xs text-zinc-500">
-                    {filtrosMacro.ano} · {filtrosMacro.semestre}
+                    {ano} · {semestre}
                   </p>
                 </div>
               </div>

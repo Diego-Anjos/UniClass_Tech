@@ -27,14 +27,12 @@ import {
   useAlunoSession,
 } from "@/lib/aluno-session";
 import {
-  normalizarPreferencias,
+  extrairAtendimentoSalvo,
+  formatarAtendimentoBanner,
+  type AtendimentoPreferencias,
 } from "@/lib/professor-preferencias";
 
-type DisponibilidadeProf = {
-  dias: string[];
-  de: string;
-  ate: string;
-};
+type DisponibilidadeProf = AtendimentoPreferencias;
 
 const navItems = [
   { icon: LayoutDashboard, label: "Visão Geral", href: "/aluno/dashboard", active: false },
@@ -201,53 +199,54 @@ export default function AlunoContatoPage() {
     async function carregarDisponibilidade() {
       setDisponibilidadeProf(null);
 
+      // Preferências JSONB (fonte canônica do modal do professor)
       const { data, error } = await supabase
         .from("professores")
-        .select("dias_atendimento, atendimento_de, atendimento_ate")
+        .select("preferencias, dias_atendimento, atendimento_de, atendimento_ate")
         .ilike("nome", `%${professorSelecionado}%`)
         .maybeSingle();
 
       if (cancelado) return;
 
-      if (!error && data) {
-        const dias = Array.isArray(data.dias_atendimento)
-          ? (data.dias_atendimento as string[]).filter(Boolean)
-          : [];
-        const de =
-          typeof data.atendimento_de === "string" ? data.atendimento_de : "";
-        const ate =
-          typeof data.atendimento_ate === "string" ? data.atendimento_ate : "";
-
-        if (dias.length > 0 && de && ate) {
-          setDisponibilidadeProf({ dias, de, ate });
-          return;
-        }
-      } else if (error) {
+      if (error) {
+        console.error(
+          "Erro ao carregar preferências do professor:",
+          error.message
+        );
         toast.error("Erro ao carregar disponibilidade do professor.");
-      }
-
-      // Fallback: dados ainda só em preferencias (jsonb)
-      const { data: alt, error: altError } = await supabase
-        .from("professores")
-        .select("preferencias")
-        .ilike("nome", `%${professorSelecionado}%`)
-        .maybeSingle();
-
-      if (cancelado) return;
-
-      if (altError) {
-        toast.error("Erro ao carregar preferências do professor.");
         setDisponibilidadeProf(null);
         return;
       }
 
-      if (alt?.preferencias) {
-        const prefs = normalizarPreferencias(alt.preferencias);
-        setDisponibilidadeProf({
-          dias: prefs.dias_atendimento,
-          de: prefs.atendimento_de,
-          ate: prefs.atendimento_ate,
+      if (!data) {
+        setDisponibilidadeProf(null);
+        return;
+      }
+
+      const doJson = extrairAtendimentoSalvo(data.preferencias);
+      if (doJson) {
+        setDisponibilidadeProf(doJson);
+        return;
+      }
+
+      // Fallback: colunas dedicadas espelhadas pela API de preferências
+      const diasColuna = Array.isArray(data.dias_atendimento)
+        ? (data.dias_atendimento as string[]).filter(Boolean)
+        : [];
+      const deColuna =
+        typeof data.atendimento_de === "string" ? data.atendimento_de.trim() : "";
+      const ateColuna =
+        typeof data.atendimento_ate === "string"
+          ? data.atendimento_ate.trim()
+          : "";
+
+      if (diasColuna.length > 0 && deColuna && ateColuna) {
+        const legado = extrairAtendimentoSalvo({
+          dias_atendimento: diasColuna,
+          atendimento_de: deColuna,
+          atendimento_ate: ateColuna,
         });
+        setDisponibilidadeProf(legado);
         return;
       }
 
@@ -666,12 +665,10 @@ export default function AlunoContatoPage() {
                     ))}
                   </select>
                   {disponibilidadeProf ? (
-                    <p className="mt-2 flex items-start gap-1.5 text-xs text-zinc-500">
+                    <p className="mt-2 flex items-start gap-1.5 text-sm text-zinc-500">
                       <Clock className="w-3.5 h-3.5 shrink-0 mt-0.5" />
                       <span>
-                        Disponibilidade: {disponibilidadeProf.dias.join(", ")}{" "}
-                        • das {disponibilidadeProf.de} às{" "}
-                        {disponibilidadeProf.ate}
+                        {formatarAtendimentoBanner(disponibilidadeProf)}
                       </span>
                     </p>
                   ) : null}

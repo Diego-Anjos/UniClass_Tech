@@ -5,6 +5,8 @@ import {
   createGenAI,
   generateJsonWithFallback,
 } from "@/lib/gemini-fallback";
+import { blocoPreferenciasIa } from "@/lib/professor-preferencias";
+import { buscarPreferenciasProfessor } from "@/lib/professor-preferencias-server";
 
 const genAI = createGenAI();
 
@@ -24,11 +26,19 @@ export async function POST(req: NextRequest) {
   if (denied) return denied;
 
   try {
-    const { nome, titulacao, area_atuacao, carga_horaria, turmasCount } =
-      await req.json();
+    const {
+      nome,
+      titulacao,
+      area_atuacao,
+      carga_horaria,
+      turmasCount,
+      professorId,
+    } = await req.json();
+    const prefs = await buscarPreferenciasProfessor(professorId);
 
     const prompt = buildPrompt(
       `Você é um analista acadêmico sênior do ERP educacional UniClassTech.
+${blocoPreferenciasIa(prefs)}
 Analise os dados do docente e retorne um objeto JSON com o seguinte formato:
 {
   "tipoAlerta": "ALERTA DE RETENÇÃO" ou "DESEMPENHO POSITIVO" ou "EQUILÍBRIO DE CARGA",

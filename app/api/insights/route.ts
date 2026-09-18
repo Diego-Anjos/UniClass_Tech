@@ -5,6 +5,8 @@ import {
   createGenAI,
   generateJsonWithFallback,
 } from "@/lib/gemini-fallback";
+import { blocoPreferenciasIa } from "@/lib/professor-preferencias";
+import { buscarPreferenciasProfessor } from "@/lib/professor-preferencias-server";
 
 const genAI = createGenAI();
 
@@ -16,8 +18,9 @@ export async function POST(req: NextRequest) {
   if (denied) return denied;
 
   try {
-    const { context, turmasAtivas } = await req.json();
+    const { context, turmasAtivas, professorId } = await req.json();
     const totalTurmas = Number(turmasAtivas) || 0;
+    const prefs = await buscarPreferenciasProfessor(professorId);
 
     const instrucaoTurmas =
       totalTurmas > 0
@@ -26,6 +29,7 @@ export async function POST(req: NextRequest) {
 
     const prompt = buildPrompt(
       `Você é um assistente acadêmico virtual da plataforma UniClassTech. Você fornece dicas úteis, curtas e profissionais para professores. Seja direto e não use formatação markdown especial, apenas texto limpo.
+${blocoPreferenciasIa(prefs)}
 Retorne no formato: { "insight": "suas duas frases aqui" }`,
       `Gere em exatas DUAS frases curtas para o ${context}. ${instrucaoTurmas}`
     );

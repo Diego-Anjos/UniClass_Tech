@@ -20,8 +20,8 @@ import {
 } from "lucide-react";
 import { supabase } from "@/lib/supabase";
 import { ProfessorSettingsControl } from "@/components/professor/config-modal";
+import { ProfessorAvatar } from "@/components/professor/professor-avatar";
 import {
-  iniciaisDoProfessor,
   limparSessaoProfessor,
   parseTurmasProfessor,
   useProfessorSession,
@@ -110,7 +110,11 @@ export default function ProfessorDashboardPage() {
     }).format(new Date())
   );
 
-  async function fetchAiInsight(qtdTurmas: number, nomeContexto: string) {
+  async function fetchAiInsight(
+    qtdTurmas: number,
+    nomeContexto: string,
+    professorId?: string
+  ) {
     setIsLoadingAi(true);
     try {
       const response = await fetch("/api/insights", {
@@ -121,6 +125,7 @@ export default function ProfessorDashboardPage() {
         body: JSON.stringify({
           context: nomeContexto || "Professor",
           turmasAtivas: qtdTurmas,
+          professorId,
         }),
       });
 
@@ -138,26 +143,33 @@ export default function ProfessorDashboardPage() {
   }
 
   useEffect(() => {
-    if (!professorLogado) return;
+    if (!professorLogado) {
+      setCarregando(false);
+      return;
+    }
+
+    let cancelado = false;
 
     async function fetchDadosBase() {
       setCarregando(true);
 
       const nomeContexto =
         professorLogado!.nomeCompletoTitulo || professorLogado!.nome;
+      const professorId = professorLogado!.id;
+      let totalParaIa = 0;
 
       try {
         // Fonte de verdade: turmas vinculadas ao professor no banco (area_atuacao = CSV de códigos)
         let prof: ProfessorDb | null = null;
 
-        if (professorLogado!.id) {
+        if (professorId) {
           const { data: profRaw, error: profError } = await supabase
             .from("professores")
             .select(
               "id, nome, titulacao, area_atuacao, dias_aula, turno_aula, disciplina"
             )
-            .eq("id", professorLogado!.id)
-            .single();
+            .eq("id", professorId)
+            .maybeSingle();
 
           if (profError) {
             console.error("Erro ao buscar professor:", profError.message);
@@ -165,6 +177,8 @@ export default function ProfessorDashboardPage() {
             prof = (profRaw ?? null) as ProfessorDb | null;
           }
         }
+
+        if (cancelado) return;
 
         const codigosTurmas = parseTurmasProfessor(
           prof?.area_atuacao ??
@@ -224,6 +238,8 @@ export default function ProfessorDashboardPage() {
           }
         }
 
+        if (cancelado) return;
+
         // Agenda de hoje: cruza dia da semana com dias_aula do professor
         const diasAula = Array.isArray(prof?.dias_aula)
           ? (prof.dias_aula as string[])
@@ -250,8 +266,8 @@ export default function ProfessorDashboardPage() {
           setAgenda([]);
         }
 
-        // Notas das turmas do professor
-        const turmaIds = turmas.map((t) => t.id);
+        // Notas: coluna `turma` é UUID (FK → turmas.id) — nunca passar código textual
+        const turmaIds = turmas.map((t) => t.id).filter(Boolean);
         let notas: { media_final: unknown; status: unknown }[] = [];
 
         if (turmaIds.length > 0) {
@@ -270,6 +286,8 @@ export default function ProfessorDashboardPage() {
           }
         }
 
+        if (cancelado) return;
+
         const mediasValidas = notas
           .map((n) => Number(n.media_final))
           .filter((n) => !Number.isNaN(n));
@@ -287,29 +305,36 @@ export default function ProfessorDashboardPage() {
         }).length;
         setAlunosRisco(emRisco);
 
-        // Mensagens não lidas
+        // Mensagens não lidas (falha silenciosa — não bloqueia o dashboard)
         const listaPendencias: PendenciaItem[] = [];
 
-        const { data: msgsData, error: msgsError } = await supabase
-          .from("mensagens")
-          .select("id, assunto")
-          .eq("destinatario", professorLogado!.nomeCompletoTitulo)
-          .eq("lida", false);
+        try {
+          const { data: msgsData, error: msgsError } = await supabase
+            .from("mensagens")
+            .select("id, assunto")
+            .eq("destinatario", professorLogado!.nomeCompletoTitulo)
+            .eq("lida", false);
 
-        if (msgsError) {
-          console.error("Erro ao buscar mensagens:", msgsError.message);
-        } else if (msgsData && msgsData.length > 0) {
-          for (const msg of msgsData) {
-            const assunto = String(msg.assunto ?? "Sem assunto");
-            listaPendencias.push({
-              id: String(msg.id),
-              titulo: `Nova mensagem da Secretaria: ${assunto}`,
-              href: "/professor/dashboard/mensagens",
-            });
+          if (msgsError) {
+            console.error("Erro ao buscar mensagens:", msgsError.message);
+          } else if (msgsData && msgsData.length > 0) {
+            for (const msg of msgsData) {
+              const assunto = String(msg.assunto ?? "Sem assunto");
+              listaPendencias.push({
+                id: String(msg.id),
+                titulo: `Nova mensagem da Secretaria: ${assunto}`,
+                href: "/professor/dashboard/mensagens",
+              });
+            }
           }
+        } catch (msgErr) {
+          console.error("Erro ao carregar mensagens do dashboard:", msgErr);
         }
 
-        if (turmaIds.length > 0 && notas.length === 0) {
+        // Lembrete de notas: professor tem turmas (UUIDs) mas a consulta não devolveu lançamentos
+        const temTurmasDoProfessor = turmaIds.length > 0;
+        const semNotasLancadas = notas.length === 0;
+        if (temTurmasDoProfessor && semNotasLancadas) {
           listaPendencias.push({
             id: "lembrete-notas",
             titulo: "Lançamento de notas pendente para este bimestre.",
@@ -317,25 +342,38 @@ export default function ProfessorDashboardPage() {
           });
         }
 
-        setPendencias(listaPendencias);
-        await fetchAiInsight(
-          totalTurmas > 0 ? totalTurmas : turmas.length,
-          nomeContexto
-        );
-      } catch (err) {
-        console.error("Erro ao carregar dashboard:", err);
-        setTurmasAtivas(0);
-        setMediaGlobal(null);
-        setAlunosRisco(0);
-        setAgenda([]);
-        setPendencias([]);
-        await fetchAiInsight(0, nomeContexto);
+        if (!cancelado) {
+          setPendencias(listaPendencias);
+        }
+
+        totalParaIa = totalTurmas > 0 ? totalTurmas : turmas.length;
+      } catch (error) {
+        console.error("Erro ao carregar dashboard:", error);
+        if (!cancelado) {
+          setTurmasAtivas(0);
+          setMediaGlobal(null);
+          setAlunosRisco(0);
+          setAgenda([]);
+          setPendencias([]);
+        }
       } finally {
-        setCarregando(false);
+        // Destrava cards/agenda imediatamente — IA NÃO entra neste caminho
+        if (!cancelado) {
+          setCarregando(false);
+        }
+      }
+
+      // IA totalmente independente (fire-and-forget)
+      if (!cancelado) {
+        void fetchAiInsight(totalParaIa, nomeContexto, professorId);
       }
     }
 
     void fetchDadosBase();
+
+    return () => {
+      cancelado = true;
+    };
   }, [professorLogado]);
 
   if (carregandoSessao || !professorLogado) {
@@ -346,9 +384,6 @@ export default function ProfessorDashboardPage() {
     );
   }
 
-  const iniciais = iniciaisDoProfessor(
-    professorLogado.nome || professorLogado.nomeCompletoTitulo
-  );
   const primeiroNome =
     professorLogado.nome?.split(" ").filter(Boolean)[0] ||
     professorLogado.nomeCompletoTitulo.split(" ").filter(Boolean).slice(-1)[0] ||
@@ -375,9 +410,11 @@ export default function ProfessorDashboardPage() {
         <div className="px-4 py-5 border-b border-zinc-800">
           <div className="flex items-center justify-between gap-3">
             <div className="flex items-center gap-3 min-w-0">
-              <div className="w-10 h-10 rounded-full bg-zinc-800 flex items-center justify-center text-sm font-semibold text-white shrink-0">
-                {iniciais || "PR"}
-              </div>
+              <ProfessorAvatar
+                nome={professorLogado.nome || professorLogado.nomeCompletoTitulo}
+                fotoUrl={professorLogado.foto_url}
+                className="w-10 h-10 text-sm"
+              />
               <div className="min-w-0">
                 <p className="text-sm font-medium truncate">
                   {professorLogado.nomeCompletoTitulo}

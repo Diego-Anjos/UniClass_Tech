@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState, type ChangeEvent } from "react";
 import {
   Settings,
   X,
@@ -10,7 +10,10 @@ import {
   Bell,
   User,
   LogOut,
+  Camera,
+  Trash2,
 } from "lucide-react";
+import { toast } from "sonner";
 import { ModalFeedback } from "@/components/ModalFeedback";
 import {
   limparSessaoProfessor,
@@ -22,11 +25,15 @@ import {
   DIAS_ATENDIMENTO_OPCOES,
   PREFERENCIAS_PADRAO,
   atualizarSessaoProfessorLocal,
+  lerPreferenciasLocal,
   normalizarPreferencias,
+  prefsStorageKey,
+  salvarPreferenciasLocal,
   type DiaAtendimento,
   type PreferenciasProfessor,
   type TomIa,
 } from "@/lib/professor-preferencias";
+import { supabase } from "@/lib/supabase";
 
 type AbaAtiva = "ia" | "avaliacoes" | "perfil" | "notificacoes";
 
@@ -54,27 +61,6 @@ const TOM_OPCOES: { value: TomIa; label: string; desc: string }[] = [
     desc: "Tom encorajador e positivo",
   },
 ];
-
-function prefsKey(professorId: string) {
-  return `uniclass_prof_prefs_${professorId}`;
-}
-
-function lerPrefsLocal(professorId: string): PreferenciasProfessor | null {
-  try {
-    const raw = localStorage.getItem(prefsKey(professorId));
-    if (!raw) return null;
-    return normalizarPreferencias(JSON.parse(raw));
-  } catch {
-    return null;
-  }
-}
-
-function salvarPrefsLocal(
-  professorId: string,
-  prefs: PreferenciasProfessor
-) {
-  localStorage.setItem(prefsKey(professorId), JSON.stringify(prefs));
-}
 
 export function ProfessorSettingsControl() {
   const [isConfigOpen, setIsConfigOpen] = useState(false);
@@ -115,6 +101,10 @@ export function ProfessorSettingsControl() {
   const [nome, setNome] = useState("");
   const [departamento, setDepartamento] = useState("");
   const [titulacao, setTitulacao] = useState("");
+  const [fotoArquivo, setFotoArquivo] = useState<File | null>(null);
+  const [fotoPreview, setFotoPreview] = useState<string | null>(null);
+  const [removendoFoto, setRemovendoFoto] = useState(false);
+  const inputFotoRef = useRef<HTMLInputElement>(null);
 
   const [salvando, setSalvando] = useState(false);
   const [modalFeedback, setModalFeedback] = useState<{
@@ -148,6 +138,14 @@ export function ProfessorSettingsControl() {
       dias_atendimento: diasAtendimento,
       atendimento_de: atendimentoDe,
       atendimento_ate: atendimentoAte,
+      atendimento: {
+        dias: diasAtendimento.map(
+          (dia) =>
+            DIAS_ATENDIMENTO_OPCOES.find((o) => o.valor === dia)?.label ?? dia
+        ),
+        inicio: atendimentoDe,
+        fim: atendimentoAte,
+      },
       notificar_mensagens: notificarMensagens,
       notificar_alertas: notificarAlertas,
     });
@@ -166,6 +164,8 @@ export function ProfessorSettingsControl() {
 
     const sessao = lerSessaoProfessor();
     setProfessorSessao(sessao);
+    setFotoArquivo(null);
+    setFotoPreview(sessao?.foto_url?.trim() || null);
 
     if (!sessao?.id) {
       setModalFeedback({
@@ -192,6 +192,7 @@ export function ProfessorSettingsControl() {
           nome?: string;
           titulacao?: string;
           area_atuacao?: string;
+          foto_url?: string | null;
           preferencias?: PreferenciasProfessor;
         };
 
@@ -201,8 +202,9 @@ export function ProfessorSettingsControl() {
           setNome(sessao!.nome || "");
           setDepartamento(sessao!.area_atuacao || "");
           setTitulacao(sessao!.titulacao || "");
+          setFotoPreview(sessao!.foto_url?.trim() || null);
           aplicarPreferencias(
-            lerPrefsLocal(sessao!.id) ?? PREFERENCIAS_PADRAO
+            lerPreferenciasLocal(sessao!.id) ?? PREFERENCIAS_PADRAO
           );
           setModalFeedback({
             aberto: true,
@@ -219,18 +221,25 @@ export function ProfessorSettingsControl() {
         setNome(json.nome || sessao!.nome || "");
         setDepartamento(json.area_atuacao || sessao!.area_atuacao || "");
         setTitulacao(json.titulacao || sessao!.titulacao || "");
+        setFotoArquivo(null);
+        setFotoPreview(
+          (typeof json.foto_url === "string" && json.foto_url.trim()) ||
+            sessao!.foto_url?.trim() ||
+            null
+        );
         aplicarPreferencias(
           json.preferencias
             ? normalizarPreferencias(json.preferencias)
-            : lerPrefsLocal(sessao!.id) ?? PREFERENCIAS_PADRAO
+            : lerPreferenciasLocal(sessao!.id) ?? PREFERENCIAS_PADRAO
         );
       } catch {
         if (cancelado) return;
         setNome(sessao!.nome || "");
         setDepartamento(sessao!.area_atuacao || "");
         setTitulacao(sessao!.titulacao || "");
+        setFotoPreview(sessao!.foto_url?.trim() || null);
         aplicarPreferencias(
-          lerPrefsLocal(sessao!.id) ?? PREFERENCIAS_PADRAO
+          lerPreferenciasLocal(sessao!.id) ?? PREFERENCIAS_PADRAO
         );
         setModalFeedback({
           aberto: true,
@@ -252,12 +261,145 @@ export function ProfessorSettingsControl() {
 
   function fecharModal() {
     if (salvando) return;
+    if (fotoPreview?.startsWith("blob:")) {
+      URL.revokeObjectURL(fotoPreview);
+    }
+    setFotoArquivo(null);
     setIsConfigOpen(false);
     setAbaAtiva("ia");
   }
 
   function fecharFeedback() {
     setModalFeedback((prev) => ({ ...prev, aberto: false }));
+  }
+
+  function handleSelecionarFoto(e: ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0];
+    e.target.value = "";
+    if (!file) return;
+
+    if (!file.type.startsWith("image/")) {
+      setModalFeedback({
+        aberto: true,
+        tipo: "atencao",
+        titulo: "Arquivo inválido",
+        mensagem: "Selecione apenas arquivos de imagem (JPG, PNG, WEBP, etc.).",
+      });
+      return;
+    }
+
+    if (fotoPreview?.startsWith("blob:")) {
+      URL.revokeObjectURL(fotoPreview);
+    }
+
+    setFotoArquivo(file);
+    setFotoPreview(URL.createObjectURL(file));
+  }
+
+  function limparPreviewLocal() {
+    if (fotoPreview?.startsWith("blob:")) {
+      URL.revokeObjectURL(fotoPreview);
+    }
+    setFotoArquivo(null);
+    setFotoPreview(null);
+  }
+
+  function caminhoArquivoNoBucket(fotoUrl: string): string | null {
+    try {
+      const marker = "/avatares/";
+      const idx = fotoUrl.indexOf(marker);
+      if (idx >= 0) {
+        return decodeURIComponent(fotoUrl.slice(idx + marker.length).split("?")[0] || "");
+      }
+      const nome = fotoUrl.split("/").pop()?.split("?")[0];
+      return nome ? decodeURIComponent(nome) : null;
+    } catch {
+      return null;
+    }
+  }
+
+  async function handleRemoverFoto() {
+    if (!fotoPreview && !fotoArquivo) return;
+    if (salvando || removendoFoto) return;
+
+    // Passo A: preview local ainda não persistido
+    if (fotoArquivo || fotoPreview?.startsWith("blob:")) {
+      limparPreviewLocal();
+      toast.success("Seleção de foto descartada.");
+      return;
+    }
+
+    const sessao = professorSessao ?? lerSessaoProfessor();
+    const fotoUrlOficial =
+      (typeof fotoPreview === "string" && fotoPreview.startsWith("http")
+        ? fotoPreview
+        : null) ||
+      sessao?.foto_url?.trim() ||
+      null;
+
+    if (!fotoUrlOficial || !sessao?.id) {
+      limparPreviewLocal();
+      return;
+    }
+
+    setRemovendoFoto(true);
+
+    const promise = (async () => {
+      const caminho = caminhoArquivoNoBucket(fotoUrlOficial);
+      if (caminho) {
+        const { error: storageError } = await supabase.storage
+          .from("avatares")
+          .remove([caminho]);
+        if (storageError) {
+          throw new Error(
+            storageError.message ||
+              "Não foi possível remover a foto do armazenamento."
+          );
+        }
+      }
+
+      const res = await fetch("/api/professores/preferencias", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          professorId: sessao.id,
+          nome: (nome.trim() || sessao.nome).trim(),
+          titulacao: (titulacao.trim() || sessao.titulacao).trim(),
+          area_atuacao: (departamento.trim() || sessao.area_atuacao).trim(),
+          foto_url: null,
+          preferencias: montarPreferencias(),
+        }),
+      });
+
+      const json = (await res.json()) as { error?: string };
+      if (!res.ok) {
+        throw new Error(json.error || "Não foi possível atualizar o perfil.");
+      }
+
+      const atualizada = atualizarSessaoProfessorLocal(sessao, {
+        foto_url: null,
+      });
+      setProfessorSessao(atualizada);
+      setFotoArquivo(null);
+      setFotoPreview(null);
+    })();
+
+    toast.promise(promise, {
+      loading: "Removendo foto...",
+      success: "Foto removida com sucesso!",
+      error: (err) =>
+        err instanceof Error
+          ? err.message
+          : "Não foi possível remover a foto.",
+    });
+
+    try {
+      await promise;
+    } catch {
+      // feedback já tratado pelo toast.promise
+    } finally {
+      setRemovendoFoto(false);
+    }
   }
 
   async function handleSalvar() {
@@ -290,54 +432,87 @@ export function ProfessorSettingsControl() {
 
     setSalvando(true);
 
-    try {
+    const promise = (async () => {
+      let novaFotoUrl: string | null | undefined;
+
+      if (fotoArquivo) {
+        const fileExt = fotoArquivo.name.split(".").pop()?.toLowerCase() || "jpg";
+        const nomeArquivo = `perfil-prof-${sessao.id}-${Date.now()}.${fileExt}`;
+
+        const { error: uploadError } = await supabase.storage
+          .from("avatares")
+          .upload(nomeArquivo, fotoArquivo, {
+            upsert: true,
+            cacheControl: "3600",
+          });
+
+        if (uploadError) {
+          throw new Error(
+            uploadError.message ||
+              "Não foi possível enviar a foto de perfil."
+          );
+        }
+
+        const { data: publicUrl } = supabase.storage
+          .from("avatares")
+          .getPublicUrl(nomeArquivo);
+
+        novaFotoUrl = publicUrl.publicUrl;
+      }
+
+      const payload: Record<string, unknown> = {
+        professorId: sessao.id,
+        nome: nomeTrim,
+        titulacao: titulacaoTrim,
+        area_atuacao: departamentoTrim,
+        preferencias,
+      };
+      if (novaFotoUrl) {
+        payload.foto_url = novaFotoUrl;
+      }
+
       const res = await fetch("/api/professores/preferencias", {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          professorId: sessao.id,
-          nome: nomeTrim,
-          titulacao: titulacaoTrim,
-          area_atuacao: departamentoTrim,
-          preferencias,
-        }),
+        body: JSON.stringify(payload),
       });
 
       const json = (await res.json()) as { error?: string };
-
       if (!res.ok) {
-        setModalFeedback({
-          aberto: true,
-          tipo: "erro",
-          titulo: "Erro ao salvar",
-          mensagem: json.error || "Não foi possível salvar as preferências.",
-        });
-        return;
+        throw new Error(json.error || "Não foi possível salvar o perfil.");
       }
 
-      salvarPrefsLocal(sessao.id, preferencias);
+      salvarPreferenciasLocal(sessao.id, preferencias);
       const atualizada = atualizarSessaoProfessorLocal(sessao, {
         nome: nomeTrim,
         titulacao: titulacaoTrim,
         area_atuacao: departamentoTrim,
+        ...(novaFotoUrl ? { foto_url: novaFotoUrl } : {}),
       });
       setProfessorSessao(atualizada);
-
+      if (fotoPreview?.startsWith("blob:")) {
+        URL.revokeObjectURL(fotoPreview);
+      }
+      setFotoArquivo(null);
+      setFotoPreview(atualizada.foto_url ?? null);
       setIsConfigOpen(false);
       setAbaAtiva("ia");
-      setModalFeedback({
-        aberto: true,
-        tipo: "sucesso",
-        titulo: "Preferências salvas",
-        mensagem: "Preferências salvas com sucesso!",
-      });
+      return preferencias;
+    })();
+
+    toast.promise(promise, {
+      loading: "Salvando perfil...",
+      success: "Perfil atualizado com sucesso!",
+      error: (err) =>
+        err instanceof Error
+          ? err.message
+          : "Não foi possível salvar o perfil.",
+    });
+
+    try {
+      await promise;
     } catch {
-      setModalFeedback({
-        aberto: true,
-        tipo: "erro",
-        titulo: "Erro ao salvar",
-        mensagem: "Não foi possível salvar as preferências.",
-      });
+      // feedback já tratado pelo toast.promise
     } finally {
       setSalvando(false);
     }
@@ -348,7 +523,7 @@ export function ProfessorSettingsControl() {
     limparSessaoProfessor();
     localStorage.removeItem("professorLogado");
     if (sessao?.id) {
-      localStorage.removeItem(prefsKey(sessao.id));
+      localStorage.removeItem(prefsStorageKey(sessao.id));
     }
     window.location.assign("/");
   }
@@ -441,7 +616,7 @@ export function ProfessorSettingsControl() {
                               onClick={() => setTomIA(opcao.value)}
                               className={`text-left rounded-xl border px-3.5 py-3 transition-colors cursor-pointer ${
                                 tomIA === opcao.value
-                                  ? "border-white/40 bg-zinc-900"
+                                  ? "border-emerald-400/70 bg-emerald-950/40 ring-1 ring-emerald-400/30"
                                   : "border-gray-800 bg-black/30 hover:border-gray-700"
                               }`}
                             >
@@ -672,16 +847,58 @@ export function ProfessorSettingsControl() {
                   {abaAtiva === "perfil" && (
                     <div className="flex flex-col gap-5">
                       <div className="flex items-center gap-4">
-                        <div className="w-14 h-14 rounded-full bg-zinc-800 flex items-center justify-center text-base font-semibold text-white shrink-0">
-                          {iniciais || "P"}
-                        </div>
-                        <div>
+                        <button
+                          type="button"
+                          onClick={() => inputFotoRef.current?.click()}
+                          disabled={salvando || removendoFoto}
+                          aria-label="Alterar foto de perfil"
+                          className="group relative w-14 h-14 rounded-full bg-zinc-800 flex items-center justify-center text-base font-semibold text-white shrink-0 overflow-hidden cursor-pointer focus:outline-none focus-visible:ring-2 focus-visible:ring-white/40 disabled:opacity-50 disabled:cursor-not-allowed"
+                        >
+                          {fotoPreview ? (
+                            // eslint-disable-next-line @next/next/no-img-element
+                            <img
+                              src={fotoPreview}
+                              alt=""
+                              className="absolute inset-0 w-full h-full object-cover transition-opacity group-hover:opacity-40"
+                            />
+                          ) : (
+                            <span className="transition-opacity group-hover:opacity-40">
+                              {iniciais || "P"}
+                            </span>
+                          )}
+                          <span className="absolute inset-0 flex items-center justify-center bg-black/50 opacity-0 group-hover:opacity-100 transition-opacity">
+                            <Camera className="w-5 h-5 text-white" />
+                          </span>
+                        </button>
+                        <input
+                          ref={inputFotoRef}
+                          type="file"
+                          accept="image/*"
+                          className="hidden"
+                          onChange={handleSelecionarFoto}
+                        />
+                        <div className="min-w-0">
                           <p className="text-base font-medium text-white">
                             {nome ? `Prof. ${nome}` : "Perfil docente"}
                           </p>
                           <p className="text-xs text-zinc-500 mt-0.5">
-                            Conta docente ativa
+                            Clique na foto para alterar o avatar
                           </p>
+                          {(fotoPreview || fotoArquivo) && (
+                            <button
+                              type="button"
+                              onClick={() => void handleRemoverFoto()}
+                              disabled={salvando || removendoFoto}
+                              className="mt-2 inline-flex items-center gap-1.5 text-xs text-red-400/90 hover:text-red-300 transition-colors cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
+                            >
+                              {removendoFoto ? (
+                                <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                              ) : (
+                                <Trash2 className="w-3.5 h-3.5" />
+                              )}
+                              Remover foto
+                            </button>
+                          )}
                         </div>
                       </div>
 
@@ -760,7 +977,7 @@ export function ProfessorSettingsControl() {
                 <button
                   type="button"
                   onClick={() => void handleSalvar()}
-                  disabled={salvando || carregandoPrefs}
+                  disabled={salvando || carregandoPrefs || removendoFoto}
                   className="px-4 py-2 rounded-lg bg-white text-black text-sm font-medium hover:opacity-90 transition-opacity cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2 min-w-[160px] justify-center"
                 >
                   {salvando ? (

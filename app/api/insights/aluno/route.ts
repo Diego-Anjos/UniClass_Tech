@@ -5,6 +5,8 @@ import {
   createGenAI,
   generateJsonWithFallback,
 } from "@/lib/gemini-fallback";
+import { blocoPreferenciasIa } from "@/lib/professor-preferencias";
+import { buscarPreferenciasProfessor } from "@/lib/professor-preferencias-server";
 
 const genAI = createGenAI();
 
@@ -17,7 +19,6 @@ const FALLBACK_ALUNO = {
   riscoLabel: "Indisponível",
   metricaLabel: "STATUS",
   metricaValor: "—",
-  // Chaves alternativas (degradação / contratos legados)
   risco: "Indisponível",
   recomendacao:
     "Não foi possível gerar a análise da IA no momento. Tente novamente mais tarde.",
@@ -31,10 +32,12 @@ export async function POST(req: NextRequest) {
   if (denied) return denied;
 
   try {
-    const { nome, curso, semestre, professor } = await req.json();
+    const { nome, curso, semestre, professor, professorId } = await req.json();
+    const prefs = await buscarPreferenciasProfessor(professorId);
 
     const prompt = buildPrompt(
       `Você é um analista pedagógico sênior do ERP educacional UniClassTech.
+${blocoPreferenciasIa(prefs)}
 Com base no estudante, seu curso e semestre, gere um diagnóstico acadêmico preditivo no seguinte formato JSON:
 {
   "tipoAlerta": "ALERTA PREDITIVO" | "DESEMPENHO NOTÁVEL" | "RISCO DE EVASÃO",

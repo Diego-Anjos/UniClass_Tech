@@ -45,6 +45,8 @@ export type ProfessorSession = {
   titulacao: string;
   area_atuacao: string;
   nomeCompletoTitulo: string;
+  /** URL pública da foto no bucket `avatares`. */
+  foto_url?: string | null;
   turno_aula?: string;
   dias_aula?: string[];
   /** Códigos das turmas (array, JSON string ou CSV). */
@@ -53,6 +55,9 @@ export type ProfessorSession = {
   /** Distribuição de pontos N1 (atividades + prova). */
   pesos?: PesosAvaliacao;
 };
+
+/** Disparado quando a sessão em localStorage é atualizada (ex.: perfil salvo). */
+export const EVENTO_SESSAO_PROFESSOR = "uniclass-prof-session-updated";
 
 /** Normaliza códigos de turmas (array, JSON string ou CSV). */
 export function parseTurmasProfessor(raw: unknown): string[] {
@@ -132,24 +137,41 @@ export function useProfessorSession() {
   const [carregandoSessao, setCarregandoSessao] = useState(true);
 
   useEffect(() => {
-    const parsed = lerSessaoProfessor();
-
-    if (!parsed) {
-      encerrarSessaoProfessor();
+    function aplicarSessao(parsed: ProfessorSession | null) {
+      if (!parsed || (!parsed.nome && !parsed.nomeCompletoTitulo)) {
+        encerrarSessaoProfessor();
+        setProfessorLogado(null);
+        setCarregandoSessao(false);
+        router.push("/");
+        return;
+      }
+      setProfessorLogado(parsed);
       setCarregandoSessao(false);
-      router.push("/");
-      return;
     }
 
-    if (!parsed.nome && !parsed.nomeCompletoTitulo) {
-      encerrarSessaoProfessor();
-      setCarregandoSessao(false);
-      router.push("/");
-      return;
+    aplicarSessao(lerSessaoProfessor());
+
+    function onSessaoAtualizada(event: Event) {
+      const detail = (event as CustomEvent<ProfessorSession>).detail;
+      if (detail?.id) {
+        setProfessorLogado(detail);
+        return;
+      }
+      aplicarSessao(lerSessaoProfessor());
     }
 
-    setProfessorLogado(parsed);
-    setCarregandoSessao(false);
+    function onStorage(event: StorageEvent) {
+      if (event.key === "uniclass_prof_session") {
+        aplicarSessao(lerSessaoProfessor());
+      }
+    }
+
+    window.addEventListener(EVENTO_SESSAO_PROFESSOR, onSessaoAtualizada);
+    window.addEventListener("storage", onStorage);
+    return () => {
+      window.removeEventListener(EVENTO_SESSAO_PROFESSOR, onSessaoAtualizada);
+      window.removeEventListener("storage", onStorage);
+    };
   }, [router]);
 
   return { professorLogado, carregandoSessao };
