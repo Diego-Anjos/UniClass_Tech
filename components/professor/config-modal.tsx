@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState, type ChangeEvent } from "react";
+import { useRouter } from "next/navigation";
 import {
   Settings,
   X,
@@ -63,6 +64,7 @@ const TOM_OPCOES: { value: TomIa; label: string; desc: string }[] = [
 ];
 
 export function ProfessorSettingsControl() {
+  const router = useRouter();
   const [isConfigOpen, setIsConfigOpen] = useState(false);
   const [abaAtiva, setAbaAtiva] = useState<AbaAtiva>("ia");
   const [carregandoPrefs, setCarregandoPrefs] = useState(false);
@@ -382,6 +384,7 @@ export function ProfessorSettingsControl() {
       setProfessorSessao(atualizada);
       setFotoArquivo(null);
       setFotoPreview(null);
+      router.refresh();
     })();
 
     toast.promise(promise, {
@@ -497,6 +500,7 @@ export function ProfessorSettingsControl() {
       setFotoPreview(atualizada.foto_url ?? null);
       setIsConfigOpen(false);
       setAbaAtiva("ia");
+      router.refresh();
       return preferencias;
     })();
 

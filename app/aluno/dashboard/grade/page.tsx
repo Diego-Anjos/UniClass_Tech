@@ -20,6 +20,7 @@ import {
   Settings,
 } from "lucide-react";
 import { supabase } from "@/lib/supabase";
+import { AlunoAvatar } from "@/components/aluno/aluno-avatar";
 import { ModalFeedback } from "@/components/ModalFeedback";
 import {
   limparSessaoAluno,
@@ -58,17 +59,6 @@ type DisciplinaGrade = {
   semestre: number;
   status: string | null;
 };
-
-function iniciaisDe(nome: string) {
-  return (
-    nome
-      .split(" ")
-      .filter(Boolean)
-      .slice(0, 2)
-      .map((p) => p[0]?.toUpperCase() ?? "")
-      .join("") || "—"
-  );
-}
 
 function extrairNumeroSemestre(raw: unknown): number {
   if (typeof raw === "number" && Number.isFinite(raw) && raw > 0) {
@@ -581,9 +571,12 @@ export default function AlunoGradePage() {
           <div className="flex items-center justify-between gap-3">
             <div className="flex items-center gap-3 min-w-0">
               <div className="relative shrink-0">
-                <div className="w-10 h-10 rounded-full bg-zinc-800 flex items-center justify-center text-base font-semibold text-white">
-                  {aluno ? iniciaisDe(aluno.nome) : "—"}
-                </div>
+                <AlunoAvatar
+                  nome={aluno?.nome || alunoLogado?.nome || "Estudante"}
+                  fotoUrl={alunoLogado?.foto_url}
+                  className="w-10 h-10 text-base"
+                  fallback="—"
+                />
                 <div className="absolute -bottom-0.5 -right-0.5 w-4 h-4 bg-zinc-700 border border-zinc-900 rounded-full flex items-center justify-center cursor-pointer hover:bg-zinc-600 transition-colors">
                   <Camera className="w-2.5 h-2.5 text-zinc-300" />
                 </div>

@@ -17,8 +17,8 @@ import {
   Loader2,
 } from "lucide-react";
 import { supabase } from "@/lib/supabase";
+import { AlunoAvatar } from "@/components/aluno/aluno-avatar";
 import {
-  iniciaisDoAluno,
   limparSessaoAluno,
   useAlunoSession,
 } from "@/lib/aluno-session";
@@ -238,9 +238,12 @@ export default function AlunoCalendarioPage() {
           <div className="flex items-center justify-between gap-3">
             <div className="flex items-center gap-3 min-w-0">
               <div className="relative shrink-0">
-                <div className="w-10 h-10 rounded-full bg-zinc-800 flex items-center justify-center text-base font-semibold text-white">
-                  {alunoLogado ? iniciaisDoAluno(alunoLogado.nome) : "—"}
-                </div>
+                <AlunoAvatar
+                  nome={alunoLogado?.nome || "Estudante"}
+                  fotoUrl={alunoLogado?.foto_url}
+                  className="w-10 h-10 text-base"
+                  fallback="—"
+                />
                 <div className="absolute -bottom-0.5 -right-0.5 w-4 h-4 bg-zinc-700 border border-zinc-900 rounded-full flex items-center justify-center">
                   <Camera className="w-2.5 h-2.5 text-zinc-300" />
                 </div>

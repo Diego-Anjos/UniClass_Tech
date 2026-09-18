@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import {
   LayoutDashboard,
   ClipboardList,
@@ -21,11 +22,11 @@ import {
   Loader2,
 } from "lucide-react";
 import { supabase } from "@/lib/supabase";
+import { AlunoAvatar } from "@/components/aluno/aluno-avatar";
 import { ModalFeedback } from "@/components/ModalFeedback";
 import { toast } from "sonner";
 import {
   atualizarSessaoAlunoLocal,
-  iniciaisDoAluno,
   limparSessaoAluno,
   lerSessaoAluno,
   useAlunoSession,
@@ -142,6 +143,7 @@ const navItems = [
 ];
 
 export default function AlunoPerfilPage() {
+  const router = useRouter();
   const { alunoLogado: sessaoAluno, carregandoSessao } = useAlunoSession();
   const alunoRa = sessaoAluno?.ra ?? "";
   const inputFotoRef = useRef<HTMLInputElement>(null);
@@ -169,11 +171,6 @@ export default function AlunoPerfilPage() {
     mensagem: "",
   });
 
-  const iniciais = alunoLogado?.nome
-    ? iniciaisDoAluno(alunoLogado.nome)
-    : sessaoAluno?.nome
-      ? iniciaisDoAluno(sessaoAluno.nome)
-      : "UN";
   const fotoUrl = alunoLogado?.foto_url || sessaoAluno?.foto_url || null;
 
   const dadosAcademicos = [
@@ -473,6 +470,8 @@ export default function AlunoPerfilPage() {
         atualizarSessaoAlunoLocal(sessao, { foto_url: null });
       }
 
+      router.refresh();
+
       toast.success("Foto de perfil removida.");
       abrirFeedback(
         "sucesso",
@@ -559,6 +558,8 @@ export default function AlunoPerfilPage() {
         atualizarSessaoAlunoLocal(sessao, { foto_url: novaUrl });
       }
 
+      router.refresh();
+
       toast.success("Foto de perfil atualizada.");
       abrirFeedback(
         "sucesso",
@@ -610,19 +611,15 @@ export default function AlunoPerfilPage() {
                   type="button"
                   onClick={abrirSeletorFoto}
                   disabled={uploadingFoto || loadingRemocao}
-                  className="w-10 h-10 rounded-full bg-zinc-800 overflow-hidden flex items-center justify-center text-base font-semibold text-white cursor-pointer hover:opacity-90 transition-opacity disabled:opacity-50"
+                  className="rounded-full cursor-pointer hover:opacity-90 transition-opacity disabled:opacity-50"
                   aria-label="Trocar foto de perfil"
                 >
-                  {fotoUrl ? (
-                    // eslint-disable-next-line @next/next/no-img-element
-                    <img
-                      src={fotoUrl}
-                      alt={nomeExibicao}
-                      className="w-full h-full object-cover"
-                    />
-                  ) : (
-                    iniciais
-                  )}
+                  <AlunoAvatar
+                    nome={nomeExibicao}
+                    fotoUrl={fotoUrl}
+                    className="w-10 h-10 text-base"
+                    fallback="UN"
+                  />
                 </button>
                 <button
                   type="button"
@@ -734,19 +731,15 @@ export default function AlunoPerfilPage() {
                         type="button"
                         onClick={abrirSeletorFoto}
                         disabled={uploadingFoto || loadingRemocao}
-                        className="w-16 h-16 rounded-full bg-zinc-800 overflow-hidden flex items-center justify-center text-2xl font-semibold text-white cursor-pointer hover:opacity-90 transition-opacity disabled:opacity-50"
+                        className="rounded-full cursor-pointer hover:opacity-90 transition-opacity disabled:opacity-50"
                         aria-label="Trocar foto de perfil"
                       >
-                        {fotoUrl ? (
-                          // eslint-disable-next-line @next/next/no-img-element
-                          <img
-                            src={fotoUrl}
-                            alt={nomeExibicao}
-                            className="w-full h-full object-cover"
-                          />
-                        ) : (
-                          iniciais
-                        )}
+                        <AlunoAvatar
+                          nome={nomeExibicao}
+                          fotoUrl={fotoUrl}
+                          className="w-16 h-16 text-2xl"
+                          fallback="UN"
+                        />
                       </button>
                       <button
                         type="button"

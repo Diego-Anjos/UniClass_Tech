@@ -3,6 +3,16 @@ import { GoogleGenerativeAI } from "@google/generative-ai";
 import { requireApiAuth } from "@/lib/api-auth";
 import { modelosFallback } from "@/lib/gemini-fallback";
 
+function isRateLimitError(message: string): boolean {
+  const lower = message.toLowerCase();
+  return (
+    lower.includes("429") ||
+    lower.includes("quota") ||
+    lower.includes("too many requests") ||
+    lower.includes("rate limit")
+  );
+}
+
 export async function GET(req: Request) {
   const denied = requireApiAuth(req);
   if (denied) return denied;
@@ -24,11 +34,32 @@ export async function GET(req: Request) {
     const model = genAI.getGenerativeModel({ model: modeloNome });
     await model.generateContent("Responda apenas: ok");
 
-    return NextResponse.json({ status: "ok", provider: "gemini", model: modeloNome });
+    return NextResponse.json({
+      success: true,
+      status: "ok",
+      provider: "gemini",
+      model: modeloNome,
+    });
   } catch (err: unknown) {
     const message =
       err instanceof Error ? err.message : "Falha ao conectar com o Gemini.";
     console.error("[/api/gemini/test] Erro:", message);
-    return NextResponse.json({ status: "error", error: message }, { status: 503 });
+
+    // Cota/rate limit = chave válida e rede OK — sucesso parcial, não falha de conexão
+    if (isRateLimitError(message)) {
+      return NextResponse.json(
+        {
+          success: true,
+          status: "rate_limited",
+          message: "Conectado (Limite de Cota)",
+        },
+        { status: 200 }
+      );
+    }
+
+    return NextResponse.json(
+      { success: false, status: "error", error: message },
+      { status: 503 }
+    );
   }
 }

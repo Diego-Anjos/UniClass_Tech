@@ -9,6 +9,7 @@ import {
   Mail,
   CheckCircle2,
   XCircle,
+  AlertTriangle,
   Plug,
   Database,
 } from "lucide-react";
@@ -110,7 +111,7 @@ export default function ConfiguracoesSistemaPage() {
   >("Conectado");
 
   const [geminiStatus, setGeminiStatus] = useState<
-    "Conectado" | "Desconectado" | "Testando..."
+    "Conectado" | "Conectado (Sem Cota)" | "Desconectado" | "Testando..."
   >("Conectado");
 
   async function testarResend() {
@@ -193,8 +194,32 @@ export default function ConfiguracoesSistemaPage() {
     setGeminiStatus("Testando...");
     try {
       const res = await fetch("/api/gemini/test");
-      if (res.ok) {
+      const payload = (await res.json().catch(() => ({}))) as {
+        success?: boolean;
+        status?: string;
+        message?: string;
+        error?: string;
+      };
+
+      if (res.ok && payload.status === "rate_limited") {
+        setGeminiStatus("Conectado (Sem Cota)");
+        toast.warning(
+          payload.message ||
+            "Conexão com Gemini OK, mas a cota diária foi atingida."
+        );
+        setModalFeedback({
+          aberto: true,
+          tipo: "atencao",
+          titulo: "Limite de cota atingido",
+          mensagem:
+            "A chave da API é válida e a rede responde, porém a cota gratuita do Gemini foi esgotada. Tente novamente mais tarde.",
+        });
+        return;
+      }
+
+      if (res.ok && (payload.success === true || payload.status === "ok")) {
         setGeminiStatus("Conectado");
+        toast.success("Conexão com Google Gemini estabelecida com sucesso!");
         setModalFeedback({
           aberto: true,
           tipo: "sucesso",
@@ -202,19 +227,27 @@ export default function ConfiguracoesSistemaPage() {
           mensagem:
             "Conexão com Google Gemini estabelecida com sucesso! Gemini Flash operacional.",
         });
-      } else {
-        setGeminiStatus("Desconectado");
-        setModalFeedback({
-          aberto: true,
-          tipo: "erro",
-          titulo: "Falha na conexão",
-          mensagem:
-            "Falha na conexão com o Google Gemini. Verifique a chave de API.",
-        });
+        return;
       }
+
+      setGeminiStatus("Desconectado");
+      toast.error(
+        payload.error ||
+          "Falha na conexão com o Google Gemini. Verifique a chave de API."
+      );
+      setModalFeedback({
+        aberto: true,
+        tipo: "erro",
+        titulo: "Falha na conexão",
+        mensagem:
+          "Falha na conexão com o Google Gemini. Verifique a chave de API.",
+      });
     } catch (err) {
       console.error("Erro ao testar Gemini:", err);
       setGeminiStatus("Desconectado");
+      toast.error(
+        "Falha na conexão com o Google Gemini. Verifique a chave de API."
+      );
       setModalFeedback({
         aberto: true,
         tipo: "erro",
@@ -340,6 +373,8 @@ export default function ConfiguracoesSistemaPage() {
                               className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[11px] font-medium border ${
                                 geminiStatus === "Conectado"
                                   ? "bg-green-950 text-green-400 border-green-900/50"
+                                  : geminiStatus === "Conectado (Sem Cota)"
+                                  ? "bg-yellow-500/20 text-yellow-500 border-yellow-500/30"
                                   : geminiStatus === "Desconectado"
                                   ? "bg-red-950 text-red-400 border-red-900/50"
                                   : "bg-zinc-800 text-zinc-400 border-zinc-700/50"
@@ -347,6 +382,8 @@ export default function ConfiguracoesSistemaPage() {
                             >
                               {geminiStatus === "Conectado" ? (
                                 <CheckCircle2 className="w-3 h-3" />
+                              ) : geminiStatus === "Conectado (Sem Cota)" ? (
+                                <AlertTriangle className="w-3 h-3" />
                               ) : geminiStatus === "Desconectado" ? (
                                 <XCircle className="w-3 h-3" />
                               ) : (

@@ -3,6 +3,7 @@ import { GoogleGenerativeAI } from "@google/generative-ai";
 /**
  * Esteira de redundância Gemini (ordem = prioridade).
  * RPD é por modelo: Flash modernos ~20 RPD; Lite ~500 RPD (tanque de guerra).
+ * gemini-2.5-flash-lite removido: Google deixou de suportá-lo (404).
  */
 export const modelosFallback = [
   "gemini-3.8-flash",
@@ -10,7 +11,6 @@ export const modelosFallback = [
   "gemini-3.6-flash",
   "gemini-3.5-flash",
   "gemini-3.1-flash-lite",
-  "gemini-2.5-flash-lite",
 ] as const;
 
 /** Alias explícito da lista de redundância (mesmo array). */
