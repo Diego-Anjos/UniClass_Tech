@@ -45,6 +45,11 @@ export async function POST(request: Request) {
       );
     }
 
+    const fotoRaw =
+      (typeof aluno.foto_url === "string" && aluno.foto_url.trim()) ||
+      (typeof aluno.avatar_url === "string" && aluno.avatar_url.trim()) ||
+      "";
+
     const response = NextResponse.json({
       aluno: {
         ra: String(aluno.ra ?? ra),
@@ -52,6 +57,7 @@ export async function POST(request: Request) {
         curso: String(aluno.curso ?? ""),
         semestreAtual:
           aluno.semestre_atual ?? aluno.semestre ?? aluno.SemestreAtual ?? "",
+        foto_url: fotoRaw || null,
       },
     });
 

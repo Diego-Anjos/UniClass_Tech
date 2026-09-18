@@ -38,29 +38,25 @@ const navItems = [
 
 const CARGA_TOTAL_PADRAO = 2400;
 const CARGA_HORARIA_DISCIPLINA_PADRAO = 80;
-const SEMESTRE_PADRAO = 4;
+const SEMESTRE_PADRAO = 1;
 const SEMESTRE_LIMITE_CURSO = 8;
-const HORAS_POR_SEMESTRE_SIMULADO = 300;
 
 type AlunoInfo = {
   nome: string;
   ra: string;
   curso: string;
+  turmaCodigo: string;
   semestreAtual: number;
   cargaHorariaTotal: number;
 };
 
-type TurmaVinculo = {
-  id?: string;
-  curso?: string | null;
-  professor?: string | null;
-  carga_horaria?: number | null;
-};
-
-type HistoricoDisciplina = {
+type DisciplinaGrade = {
   id: string;
-  status: string;
-  turmas: TurmaVinculo | null;
+  nome: string;
+  professor: string | null;
+  cargaHoraria: number;
+  semestre: number;
+  status: string | null;
 };
 
 function iniciaisDe(nome: string) {
@@ -90,45 +86,82 @@ function extrairNumeroSemestre(raw: unknown): number {
   return SEMESTRE_PADRAO;
 }
 
-function cargaDe(turma: TurmaVinculo | null): number {
-  const n = Number(turma?.carga_horaria);
+function toCargaHoraria(raw: unknown): number {
+  const n = Number(raw);
   if (!Number.isFinite(n) || n <= 0) return CARGA_HORARIA_DISCIPLINA_PADRAO;
   return n;
 }
 
-function normalizarTurma(raw: unknown): TurmaVinculo | null {
-  if (!raw) return null;
-  if (Array.isArray(raw)) {
-    return raw[0] ? normalizarTurma(raw[0]) : null;
-  }
-  if (typeof raw !== "object") return null;
-  const t = raw as Record<string, unknown>;
+function nomeDisciplina(row: Record<string, unknown>): string {
+  return String(
+    row.nome ?? row.disciplina ?? row.curso ?? row.codigo ?? "Disciplina sem nome"
+  ).trim();
+}
+
+function isStatusConcluido(status: string | null | undefined): boolean {
+  if (!status) return false;
+  const s = status.trim().toLowerCase();
+  return (
+    s === "aprovado" ||
+    s === "concluido" ||
+    s === "concluído" ||
+    s === "aprovada"
+  );
+}
+
+function isStatusEmAndamento(status: string | null | undefined): boolean {
+  if (!status) return false;
+  const s = status.trim().toLowerCase();
+  return (
+    s === "cursando" ||
+    s === "pendente" ||
+    s === "exame final" ||
+    s === "em andamento" ||
+    s === "matriculado"
+  );
+}
+
+function mapTurmaParaDisciplina(
+  row: Record<string, unknown>,
+  status: string | null = null,
+  semestreFallback?: number
+): DisciplinaGrade {
   return {
-    id: t.id != null ? String(t.id) : undefined,
-    curso: t.curso != null ? String(t.curso) : null,
-    professor: t.professor != null ? String(t.professor) : null,
-    carga_horaria:
-      t.carga_horaria != null && !Number.isNaN(Number(t.carga_horaria))
-        ? Number(t.carga_horaria)
-        : null,
+    id: String(row.id ?? row.codigo ?? nomeDisciplina(row)),
+    nome: nomeDisciplina(row),
+    professor: row.professor != null ? String(row.professor) : null,
+    cargaHoraria: toCargaHoraria(row.carga_horaria),
+    semestre: extrairNumeroSemestre(
+      row.semestre ?? row.semestre_atual ?? semestreFallback
+    ),
+    status,
   };
 }
 
-function isConcluida(status: string) {
-  return status.trim().toLowerCase() === "aprovado";
-}
-
-function isEmAndamento(status: string) {
-  const s = status.trim().toLowerCase();
-  return s === "cursando" || s === "pendente" || s === "exame final";
+function deduplicarDisciplinas(lista: DisciplinaGrade[]): DisciplinaGrade[] {
+  const mapa = new Map<string, DisciplinaGrade>();
+  for (const d of lista) {
+    const chave = d.id || d.nome.toLowerCase();
+    if (!mapa.has(chave)) {
+      mapa.set(chave, d);
+      continue;
+    }
+    const atual = mapa.get(chave)!;
+    mapa.set(chave, {
+      ...atual,
+      status: atual.status || d.status,
+      professor: atual.professor || d.professor,
+      cargaHoraria:
+        atual.cargaHoraria > 0 ? atual.cargaHoraria : d.cargaHoraria,
+    });
+  }
+  return [...mapa.values()];
 }
 
 export default function AlunoGradePage() {
   const { alunoLogado, carregandoSessao } = useAlunoSession();
   const [aluno, setAluno] = useState<AlunoInfo | null>(null);
-  const [historicoDisciplinas, setHistoricoDisciplinas] = useState<
-    HistoricoDisciplina[]
-  >([]);
+  const [disciplinas, setDisciplinas] = useState<DisciplinaGrade[]>([]);
   const [carregando, setCarregando] = useState(true);
   const [aiInsight, setAiInsight] = useState("");
   const [isLoadingAi, setIsLoadingAi] = useState(true);
@@ -145,53 +178,70 @@ export default function AlunoGradePage() {
   });
 
   const semestreAtual = aluno?.semestreAtual ?? SEMESTRE_PADRAO;
-  const cargaHorariaTotalCurso =
-    aluno?.cargaHorariaTotal ?? CARGA_TOTAL_PADRAO;
 
-  const concluidas = useMemo(
-    () => historicoDisciplinas.filter((d) => isConcluida(d.status)),
-    [historicoDisciplinas]
-  );
+  const { concluidas, emAndamento, futuras } = useMemo(() => {
+    const concluidasList: DisciplinaGrade[] = [];
+    const andamentoList: DisciplinaGrade[] = [];
+    const futurasList: DisciplinaGrade[] = [];
 
-  const emAndamento = useMemo(
-    () => historicoDisciplinas.filter((d) => isEmAndamento(d.status)),
-    [historicoDisciplinas]
-  );
+    for (const d of disciplinas) {
+      if (isStatusConcluido(d.status) || d.semestre < semestreAtual) {
+        concluidasList.push(d);
+      } else if (
+        isStatusEmAndamento(d.status) ||
+        d.semestre === semestreAtual
+      ) {
+        andamentoList.push(d);
+      } else {
+        futurasList.push(d);
+      }
+    }
 
-  const { horasCursadas, horasRestantes, progresso, horasEmAndamento } =
-    useMemo(() => {
-      const horasConcluidasReais = concluidas.reduce(
-        (acc, d) => acc + cargaDe(d.turmas),
-        0
-      );
-      const horasAndamento = emAndamento.reduce(
-        (acc, d) => acc + cargaDe(d.turmas),
-        0
-      );
+    return {
+      concluidas: concluidasList,
+      emAndamento: andamentoList,
+      futuras: futurasList,
+    };
+  }, [disciplinas, semestreAtual]);
 
-      const horasBaseSimuladas = (semestreAtual - 1) * HORAS_POR_SEMESTRE_SIMULADO;
-      // Simulação inteligente quando o histórico real ainda é baixo para o protótipo
-      const horasSimuladas =
-        horasConcluidasReais < horasBaseSimuladas
-          ? horasBaseSimuladas + horasConcluidasReais
-          : Math.max(horasConcluidasReais, horasBaseSimuladas);
+  const {
+    horasCursadas,
+    horasRestantes,
+    progresso,
+    horasEmAndamento,
+    horasTotais,
+  } = useMemo(() => {
+    const somaCarga = (lista: DisciplinaGrade[]) =>
+      lista.reduce((acc, d) => acc + d.cargaHoraria, 0);
 
-      const cursadas = Math.min(horasSimuladas, cargaHorariaTotalCurso);
-      const restantes = Math.max(cargaHorariaTotalCurso - cursadas, 0);
-      const pct = Math.round((cursadas / cargaHorariaTotalCurso) * 100);
+    const horasAndamento = somaCarga(emAndamento);
+    const horasConcluidas = somaCarga(concluidas);
+    const horasGrade = somaCarga(disciplinas);
 
-      return {
-        horasCursadas: cursadas,
-        horasRestantes: restantes,
-        progresso: pct,
-        horasEmAndamento: horasAndamento,
-      };
-    }, [
-      concluidas,
-      emAndamento,
-      semestreAtual,
-      cargaHorariaTotalCurso,
-    ]);
+    const total =
+      aluno?.cargaHorariaTotal && aluno.cargaHorariaTotal > 0
+        ? aluno.cargaHorariaTotal
+        : horasGrade > 0
+          ? horasGrade
+          : CARGA_TOTAL_PADRAO;
+
+    const cursadas = Math.min(horasConcluidas, total);
+    const emCurso = Math.min(horasAndamento, Math.max(total - cursadas, 0));
+    const restantes = Math.max(total - cursadas - emCurso, 0);
+
+    // Progresso otimista: inclui horas em andamento do semestre atual
+    const pct = total > 0
+      ? Math.min(100, Math.round(((cursadas + emCurso) / total) * 100))
+      : 0;
+
+    return {
+      horasCursadas: cursadas,
+      horasRestantes: restantes,
+      progresso: pct,
+      horasEmAndamento: emCurso,
+      horasTotais: total,
+    };
+  }, [concluidas, emAndamento, disciplinas, aluno?.cargaHorariaTotal]);
 
   const labelSemestresConcluidos =
     semestreAtual <= 1
@@ -241,127 +291,250 @@ export default function AlunoGradePage() {
       setCarregando(true);
 
       try {
-        const { data: alunoData, error: alunoError } = await supabase
+        // 1) Perfil do aluno (pode haver várias linhas por RA no boletim)
+        const { data: alunosRows, error: alunoError } = await supabase
           .from("alunos")
           .select("*")
-          .eq("ra", alunoLogado!.ra)
-          .single();
+          .eq("ra", alunoLogado!.ra);
 
-        if (alunoError || !alunoData) {
-          if (alunoError) {
-            console.error("Erro ao buscar aluno:", alunoError.message);
-          }
-          setAluno({
-            nome: alunoLogado!.nome,
-            ra: alunoLogado!.ra,
-            curso: alunoLogado!.curso || "Tecnologia da Informação",
-            semestreAtual: extrairNumeroSemestre(alunoLogado!.semestreAtual),
-            cargaHorariaTotal: CARGA_TOTAL_PADRAO,
-          });
-          setHistoricoDisciplinas([]);
-          setIsLoadingAi(false);
-          return;
+        if (alunoError) {
+          console.error("Erro ao buscar aluno:", alunoError.message);
         }
 
+        const rows = (alunosRows ?? []) as Record<string, unknown>[];
+        const alunoData = rows[0] ?? null;
+
+        const semestreAtualAluno = extrairNumeroSemestre(
+          alunoData?.semestre_atual ??
+            alunoData?.semestre ??
+            alunoLogado!.semestreAtual
+        );
+
+        const cargaTotalAluno = (() => {
+          const n = Number(
+            alunoData?.carga_horaria_total ??
+              alunoData?.carga_horaria_curso ??
+              alunoData?.carga_horaria
+          );
+          return Number.isFinite(n) && n > 0 ? n : 0;
+        })();
+
         const alunoSessao: AlunoInfo = {
-          nome: String(alunoData.nome ?? alunoLogado!.nome ?? "Estudante"),
-          ra: String(alunoData.ra || alunoData.matricula || alunoLogado!.ra),
+          nome: String(
+            alunoData?.nome ?? alunoLogado!.nome ?? "Estudante"
+          ),
+          ra: String(
+            alunoData?.ra ?? alunoData?.matricula ?? alunoLogado!.ra
+          ),
           curso: String(
-            alunoData.curso || alunoLogado!.curso || "Tecnologia da Informação"
+            alunoData?.curso ??
+              alunoLogado!.curso ??
+              "Tecnologia da Informação"
           ),
-          semestreAtual: extrairNumeroSemestre(
-            alunoData.semestre_atual ??
-              alunoData.semestre ??
-              alunoLogado!.semestreAtual
-          ),
-          cargaHorariaTotal: (() => {
-            const n = Number(
-              alunoData.carga_horaria_total ??
-                alunoData.carga_horaria_curso ??
-                alunoData.carga_horaria
-            );
-            return Number.isFinite(n) && n > 0 ? n : CARGA_TOTAL_PADRAO;
-          })(),
+          turmaCodigo: String(
+            alunoData?.turma ??
+              alunoData?.turma_id ??
+              alunoData?.turma_codigo ??
+              ""
+          ).trim(),
+          semestreAtual: semestreAtualAluno,
+          cargaHorariaTotal: cargaTotalAluno || CARGA_TOTAL_PADRAO,
         };
         setAluno(alunoSessao);
 
         if (!alunoSessao.ra) {
-          setHistoricoDisciplinas([]);
+          setDisciplinas([]);
           setIsLoadingAi(false);
           return;
         }
 
-        let historico: HistoricoDisciplina[] = [];
+        const disciplinasColetadas: DisciplinaGrade[] = [];
+        const statusPorTurmaId = new Map<string, string>();
 
-        const { data: notasJoin, error: notasJoinError } = await supabase
+        // 2) Matrículas via notas → turmas (id)
+        const { data: notasData, error: notasError } = await supabase
           .from("notas")
-          .select("id, status, turmas(id, curso, professor, carga_horaria)")
+          .select("id, status, turma")
           .eq("ra_aluno", alunoSessao.ra);
 
-        if (notasJoinError) {
-          console.warn(
-            "Join notas→turmas falhou, buscando em separado:",
-            notasJoinError.message
-          );
+        if (notasError) {
+          console.warn("Erro ao buscar notas:", notasError.message);
+        }
 
-          const { data: notasSimples, error: notasError } = await supabase
-            .from("notas")
-            .select("id, status, turma")
-            .eq("ra_aluno", alunoSessao.ra);
+        const turmaIds = [
+          ...new Set(
+            (notasData ?? [])
+              .map((n) => String(n.turma ?? "").trim())
+              .filter(Boolean)
+          ),
+        ];
 
-          if (notasError) {
-            console.error("Erro ao buscar histórico:", notasError.message);
-            setHistoricoDisciplinas([]);
-            await fetchAiGrade(alunoSessao.curso, []);
-            return;
+        for (const n of notasData ?? []) {
+          const tid = String(n.turma ?? "").trim();
+          if (tid) {
+            statusPorTurmaId.set(tid, String(n.status ?? ""));
+          }
+        }
+
+        if (turmaIds.length > 0) {
+          const { data: turmasPorId, error: turmasIdError } = await supabase
+            .from("turmas")
+            .select("*")
+            .in("id", turmaIds);
+
+          if (turmasIdError) {
+            console.warn(
+              "Erro ao buscar turmas por id:",
+              turmasIdError.message
+            );
+          } else {
+            for (const t of turmasPorId ?? []) {
+              const row = t as Record<string, unknown>;
+              const id = String(row.id ?? "");
+              disciplinasColetadas.push(
+                mapTurmaParaDisciplina(
+                  row,
+                  statusPorTurmaId.get(id) ?? null,
+                  semestreAtualAluno
+                )
+              );
+            }
+          }
+        }
+
+        // 3) Vínculo por codigo da turma do aluno (alunos.turma / turma_id)
+        if (alunoSessao.turmaCodigo) {
+          let turmaEncontrada: Record<string, unknown>[] = [];
+
+          const { data: porCodigo, error: errCodigo } = await supabase
+            .from("turmas")
+            .select("*")
+            .eq("codigo", alunoSessao.turmaCodigo);
+
+          if (errCodigo) {
+            console.warn(
+              "Erro ao buscar turma por codigo:",
+              errCodigo.message
+            );
+          } else {
+            turmaEncontrada = (porCodigo ?? []) as Record<string, unknown>[];
           }
 
-          const turmaIds = [
-            ...new Set(
-              (notasSimples ?? [])
-                .map((n) => String(n.turma ?? ""))
-                .filter(Boolean)
-            ),
-          ];
-
-          const mapaTurmas = new Map<string, TurmaVinculo>();
-          if (turmaIds.length > 0) {
-            const { data: turmasData } = await supabase
+          if (turmaEncontrada.length === 0) {
+            const { data: porId, error: errId } = await supabase
               .from("turmas")
-              .select("id, curso, professor, carga_horaria")
-              .in("id", turmaIds);
+              .select("*")
+              .eq("id", alunoSessao.turmaCodigo);
 
-            for (const t of turmasData ?? []) {
-              mapaTurmas.set(String(t.id), {
-                id: String(t.id),
-                curso: t.curso != null ? String(t.curso) : null,
-                professor: t.professor != null ? String(t.professor) : null,
-                carga_horaria:
-                  t.carga_horaria != null
-                    ? Number(t.carga_horaria)
-                    : null,
-              });
+            if (errId) {
+              console.warn("Erro ao buscar turma por id:", errId.message);
+            } else {
+              turmaEncontrada = (porId ?? []) as Record<string, unknown>[];
             }
           }
 
-          historico = (notasSimples ?? []).map((n, idx) => ({
-            id: String(n.id ?? `nota-${idx}`),
-            status: String(n.status ?? "Pendente"),
-            turmas: mapaTurmas.get(String(n.turma ?? "")) ?? null,
-          }));
-        } else {
-          historico = (notasJoin ?? []).map((n, idx) => ({
-            id: String(n.id ?? `nota-${idx}`),
-            status: String(n.status ?? "Pendente"),
-            turmas: normalizarTurma(n.turmas),
-          }));
+          if (turmaEncontrada.length > 0) {
+            for (const row of turmaEncontrada) {
+              const id = String(row.id ?? "");
+              disciplinasColetadas.push(
+                mapTurmaParaDisciplina(
+                  row,
+                  statusPorTurmaId.get(id) ?? "cursando",
+                  semestreAtualAluno
+                )
+              );
+            }
+          } else {
+            // Fallback: o campo turma no aluno pode ser o nome da disciplina
+            disciplinasColetadas.push({
+              id: `aluno-turma-${alunoSessao.turmaCodigo}`,
+              nome: alunoSessao.turmaCodigo,
+              professor: alunoData?.professor
+                ? String(alunoData.professor)
+                : null,
+              cargaHoraria: toCargaHoraria(alunoData?.carga_horaria),
+              semestre: semestreAtualAluno,
+              status: "cursando",
+            });
+          }
         }
 
-        setHistoricoDisciplinas(historico);
+        // 4) Grade do curso (todas as matérias com semestre e carga)
+        if (alunoSessao.curso) {
+          const { data: turmasCurso, error: turmasCursoError } = await supabase
+            .from("turmas")
+            .select("*")
+            .ilike("curso", `%${alunoSessao.curso}%`);
 
-        const nomesEmAndamento = historico
-          .filter((d) => isEmAndamento(d.status))
-          .map((d) => d.turmas?.curso || "Disciplina sem nome");
+          if (turmasCursoError) {
+            console.warn(
+              "Erro ao buscar turmas do curso:",
+              turmasCursoError.message
+            );
+          } else {
+            const jaTemMatriculas = disciplinasColetadas.length > 0;
+            for (const t of turmasCurso ?? []) {
+              const row = t as Record<string, unknown>;
+              const id = String(row.id ?? "");
+              const temSemestre =
+                row.semestre != null ||
+                row.semestre_atual != null ||
+                row.Semestre != null;
+
+              // Sem semestre no catálogo: só inclui se ainda não há matrículas
+              if (!temSemestre && jaTemMatriculas) continue;
+
+              disciplinasColetadas.push(
+                mapTurmaParaDisciplina(
+                  row,
+                  statusPorTurmaId.get(id) ?? null,
+                  temSemestre ? undefined : semestreAtualAluno
+                )
+              );
+            }
+          }
+        }
+
+        // 5) Linhas extras do boletim (mesmo RA, turma = disciplina)
+        if (rows.length > 1) {
+          for (const row of rows) {
+            const nomeTurma = String(row.turma ?? "").trim();
+            if (!nomeTurma) continue;
+            disciplinasColetadas.push({
+              id: String(row.id ?? `boletim-${nomeTurma}`),
+              nome: nomeTurma,
+              professor: row.professor != null ? String(row.professor) : null,
+              cargaHoraria: toCargaHoraria(row.carga_horaria),
+              semestre: extrairNumeroSemestre(
+                row.semestre_atual ?? row.semestre ?? semestreAtualAluno
+              ),
+              status: "cursando",
+            });
+          }
+        }
+
+        const grade = deduplicarDisciplinas(disciplinasColetadas);
+        setDisciplinas(grade);
+
+        // Atualiza carga total dinâmica se o aluno não tiver valor cadastrado
+        if (!cargaTotalAluno && grade.length > 0) {
+          const totalGrade = grade.reduce((acc, d) => acc + d.cargaHoraria, 0);
+          if (totalGrade > 0) {
+            setAluno((prev) =>
+              prev
+                ? { ...prev, cargaHorariaTotal: totalGrade }
+                : prev
+            );
+          }
+        }
+
+        const nomesEmAndamento = grade
+          .filter(
+            (d) =>
+              isStatusEmAndamento(d.status) ||
+              d.semestre === semestreAtualAluno
+          )
+          .map((d) => d.nome);
 
         await fetchAiGrade(alunoSessao.curso, nomesEmAndamento);
       } finally {
@@ -522,7 +695,7 @@ export default function AlunoGradePage() {
                 style={{ width: `${carregando ? 0 : progresso}%` }}
               />
             </div>
-            <div className="grid grid-cols-2 sm:grid-cols-3 gap-4 mt-4">
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-4 mt-4">
               <div>
                 <p className="text-xs text-zinc-500 uppercase tracking-widest">
                   Horas Cursadas
@@ -531,6 +704,16 @@ export default function AlunoGradePage() {
                   {carregando
                     ? "…"
                     : `${horasCursadas.toLocaleString("pt-BR")}h`}
+                </p>
+              </div>
+              <div>
+                <p className="text-xs text-zinc-500 uppercase tracking-widest">
+                  Em Andamento
+                </p>
+                <p className="text-lg font-semibold mt-1">
+                  {carregando
+                    ? "…"
+                    : `${horasEmAndamento.toLocaleString("pt-BR")}h`}
                 </p>
               </div>
               <div>
@@ -545,12 +728,12 @@ export default function AlunoGradePage() {
               </div>
               <div>
                 <p className="text-xs text-zinc-500 uppercase tracking-widest">
-                  Em Andamento
+                  Carga Total
                 </p>
                 <p className="text-lg font-semibold mt-1">
                   {carregando
                     ? "…"
-                    : `${horasEmAndamento.toLocaleString("pt-BR")}h`}
+                    : `${horasTotais.toLocaleString("pt-BR")}h`}
                 </p>
               </div>
             </div>
@@ -579,7 +762,7 @@ export default function AlunoGradePage() {
                   </p>
                 ) : (
                   emAndamento.map((disciplina) => {
-                    const carga = cargaDe(disciplina.turmas);
+                    const carga = disciplina.cargaHoraria;
                     const creditos = Math.round(carga / 20);
                     return (
                       <div
@@ -588,7 +771,7 @@ export default function AlunoGradePage() {
                       >
                         <div className="flex items-center justify-between gap-3 mb-2">
                           <p className="text-sm font-medium text-white">
-                            {disciplina.turmas?.curso || "Disciplina sem nome"}
+                            {disciplina.nome}
                           </p>
                           <span className="text-[10px] font-semibold px-2 py-0.5 rounded-full bg-blue-950/60 text-blue-400 border border-blue-800 whitespace-nowrap">
                             Em andamento
@@ -596,6 +779,9 @@ export default function AlunoGradePage() {
                         </div>
                         <p className="text-xs text-zinc-500">
                           Carga Horária: {carga}h | Créditos: {creditos}
+                          {disciplina.professor
+                            ? ` | Prof. ${disciplina.professor}`
+                            : ""}
                         </p>
                       </div>
                     );
@@ -629,6 +815,9 @@ export default function AlunoGradePage() {
                     {concluidas.length === 1
                       ? "disciplina concluída"
                       : "disciplinas concluídas"}
+                    {horasCursadas > 0
+                      ? ` · ${horasCursadas.toLocaleString("pt-BR")}h`
+                      : ""}
                   </p>
                 </div>
 
@@ -648,6 +837,9 @@ export default function AlunoGradePage() {
                       </span>
                     </div>
                     <p className="text-xs text-zinc-500 ml-10">
+                      {futuras.length > 0
+                        ? `${futuras.length} disciplinas · `
+                        : ""}
                       {horasRestantes.toLocaleString("pt-BR")}h restantes no
                       curso
                     </p>

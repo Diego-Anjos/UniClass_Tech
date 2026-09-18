@@ -24,8 +24,10 @@ import { supabase } from "@/lib/supabase";
 import { ModalFeedback } from "@/components/ModalFeedback";
 import { toast } from "sonner";
 import {
+  atualizarSessaoAlunoLocal,
   iniciaisDoAluno,
   limparSessaoAluno,
+  lerSessaoAluno,
   useAlunoSession,
 } from "@/lib/aluno-session";
 
@@ -55,11 +57,24 @@ function formatarEndereco(row: Record<string, unknown>): string {
   return partes.join(" – ");
 }
 
+/**
+ * Normaliza semestre vindo do banco/sessão.
+ * Aceita: 1 | "1" | "1º" | "1º Semestre" | "1 Semestre" → "1º Semestre"
+ */
 function formatarSemestre(raw: unknown): string {
   if (raw == null || raw === "") return "";
   const texto = String(raw).trim();
   if (!texto) return "";
-  return texto.includes("Semestre") ? texto : `${texto}º Semestre`;
+
+  if (/semestre/i.test(texto)) {
+    // Já veio completo — só evita "ºº"
+    return texto.replace(/ºº+/g, "º");
+  }
+
+  // Remove símbolo de ordinal duplicado e monta "Nº Semestre"
+  const numero = texto.replace(/º/g, "").trim();
+  if (!numero) return "";
+  return `${numero}º Semestre`;
 }
 
 function formatarDataNascimento(raw: unknown): string {
@@ -74,6 +89,29 @@ function formatarDataNascimento(raw: unknown): string {
 function textoOuFallback(valor: string | null | undefined) {
   const limpo = String(valor ?? "").trim();
   return limpo || "Não informado";
+}
+
+function lerFotoUrl(row: Record<string, unknown>): string | null {
+  const foto =
+    String(row.foto_url ?? "").trim() ||
+    String(row.avatar_url ?? "").trim();
+  return foto || null;
+}
+
+function caminhoArquivoNoBucket(fotoUrl: string): string | null {
+  try {
+    const marker = "/avatares/";
+    const idx = fotoUrl.indexOf(marker);
+    if (idx >= 0) {
+      return decodeURIComponent(
+        fotoUrl.slice(idx + marker.length).split("?")[0] || ""
+      );
+    }
+    const nome = fotoUrl.split("/").pop()?.split("?")[0];
+    return nome ? decodeURIComponent(nome) : null;
+  } catch {
+    return null;
+  }
 }
 
 type AlunoPerfil = {
@@ -105,8 +143,11 @@ const navItems = [
 
 export default function AlunoPerfilPage() {
   const { alunoLogado: sessaoAluno, carregandoSessao } = useAlunoSession();
+  const alunoRa = sessaoAluno?.ra ?? "";
   const inputFotoRef = useRef<HTMLInputElement>(null);
+
   const [alunoLogado, setAlunoLogado] = useState<AlunoPerfil | null>(null);
+  const [carregandoPerfil, setCarregandoPerfil] = useState(true);
   const [uploadingFoto, setUploadingFoto] = useState(false);
   const [loadingRemocao, setLoadingRemocao] = useState(false);
 
@@ -130,8 +171,10 @@ export default function AlunoPerfilPage() {
 
   const iniciais = alunoLogado?.nome
     ? iniciaisDoAluno(alunoLogado.nome)
-    : "UN";
-  const fotoUrl = alunoLogado?.foto_url || null;
+    : sessaoAluno?.nome
+      ? iniciaisDoAluno(sessaoAluno.nome)
+      : "UN";
+  const fotoUrl = alunoLogado?.foto_url || sessaoAluno?.foto_url || null;
 
   const dadosAcademicos = [
     { label: "RA", valor: textoOuFallback(alunoLogado?.ra) },
@@ -166,82 +209,98 @@ export default function AlunoPerfilPage() {
   const dadosContato = [
     {
       label: "Celular",
-      valor: alunoLogado?.telefone || "Não informado",
+      valor: textoOuFallback(alunoLogado?.telefone),
     },
     {
       label: "E-mail Pessoal",
-      valor: alunoLogado?.email_pessoal || "Não informado",
+      valor: textoOuFallback(alunoLogado?.email_pessoal),
     },
     {
       label: "Endereço",
-      valor: alunoLogado?.endereco || "Não informado",
+      valor: textoOuFallback(alunoLogado?.endereco),
     },
   ];
 
+  // Uma única busca por RA — evita flicker/loops com objeto de sessão nas deps
   useEffect(() => {
-    if (carregandoSessao || !sessaoAluno?.ra) return;
+    if (carregandoSessao || !alunoRa) return;
 
-    setAlunoLogado({
-      nome: sessaoAluno.nome ?? "",
-      ra: sessaoAluno.ra,
-      curso: sessaoAluno.curso ?? "",
-      semestre: formatarSemestre(sessaoAluno.semestreAtual),
-      modalidade: "",
-      campus: "",
-      data_nascimento: "",
-      cpf: "",
-      email_institucional: "",
-      telefone: "",
-      email_pessoal: "",
-      endereco: "",
-      foto_url: null,
-    });
-  }, [carregandoSessao, sessaoAluno]);
-
-  useEffect(() => {
-    if (!alunoLogado?.ra) return;
+    let cancelado = false;
 
     async function carregarAluno() {
-      const { data, error } = await supabase
-        .from("alunos")
-        .select("*")
-        .eq("ra", alunoLogado!.ra)
-        .single();
+      setCarregandoPerfil(true);
+      try {
+        const { data, error } = await supabase
+          .from("alunos")
+          .select("*")
+          .eq("ra", alunoRa)
+          .maybeSingle();
 
-      if (error) {
+        if (cancelado) return;
+
+        if (error || !data) {
+          console.error(
+            "Erro ao carregar perfil:",
+            error?.message ?? "sem dados"
+          );
+          toast.error("Não foi possível carregar o perfil.");
+          setCarregandoPerfil(false);
+          return;
+        }
+
+        aplicarLinhaAluno(data as Record<string, unknown>);
+      } catch (err) {
+        if (cancelado) return;
+        console.error("Falha ao carregar perfil:", err);
         toast.error("Não foi possível carregar o perfil.");
-        return;
+      } finally {
+        if (!cancelado) setCarregandoPerfil(false);
       }
+    }
 
-      if (!data) return;
-
-      const row = data as Record<string, unknown>;
-      setAlunoLogado({
+    function aplicarLinhaAluno(row: Record<string, unknown>) {
+      const foto = lerFotoUrl(row);
+      const perfil: AlunoPerfil = {
         id: row.id != null ? String(row.id) : undefined,
-        nome: String(row.nome ?? ""),
-        ra: String(row.ra ?? ""),
-        curso: String(row.curso ?? ""),
+        nome: String(row.nome ?? sessaoAluno?.nome ?? ""),
+        ra: String(row.ra ?? alunoRa),
+        curso: String(row.curso ?? sessaoAluno?.curso ?? ""),
         semestre: formatarSemestre(
-          row.semestre_atual ?? row.semestre ?? ""
+          row.semestre_atual ?? row.semestre ?? sessaoAluno?.semestreAtual ?? ""
         ),
-        modalidade: String(row.modalidade ?? ""),
-        campus: String(row.campus ?? ""),
+        modalidade: String(
+          row.modalidade ?? row.modalidade_curso ?? row.tipo_ensino ?? ""
+        ).trim(),
+        campus: String(
+          row.campus ?? row.unidade ?? row.polo ?? ""
+        ).trim(),
         data_nascimento: formatarDataNascimento(row.data_nascimento),
-        cpf: String(row.cpf ?? ""),
+        cpf: String(row.cpf ?? "").trim(),
         email_institucional: String(
           row.email_institucional ?? row.email ?? ""
-        ),
+        ).trim(),
         telefone: String(row.telefone ?? row.celular ?? "").trim(),
         email_pessoal: String(row.email_pessoal ?? "").trim(),
         endereco: formatarEndereco(row),
-        foto_url: String(row.foto_url ?? "").trim() || null,
-      });
+        foto_url: foto,
+      };
+
+      setAlunoLogado(perfil);
+
+      // Mantém sessão alinhada com a foto do banco
+      const sessao = lerSessaoAluno();
+      if (sessao && foto !== (sessao.foto_url ?? null)) {
+        atualizarSessaoAlunoLocal(sessao, { foto_url: foto });
+      }
     }
 
     void carregarAluno();
-    // Carrega o perfil completo uma vez que o RA da sessão esteja disponível.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [alunoLogado?.ra]);
+
+    return () => {
+      cancelado = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- apenas RA estável
+  }, [carregandoSessao, alunoRa]);
 
   function abrirModalEditar() {
     setTelefoneEdit(alunoLogado?.telefone || "");
@@ -269,6 +328,7 @@ export default function AlunoPerfilPage() {
 
   async function salvarContato() {
     if (!alunoLogado?.ra) {
+      toast.error("Sessão inválida. Faça login novamente.");
       abrirFeedback(
         "atencao",
         "Sessão inválida",
@@ -277,18 +337,37 @@ export default function AlunoPerfilPage() {
       return;
     }
 
+    const telefone = telefoneEdit.trim();
+    const email_pessoal = emailPessoalEdit.trim();
+    const endereco = enderecoEdit.trim();
+
     setSalvando(true);
     try {
-      const { error } = await supabase
+      // Preferência: coluna `endereco`; fallback para `logradouro` (schema admin)
+      let { error } = await supabase
         .from("alunos")
         .update({
-          telefone: telefoneEdit,
-          email_pessoal: emailPessoalEdit,
-          endereco: enderecoEdit,
+          telefone,
+          email_pessoal,
+          endereco,
         })
         .eq("ra", alunoLogado.ra);
 
+      if (error && /endereco/i.test(error.message)) {
+        const retry = await supabase
+          .from("alunos")
+          .update({
+            telefone,
+            email_pessoal,
+            logradouro: endereco,
+          })
+          .eq("ra", alunoLogado.ra);
+        error = retry.error;
+      }
+
       if (error) {
+        console.error("Erro ao salvar contato:", error.message);
+        toast.error("Não foi possível atualizar seus dados de contato.");
         abrirFeedback(
           "erro",
           "Falha ao salvar",
@@ -301,19 +380,22 @@ export default function AlunoPerfilPage() {
         prev
           ? {
               ...prev,
-              telefone: telefoneEdit.trim(),
-              email_pessoal: emailPessoalEdit.trim(),
-              endereco: enderecoEdit.trim(),
+              telefone,
+              email_pessoal,
+              endereco,
             }
           : prev
       );
       setModalEditarAberto(false);
+      toast.success("Dados de contato atualizados.");
       abrirFeedback(
         "sucesso",
         "Dados atualizados",
         "Seus dados de contato foram salvos com sucesso."
       );
-    } catch {
+    } catch (err) {
+      console.error("Falha ao salvar contato:", err);
+      toast.error("Não foi possível atualizar seus dados de contato.");
       abrirFeedback(
         "erro",
         "Falha ao salvar",
@@ -329,11 +411,35 @@ export default function AlunoPerfilPage() {
     inputFotoRef.current?.click();
   }
 
+  async function persistirFotoUrl(novaUrl: string | null) {
+    if (!alunoLogado?.ra) {
+      throw new Error("RA do aluno indisponível.");
+    }
+
+    let { error } = await supabase
+      .from("alunos")
+      .update({ foto_url: novaUrl })
+      .eq("ra", alunoLogado.ra);
+
+    if (error && /foto_url/i.test(error.message)) {
+      const retry = await supabase
+        .from("alunos")
+        .update({ avatar_url: novaUrl })
+        .eq("ra", alunoLogado.ra);
+      error = retry.error;
+    }
+
+    if (error) {
+      throw new Error(error.message);
+    }
+  }
+
   async function handleRemoverFoto() {
     if (!alunoLogado?.foto_url || !alunoLogado.ra) return;
 
-    const nomeArquivo = alunoLogado.foto_url.split("/").pop();
-    if (!nomeArquivo) {
+    const caminho = caminhoArquivoNoBucket(alunoLogado.foto_url);
+    if (!caminho) {
+      toast.error("Não foi possível identificar o arquivo da foto.");
       abrirFeedback(
         "erro",
         "Falha ao remover",
@@ -346,9 +452,10 @@ export default function AlunoPerfilPage() {
     try {
       const { error: storageError } = await supabase.storage
         .from("avatares")
-        .remove([nomeArquivo]);
+        .remove([caminho]);
 
       if (storageError) {
+        toast.error("Não foi possível remover a foto do armazenamento.");
         abrirFeedback(
           "erro",
           "Falha ao remover",
@@ -357,27 +464,24 @@ export default function AlunoPerfilPage() {
         return;
       }
 
-      const { error: updateError } = await supabase
-        .from("alunos")
-        .update({ foto_url: null })
-        .eq("ra", alunoLogado.ra);
+      await persistirFotoUrl(null);
 
-      if (updateError) {
-        abrirFeedback(
-          "erro",
-          "Falha ao remover",
-          "A foto foi removida do storage, mas não foi possível atualizar o perfil."
-        );
-        return;
+      setAlunoLogado((prev) => (prev ? { ...prev, foto_url: null } : prev));
+
+      const sessao = lerSessaoAluno();
+      if (sessao) {
+        atualizarSessaoAlunoLocal(sessao, { foto_url: null });
       }
 
-      setAlunoLogado({ ...alunoLogado, foto_url: null });
+      toast.success("Foto de perfil removida.");
       abrirFeedback(
         "sucesso",
         "Foto removida",
         "Sua foto de perfil foi removida com sucesso."
       );
-    } catch {
+    } catch (err) {
+      console.error("Falha ao remover foto:", err);
+      toast.error("Não foi possível remover a foto de perfil.");
       abrirFeedback(
         "erro",
         "Falha ao remover",
@@ -397,6 +501,7 @@ export default function AlunoPerfilPage() {
     e.target.value = "";
 
     if (!file.type.startsWith("image/")) {
+      toast.error("Selecione apenas arquivos de imagem.");
       abrirFeedback(
         "atencao",
         "Arquivo inválido",
@@ -406,6 +511,7 @@ export default function AlunoPerfilPage() {
     }
 
     if (!alunoLogado?.ra) {
+      toast.error("Sessão inválida. Faça login novamente.");
       abrirFeedback(
         "atencao",
         "Sessão inválida",
@@ -414,7 +520,7 @@ export default function AlunoPerfilPage() {
       return;
     }
 
-    const fileExt = file.name.split(".").pop();
+    const fileExt = file.name.split(".").pop() || "jpg";
     const nomeArquivo = `perfil-${alunoLogado.ra}-${Date.now()}.${fileExt}`;
 
     setUploadingFoto(true);
@@ -427,6 +533,7 @@ export default function AlunoPerfilPage() {
         });
 
       if (error) {
+        toast.error("Não foi possível enviar a foto.");
         abrirFeedback(
           "erro",
           "Falha no upload",
@@ -441,29 +548,26 @@ export default function AlunoPerfilPage() {
 
       const novaUrl = publicUrl.publicUrl;
 
-      const { error: updateError } = await supabase
-        .from("alunos")
-        .update({ foto_url: novaUrl })
-        .eq("ra", alunoLogado.ra);
-
-      if (updateError) {
-        abrirFeedback(
-          "erro",
-          "Falha ao salvar foto",
-          "A imagem foi enviada, mas não foi possível atualizar o perfil."
-        );
-        return;
-      }
+      await persistirFotoUrl(novaUrl);
 
       setAlunoLogado((prev) =>
         prev ? { ...prev, foto_url: novaUrl } : prev
       );
+
+      const sessao = lerSessaoAluno();
+      if (sessao) {
+        atualizarSessaoAlunoLocal(sessao, { foto_url: novaUrl });
+      }
+
+      toast.success("Foto de perfil atualizada.");
       abrirFeedback(
         "sucesso",
         "Foto atualizada",
         "Sua foto de perfil foi alterada com sucesso."
       );
-    } catch {
+    } catch (err) {
+      console.error("Falha no upload da foto:", err);
+      toast.error("Não foi possível enviar a foto.");
       abrirFeedback(
         "erro",
         "Falha no upload",
@@ -482,13 +586,12 @@ export default function AlunoPerfilPage() {
     );
   }
 
+  const nomeExibicao = alunoLogado?.nome || sessaoAluno.nome || "Carregando...";
+  const raExibicao = alunoLogado?.ra || sessaoAluno.ra || "---";
+
   return (
     <div className="flex h-screen bg-black text-white overflow-hidden">
-      {/* ══════════════════════════════
-          SIDEBAR
-      ══════════════════════════════ */}
       <aside className="hidden md:flex flex-col w-64 shrink-0 bg-zinc-950 border-r border-zinc-800">
-        {/* Logo */}
         <div className="flex items-center gap-2.5 px-5 py-5 border-b border-zinc-800">
           <div className="w-8 h-8 bg-gradient-to-br from-zinc-800 to-zinc-950 border border-zinc-700/50 shadow-[0_0_15px_rgba(255,255,255,0.05)] flex items-center justify-center rounded-lg shrink-0">
             <GraduationCap className="w-5 h-5 text-white" />
@@ -499,27 +602,32 @@ export default function AlunoPerfilPage() {
           </span>
         </div>
 
-        {/* Perfil */}
         <div className="px-4 py-5 border-b border-zinc-800">
           <div className="flex items-center justify-between gap-3">
             <div className="flex items-center gap-3 min-w-0">
               <div className="relative shrink-0">
-                <div className="w-10 h-10 rounded-full bg-zinc-800 overflow-hidden flex items-center justify-center text-base font-semibold text-white">
+                <button
+                  type="button"
+                  onClick={abrirSeletorFoto}
+                  disabled={uploadingFoto || loadingRemocao}
+                  className="w-10 h-10 rounded-full bg-zinc-800 overflow-hidden flex items-center justify-center text-base font-semibold text-white cursor-pointer hover:opacity-90 transition-opacity disabled:opacity-50"
+                  aria-label="Trocar foto de perfil"
+                >
                   {fotoUrl ? (
                     // eslint-disable-next-line @next/next/no-img-element
                     <img
                       src={fotoUrl}
-                      alt={alunoLogado?.nome || "Foto de perfil"}
+                      alt={nomeExibicao}
                       className="w-full h-full object-cover"
                     />
                   ) : (
                     iniciais
                   )}
-                </div>
+                </button>
                 <button
                   type="button"
                   onClick={abrirSeletorFoto}
-                  disabled={uploadingFoto}
+                  disabled={uploadingFoto || loadingRemocao}
                   className="absolute -bottom-0.5 -right-0.5 w-4 h-4 bg-zinc-700 border border-zinc-900 rounded-full flex items-center justify-center cursor-pointer hover:bg-zinc-600 transition-colors disabled:opacity-50"
                   aria-label="Trocar foto de perfil"
                 >
@@ -531,12 +639,8 @@ export default function AlunoPerfilPage() {
                 </button>
               </div>
               <div className="min-w-0">
-                <p className="text-sm font-medium truncate">
-                  {alunoLogado?.nome || "Carregando..."}
-                </p>
-                <p className="text-xs text-zinc-500">
-                  RA: {alunoLogado?.ra || "---"}
-                </p>
+                <p className="text-sm font-medium truncate">{nomeExibicao}</p>
+                <p className="text-xs text-zinc-500">RA: {raExibicao}</p>
               </div>
             </div>
             <Link href="/aluno/dashboard/perfil" className="text-zinc-500 hover:text-white transition-colors shrink-0">
@@ -545,7 +649,6 @@ export default function AlunoPerfilPage() {
           </div>
         </div>
 
-        {/* Nav */}
         <nav className="flex flex-col gap-0.5 px-2 py-4 flex-1">
           {navItems.map(({ icon: Icon, label, href, active }) => (
             <a
@@ -563,7 +666,6 @@ export default function AlunoPerfilPage() {
           ))}
         </nav>
 
-        {/* Logout */}
         <div className="px-2 py-4 border-t border-zinc-800">
           <a
             href="/"
@@ -576,13 +678,8 @@ export default function AlunoPerfilPage() {
         </div>
       </aside>
 
-      {/* ══════════════════════════════
-          MAIN CONTENT
-      ══════════════════════════════ */}
       <main className="flex-1 overflow-y-auto">
         <div className="max-w-6xl mx-auto px-6 sm:px-10 py-10">
-
-          {/* ── Header ── */}
           <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 mb-8">
             <div>
               <h1 className="text-2xl font-semibold tracking-tight">Meu Perfil</h1>
@@ -593,145 +690,151 @@ export default function AlunoPerfilPage() {
             <button
               type="button"
               onClick={abrirModalEditar}
-              className="flex items-center gap-2 border border-zinc-800 text-zinc-300 hover:bg-zinc-900 hover:text-white transition-colors text-sm rounded-lg px-4 py-2"
+              disabled={carregandoPerfil || !alunoLogado}
+              className="flex items-center gap-2 border border-zinc-800 text-zinc-300 hover:bg-zinc-900 hover:text-white transition-colors text-sm rounded-lg px-4 py-2 disabled:opacity-50"
             >
               <Pencil className="w-4 h-4" />
               Editar Dados
             </button>
           </div>
 
-          {/* ── Grid de 2 colunas ── */}
-          <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 mb-4">
-
-            {/* Seção 1: Dados Acadêmicos */}
-            <div className="rounded-xl bg-zinc-900/50 border border-zinc-800 p-6">
-              <div className="flex items-center gap-2.5 mb-5">
-                <div className="w-8 h-8 rounded-lg bg-zinc-800 border border-zinc-700/50 flex items-center justify-center shrink-0">
-                  <GraduationCap className="w-4 h-4 text-zinc-300" />
-                </div>
-                <h2 className="text-sm font-semibold">Dados Acadêmicos</h2>
-              </div>
-              <div className="flex flex-col gap-4">
-                {dadosAcademicos.map((d) => (
-                  <div key={d.label}>
-                    <p className="text-xs text-zinc-500 uppercase tracking-widest mb-0.5">{d.label}</p>
-                    <p className="text-sm text-white">{d.valor}</p>
+          {carregandoPerfil && !alunoLogado ? (
+            <p className="text-sm text-zinc-500 py-10">Carregando perfil...</p>
+          ) : (
+            <>
+              <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 mb-4">
+                <div className="rounded-xl bg-zinc-900/50 border border-zinc-800 p-6">
+                  <div className="flex items-center gap-2.5 mb-5">
+                    <div className="w-8 h-8 rounded-lg bg-zinc-800 border border-zinc-700/50 flex items-center justify-center shrink-0">
+                      <GraduationCap className="w-4 h-4 text-zinc-300" />
+                    </div>
+                    <h2 className="text-sm font-semibold">Dados Acadêmicos</h2>
                   </div>
-                ))}
-              </div>
-            </div>
-
-            {/* Seção 2: Informações Pessoais */}
-            <div className="rounded-xl bg-zinc-900/50 border border-zinc-800 p-6">
-              <div className="flex items-center gap-2.5 mb-5">
-                <div className="w-8 h-8 rounded-lg bg-zinc-800 border border-zinc-700/50 flex items-center justify-center shrink-0">
-                  <User className="w-4 h-4 text-zinc-300" />
-                </div>
-                <h2 className="text-sm font-semibold">Informações Pessoais</h2>
-              </div>
-
-              {/* Avatar grande + botão trocar foto */}
-              <div className="flex items-center gap-4 mb-6">
-                <div className="relative shrink-0">
-                  <div className="w-16 h-16 rounded-full bg-zinc-800 overflow-hidden flex items-center justify-center text-2xl font-semibold text-white">
-                    {fotoUrl ? (
-                      // eslint-disable-next-line @next/next/no-img-element
-                      <img
-                        src={fotoUrl}
-                        alt={alunoLogado?.nome || "Foto de perfil"}
-                        className="w-full h-full object-cover"
-                      />
-                    ) : (
-                      iniciais
-                    )}
+                  <div className="flex flex-col gap-4">
+                    {dadosAcademicos.map((d) => (
+                      <div key={d.label}>
+                        <p className="text-xs text-zinc-500 uppercase tracking-widest mb-0.5">{d.label}</p>
+                        <p className="text-sm text-white">{d.valor}</p>
+                      </div>
+                    ))}
                   </div>
-                  <button
-                    type="button"
-                    onClick={abrirSeletorFoto}
-                    disabled={uploadingFoto || loadingRemocao}
-                    className="absolute -bottom-1 -right-1 w-6 h-6 bg-zinc-700 border border-zinc-900 rounded-full flex items-center justify-center cursor-pointer hover:bg-zinc-600 transition-colors disabled:opacity-50"
-                    aria-label="Trocar foto de perfil"
-                  >
-                    {uploadingFoto || loadingRemocao ? (
-                      <Loader2 className="w-3 h-3 text-zinc-300 animate-spin" />
-                    ) : (
-                      <Camera className="w-3 h-3 text-zinc-300" />
-                    )}
-                  </button>
                 </div>
-                <input
-                  ref={inputFotoRef}
-                  type="file"
-                  id="upload-foto"
-                  accept="image/*"
-                  hidden
-                  onChange={handleUploadFoto}
-                />
-                <div className="flex flex-col items-start gap-2">
-                  <button
-                    type="button"
-                    onClick={abrirSeletorFoto}
-                    disabled={uploadingFoto || loadingRemocao}
-                    className="text-xs border border-zinc-800 text-zinc-400 hover:bg-zinc-900 hover:text-white transition-colors rounded-lg px-3 py-1.5 disabled:opacity-50 inline-flex items-center gap-1.5"
-                  >
-                    {uploadingFoto ? (
-                      <>
-                        <Loader2 className="w-3 h-3 animate-spin" />
-                        Enviando...
-                      </>
-                    ) : (
-                      "Trocar Foto"
-                    )}
-                  </button>
-                  {alunoLogado?.foto_url && (
-                    <button
-                      type="button"
-                      onClick={() => void handleRemoverFoto()}
-                      disabled={loadingRemocao || uploadingFoto}
-                      className="text-red-400 hover:text-red-300 text-sm hover:underline bg-transparent border-none disabled:opacity-50 inline-flex items-center gap-1.5"
-                    >
-                      {loadingRemocao ? (
-                        <>
-                          <Loader2 className="w-3 h-3 animate-spin" />
-                          Removendo...
-                        </>
-                      ) : (
-                        "Remover Foto"
+
+                <div className="rounded-xl bg-zinc-900/50 border border-zinc-800 p-6">
+                  <div className="flex items-center gap-2.5 mb-5">
+                    <div className="w-8 h-8 rounded-lg bg-zinc-800 border border-zinc-700/50 flex items-center justify-center shrink-0">
+                      <User className="w-4 h-4 text-zinc-300" />
+                    </div>
+                    <h2 className="text-sm font-semibold">Informações Pessoais</h2>
+                  </div>
+
+                  <div className="flex items-center gap-4 mb-6">
+                    <div className="relative shrink-0">
+                      <button
+                        type="button"
+                        onClick={abrirSeletorFoto}
+                        disabled={uploadingFoto || loadingRemocao}
+                        className="w-16 h-16 rounded-full bg-zinc-800 overflow-hidden flex items-center justify-center text-2xl font-semibold text-white cursor-pointer hover:opacity-90 transition-opacity disabled:opacity-50"
+                        aria-label="Trocar foto de perfil"
+                      >
+                        {fotoUrl ? (
+                          // eslint-disable-next-line @next/next/no-img-element
+                          <img
+                            src={fotoUrl}
+                            alt={nomeExibicao}
+                            className="w-full h-full object-cover"
+                          />
+                        ) : (
+                          iniciais
+                        )}
+                      </button>
+                      <button
+                        type="button"
+                        onClick={abrirSeletorFoto}
+                        disabled={uploadingFoto || loadingRemocao}
+                        className="absolute -bottom-1 -right-1 w-6 h-6 bg-zinc-700 border border-zinc-900 rounded-full flex items-center justify-center cursor-pointer hover:bg-zinc-600 transition-colors disabled:opacity-50"
+                        aria-label="Trocar foto de perfil"
+                      >
+                        {uploadingFoto || loadingRemocao ? (
+                          <Loader2 className="w-3 h-3 text-zinc-300 animate-spin" />
+                        ) : (
+                          <Camera className="w-3 h-3 text-zinc-300" />
+                        )}
+                      </button>
+                    </div>
+                    <input
+                      ref={inputFotoRef}
+                      type="file"
+                      id="upload-foto"
+                      accept="image/*"
+                      hidden
+                      onChange={handleUploadFoto}
+                    />
+                    <div className="flex flex-col items-start gap-2">
+                      <button
+                        type="button"
+                        onClick={abrirSeletorFoto}
+                        disabled={uploadingFoto || loadingRemocao}
+                        className="text-xs border border-zinc-800 text-zinc-400 hover:bg-zinc-900 hover:text-white transition-colors rounded-lg px-3 py-1.5 disabled:opacity-50 inline-flex items-center gap-1.5"
+                      >
+                        {uploadingFoto ? (
+                          <>
+                            <Loader2 className="w-3 h-3 animate-spin" />
+                            Enviando...
+                          </>
+                        ) : (
+                          "Trocar Foto"
+                        )}
+                      </button>
+                      {alunoLogado?.foto_url && (
+                        <button
+                          type="button"
+                          onClick={() => void handleRemoverFoto()}
+                          disabled={loadingRemocao || uploadingFoto}
+                          className="text-red-400 hover:text-red-300 text-sm hover:underline bg-transparent border-none disabled:opacity-50 inline-flex items-center gap-1.5"
+                        >
+                          {loadingRemocao ? (
+                            <>
+                              <Loader2 className="w-3 h-3 animate-spin" />
+                              Removendo...
+                            </>
+                          ) : (
+                            "Remover Foto"
+                          )}
+                        </button>
                       )}
-                    </button>
-                  )}
-                </div>
-              </div>
-
-              <div className="flex flex-col gap-4">
-                {dadosPessoais.map((d) => (
-                  <div key={d.label}>
-                    <p className="text-xs text-zinc-500 uppercase tracking-widest mb-0.5">{d.label}</p>
-                    <p className="text-sm text-white">{d.valor}</p>
+                    </div>
                   </div>
-                ))}
-              </div>
-            </div>
-          </div>
 
-          {/* Seção 3: Endereço e Contato (largura total) */}
-          <div className="rounded-xl bg-zinc-900/50 border border-zinc-800 p-6">
-            <div className="flex items-center gap-2.5 mb-5">
-              <div className="w-8 h-8 rounded-lg bg-zinc-800 border border-zinc-700/50 flex items-center justify-center shrink-0">
-                <MapPin className="w-4 h-4 text-zinc-300" />
-              </div>
-              <h2 className="text-sm font-semibold">Endereço e Contato</h2>
-            </div>
-            <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-              {dadosContato.map((d) => (
-                <div key={d.label} className={d.label === "Endereço" ? "sm:col-span-3" : ""}>
-                  <p className="text-xs text-zinc-500 uppercase tracking-widest mb-0.5">{d.label}</p>
-                  <p className="text-sm text-white">{d.valor}</p>
+                  <div className="flex flex-col gap-4">
+                    {dadosPessoais.map((d) => (
+                      <div key={d.label}>
+                        <p className="text-xs text-zinc-500 uppercase tracking-widest mb-0.5">{d.label}</p>
+                        <p className="text-sm text-white">{d.valor}</p>
+                      </div>
+                    ))}
+                  </div>
                 </div>
-              ))}
-            </div>
-          </div>
+              </div>
 
+              <div className="rounded-xl bg-zinc-900/50 border border-zinc-800 p-6">
+                <div className="flex items-center gap-2.5 mb-5">
+                  <div className="w-8 h-8 rounded-lg bg-zinc-800 border border-zinc-700/50 flex items-center justify-center shrink-0">
+                    <MapPin className="w-4 h-4 text-zinc-300" />
+                  </div>
+                  <h2 className="text-sm font-semibold">Endereço e Contato</h2>
+                </div>
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+                  {dadosContato.map((d) => (
+                    <div key={d.label} className={d.label === "Endereço" ? "sm:col-span-3" : ""}>
+                      <p className="text-xs text-zinc-500 uppercase tracking-widest mb-0.5">{d.label}</p>
+                      <p className="text-sm text-white">{d.valor}</p>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            </>
+          )}
         </div>
       </main>
 

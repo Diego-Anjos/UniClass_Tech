@@ -53,6 +53,10 @@ export default function LoginPage() {
       nome: String(data.aluno.nome),
       curso: String(data.aluno.curso ?? ""),
       semestreAtual: data.aluno.semestreAtual ?? "",
+      foto_url:
+        typeof data.aluno.foto_url === "string" && data.aluno.foto_url.trim()
+          ? data.aluno.foto_url.trim()
+          : null,
     });
 
     router.push("/aluno/dashboard");

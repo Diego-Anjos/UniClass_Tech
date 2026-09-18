@@ -28,11 +28,24 @@ import {
 } from "@/lib/aluno-session";
 import {
   extrairAtendimentoSalvo,
-  formatarAtendimentoBanner,
   type AtendimentoPreferencias,
 } from "@/lib/professor-preferencias";
 
-type DisponibilidadeProf = AtendimentoPreferencias;
+type PreferenciasContato = {
+  atendimento?: AtendimentoPreferencias;
+};
+
+type ProfessorContato = {
+  id: string;
+  nome: string;
+  preferencias: PreferenciasContato | null;
+};
+
+type DisciplinaAluno = {
+  id: string;
+  nomeDisciplina: string;
+  professor: ProfessorContato;
+};
 
 const navItems = [
   { icon: LayoutDashboard, label: "Visão Geral", href: "/aluno/dashboard", active: false },
@@ -54,11 +67,57 @@ const assuntosSuporte: Record<string, string> = {
   outros: "Outros",
 };
 
-type DisciplinaAluno = {
-  id: string | number;
-  curso: string;
-  professor: string;
-};
+function nomeDisciplinaTurma(row: Record<string, unknown>): string {
+  return String(
+    row.nome ?? row.disciplina ?? row.curso ?? row.codigo ?? "Disciplina sem nome"
+  ).trim();
+}
+
+function normalizarTurmaJoin(raw: unknown): Record<string, unknown> | null {
+  if (!raw) return null;
+  if (Array.isArray(raw)) {
+    return raw[0] ? normalizarTurmaJoin(raw[0]) : null;
+  }
+  if (typeof raw !== "object") return null;
+  return raw as Record<string, unknown>;
+}
+
+function preferenciasDoProfessor(row: {
+  preferencias?: unknown;
+  dias_atendimento?: unknown;
+  atendimento_de?: unknown;
+  atendimento_ate?: unknown;
+}): PreferenciasContato | null {
+  const doJson = extrairAtendimentoSalvo(row.preferencias);
+  if (doJson) return { atendimento: doJson };
+
+  const diasColuna = Array.isArray(row.dias_atendimento)
+    ? (row.dias_atendimento as string[]).filter(Boolean)
+    : [];
+  const deColuna =
+    typeof row.atendimento_de === "string" ? row.atendimento_de.trim() : "";
+  const ateColuna =
+    typeof row.atendimento_ate === "string" ? row.atendimento_ate.trim() : "";
+
+  if (diasColuna.length > 0 && deColuna && ateColuna) {
+    const legado = extrairAtendimentoSalvo({
+      dias_atendimento: diasColuna,
+      atendimento_de: deColuna,
+      atendimento_ate: ateColuna,
+    });
+    return legado ? { atendimento: legado } : null;
+  }
+
+  return null;
+}
+
+function chaveNomeProfessor(nome: string) {
+  return nome
+    .trim()
+    .toLowerCase()
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "");
+}
 
 type ChamadoAluno = {
   id: string;
@@ -118,17 +177,20 @@ function destinoChamado(chamado: ChamadoAluno) {
 
 export default function AlunoContatoPage() {
   const { alunoLogado, carregandoSessao } = useAlunoSession();
-  const aluno = alunoLogado
-    ? { nome: alunoLogado.nome, ra: alunoLogado.ra }
-    : null;
+  // Preferir primitivos (RA) nas deps dos effects — nunca um objeto recriado por render
+  const alunoRa = alunoLogado?.ra ?? "";
+  const alunoNome = alunoLogado?.nome ?? "";
+  const alunoCurso = alunoLogado?.curso ?? "";
+  const aluno = alunoLogado ? { nome: alunoNome, ra: alunoRa } : null;
+
   const [assuntoSuporte, setAssuntoSuporte] = useState("");
   const [mensagemSuporte, setMensagemSuporte] = useState("");
   const [enviandoSuporte, setEnviandoSuporte] = useState(false);
 
   const [disciplinasAluno, setDisciplinasAluno] = useState<DisciplinaAluno[]>([]);
-  const [professorSelecionado, setProfessorSelecionado] = useState("");
-  const [disponibilidadeProf, setDisponibilidadeProf] =
-    useState<DisponibilidadeProf | null>(null);
+  const [turmaSelecionadaId, setTurmaSelecionadaId] = useState("");
+  const [professorSelecionado, setProfessorSelecionado] =
+    useState<ProfessorContato | null>(null);
   const [assuntoProfessor, setAssuntoProfessor] = useState("");
   const [mensagemProfessor, setMensagemProfessor] = useState("");
   const [enviandoProfessor, setEnviandoProfessor] = useState(false);
@@ -149,119 +211,253 @@ export default function AlunoContatoPage() {
   });
 
   useEffect(() => {
-    if (carregandoSessao || !aluno) return;
+    if (carregandoSessao || !alunoRa) return;
+
+    let cancelado = false;
 
     async function carregarDisciplinasAluno() {
-      const { data: notas, error: notasError } = await supabase
-        .from("notas")
-        .select("turma")
-        .eq("ra_aluno", aluno!.ra);
+      try {
+        // 1) Matrículas via notas + join com turmas
+        const { data: notasJoin, error: notasJoinError } = await supabase
+          .from("notas")
+          .select("turma, turmas(id, curso, codigo, professor)")
+          .eq("ra_aluno", alunoRa);
 
-      if (notasError) {
-        toast.error("Erro ao carregar disciplinas do boletim.");
-        setDisciplinasAluno([]);
-        return;
-      }
+        if (cancelado) return;
 
-      if (notas && notas.length > 0) {
-        const turmaIds = notas.map((n) => n.turma);
+        if (notasJoinError) {
+          console.warn(
+            "Join notas→turmas indisponível, tentando buscas separadas:",
+            notasJoinError.message
+          );
+        }
 
-        const { data: turmas, error: turmasError } = await supabase
-          .from("turmas")
-          .select("id, curso, professor")
-          .in("id", turmaIds);
+        let turmasRows: Record<string, unknown>[] = [];
+        const idsVistos = new Set<string>();
 
-        if (turmasError) {
-          toast.error("Erro ao carregar turmas.");
+        for (const nota of (notasJoin ?? []) as Record<string, unknown>[]) {
+          const turmaJoin = normalizarTurmaJoin(nota.turmas);
+          if (turmaJoin) {
+            const id = String(turmaJoin.id ?? "").trim();
+            if (id && !idsVistos.has(id)) {
+              idsVistos.add(id);
+              turmasRows.push(turmaJoin);
+            }
+            continue;
+          }
+
+          // Join nulo: tenta o valor cru de notas.turma depois
+          const turmaRef = String(nota.turma ?? "").trim();
+          if (turmaRef && !idsVistos.has(turmaRef)) {
+            idsVistos.add(`ref:${turmaRef}`);
+          }
+        }
+
+        // 2) Busca por IDs/refs quando o join não trouxe linhas
+        const turmaRefs = [
+          ...new Set(
+            ((notasJoin ?? []) as Record<string, unknown>[])
+              .map((n) => String(n.turma ?? "").trim())
+              .filter(Boolean)
+          ),
+        ];
+
+        if (turmasRows.length === 0 && turmaRefs.length > 0) {
+          const { data: turmasPorId, error: turmasIdError } = await supabase
+            .from("turmas")
+            .select("id, curso, codigo, professor")
+            .in("id", turmaRefs);
+
+          if (cancelado) return;
+
+          if (turmasIdError) {
+            console.error("Erro ao carregar turmas:", turmasIdError.message);
+          } else {
+            for (const t of (turmasPorId ?? []) as Record<string, unknown>[]) {
+              const id = String(t.id ?? "").trim();
+              if (id && !idsVistos.has(id)) {
+                idsVistos.add(id);
+                turmasRows.push(t);
+              }
+            }
+          }
+
+          // Refs que podem ser código/nome da disciplina
+          if (turmasRows.length === 0) {
+            const { data: turmasPorCodigo, error: codigoError } = await supabase
+              .from("turmas")
+              .select("id, curso, codigo, professor")
+              .in("codigo", turmaRefs);
+
+            if (cancelado) return;
+
+            if (codigoError) {
+              console.warn(
+                "Erro ao buscar turmas por codigo:",
+                codigoError.message
+              );
+            } else {
+              for (const t of (turmasPorCodigo ?? []) as Record<
+                string,
+                unknown
+              >[]) {
+                const id = String(t.id ?? "").trim();
+                if (id && !idsVistos.has(id)) {
+                  idsVistos.add(id);
+                  turmasRows.push(t);
+                }
+              }
+            }
+          }
+        }
+
+        // 3) Fallback: turmas do curso do aluno (mesma regra de frequência/grade)
+        if (turmasRows.length === 0 && alunoCurso) {
+          const { data: turmasCurso, error: turmasCursoError } = await supabase
+            .from("turmas")
+            .select("id, curso, codigo, professor")
+            .ilike("curso", `%${alunoCurso}%`);
+
+          if (cancelado) return;
+
+          if (turmasCursoError) {
+            console.error(
+              "Erro ao carregar turmas do curso:",
+              turmasCursoError.message
+            );
+            toast.error("Erro ao carregar disciplinas.");
+            setDisciplinasAluno([]);
+            return;
+          }
+
+          turmasRows = (turmasCurso ?? []) as Record<string, unknown>[];
+        }
+
+        if (turmasRows.length === 0) {
           setDisciplinasAluno([]);
           return;
         }
 
-        if (turmas) {
-          setDisciplinasAluno(turmas as DisciplinaAluno[]);
+        // 4) Enriquecer com id/nome/preferencias dos professores
+        const nomesProfessores = [
+          ...new Set(
+            turmasRows
+              .map((t) => String(t.professor ?? "").trim())
+              .filter(Boolean)
+          ),
+        ];
+
+        const mapaProfessores = new Map<string, ProfessorContato>();
+
+        if (nomesProfessores.length > 0) {
+          const { data: professoresData, error: professoresError } =
+            await supabase
+              .from("professores")
+              .select(
+                "id, nome, preferencias, dias_atendimento, atendimento_de, atendimento_ate"
+              )
+              .in("nome", nomesProfessores);
+
+          if (cancelado) return;
+
+          if (professoresError) {
+            console.warn(
+              "Busca exata de professores falhou, tentando lista ampla:",
+              professoresError.message
+            );
+          }
+
+          let professoresRows =
+            (professoresData as Record<string, unknown>[] | null) ?? [];
+
+          // Se o .in por nome não trouxe todos (variação de grafia), busca por ilike
+          if (professoresRows.length < nomesProfessores.length) {
+            const faltantes = nomesProfessores.filter((nome) => {
+              const chave = chaveNomeProfessor(nome);
+              return !professoresRows.some(
+                (p) => chaveNomeProfessor(String(p.nome ?? "")) === chave
+              );
+            });
+
+            for (const nome of faltantes) {
+              const { data: match, error: matchError } = await supabase
+                .from("professores")
+                .select(
+                  "id, nome, preferencias, dias_atendimento, atendimento_de, atendimento_ate"
+                )
+                .ilike("nome", `%${nome}%`)
+                .limit(1)
+                .maybeSingle();
+
+              if (cancelado) return;
+
+              if (matchError) {
+                console.warn(
+                  `Erro ao buscar professor "${nome}":`,
+                  matchError.message
+                );
+                continue;
+              }
+
+              if (match) {
+                professoresRows = [
+                  ...professoresRows,
+                  match as Record<string, unknown>,
+                ];
+              }
+            }
+          }
+
+          for (const p of professoresRows) {
+            const nome = String(p.nome ?? "").trim();
+            if (!nome) continue;
+            mapaProfessores.set(chaveNomeProfessor(nome), {
+              id: String(p.id ?? ""),
+              nome,
+              preferencias: preferenciasDoProfessor(p),
+            });
+          }
         }
-      } else {
+
+        if (cancelado) return;
+
+        const disciplinas: DisciplinaAluno[] = turmasRows.map((t, index) => {
+          const id = String(t.id ?? `turma-${index}`);
+          const nomeProfTurma = String(t.professor ?? "").trim();
+          const profEncontrado = nomeProfTurma
+            ? mapaProfessores.get(chaveNomeProfessor(nomeProfTurma))
+            : undefined;
+
+          return {
+            id,
+            nomeDisciplina: nomeDisciplinaTurma(t),
+            professor: profEncontrado ?? {
+              id: "",
+              nome: nomeProfTurma || "Professor não informado",
+              preferencias: null,
+            },
+          };
+        });
+
+        setDisciplinasAluno(disciplinas);
+      } catch (err) {
+        if (cancelado) return;
+        console.error("Falha ao carregar disciplinas do aluno:", err);
         setDisciplinasAluno([]);
       }
     }
 
     void carregarDisciplinasAluno();
-  }, [aluno, carregandoSessao]);
-
-  useEffect(() => {
-    if (!professorSelecionado) {
-      setDisponibilidadeProf(null);
-      return;
-    }
-
-    let cancelado = false;
-
-    async function carregarDisponibilidade() {
-      setDisponibilidadeProf(null);
-
-      // Preferências JSONB (fonte canônica do modal do professor)
-      const { data, error } = await supabase
-        .from("professores")
-        .select("preferencias, dias_atendimento, atendimento_de, atendimento_ate")
-        .ilike("nome", `%${professorSelecionado}%`)
-        .maybeSingle();
-
-      if (cancelado) return;
-
-      if (error) {
-        console.error(
-          "Erro ao carregar preferências do professor:",
-          error.message
-        );
-        toast.error("Erro ao carregar disponibilidade do professor.");
-        setDisponibilidadeProf(null);
-        return;
-      }
-
-      if (!data) {
-        setDisponibilidadeProf(null);
-        return;
-      }
-
-      const doJson = extrairAtendimentoSalvo(data.preferencias);
-      if (doJson) {
-        setDisponibilidadeProf(doJson);
-        return;
-      }
-
-      // Fallback: colunas dedicadas espelhadas pela API de preferências
-      const diasColuna = Array.isArray(data.dias_atendimento)
-        ? (data.dias_atendimento as string[]).filter(Boolean)
-        : [];
-      const deColuna =
-        typeof data.atendimento_de === "string" ? data.atendimento_de.trim() : "";
-      const ateColuna =
-        typeof data.atendimento_ate === "string"
-          ? data.atendimento_ate.trim()
-          : "";
-
-      if (diasColuna.length > 0 && deColuna && ateColuna) {
-        const legado = extrairAtendimentoSalvo({
-          dias_atendimento: diasColuna,
-          atendimento_de: deColuna,
-          atendimento_ate: ateColuna,
-        });
-        setDisponibilidadeProf(legado);
-        return;
-      }
-
-      setDisponibilidadeProf(null);
-    }
-
-    void carregarDisponibilidade();
 
     return () => {
       cancelado = true;
     };
-  }, [professorSelecionado]);
+  }, [alunoRa, alunoCurso, carregandoSessao]);
 
   useEffect(() => {
-    if (!aluno?.ra) return;
+    if (carregandoSessao || !alunoRa) return;
+
+    let cancelado = false;
 
     async function carregarMeusChamados() {
       setCarregandoChamados(true);
@@ -269,11 +465,17 @@ export default function AlunoContatoPage() {
         const { data, error } = await supabase
           .from("chamados")
           .select("*")
-          .eq("ra_aluno", aluno!.ra)
+          .eq("ra_aluno", alunoRa)
           .order("data_abertura", { ascending: false });
 
+        if (cancelado) return;
+
         if (error) {
-          console.error("Erro ao buscar chamados:", error.message);
+          console.error(
+            "Erro ao buscar chamados (verifique se a tabela 'chamados' existe no Supabase):",
+            error.message,
+            error
+          );
           toast.error("Erro ao carregar seus chamados.");
           setMeusChamados([]);
           return;
@@ -283,15 +485,25 @@ export default function AlunoContatoPage() {
           ((data ?? []) as Record<string, unknown>[]).map(mapearChamadoAluno)
         );
       } catch (err) {
-        console.error("Falha ao carregar chamados:", err);
+        if (cancelado) return;
+        console.error(
+          "Falha ao carregar chamados (tabela ausente ou erro de rede):",
+          err
+        );
         setMeusChamados([]);
       } finally {
-        setCarregandoChamados(false);
+        if (!cancelado) {
+          setCarregandoChamados(false);
+        }
       }
     }
 
     void carregarMeusChamados();
-  }, [aluno]);
+
+    return () => {
+      cancelado = true;
+    };
+  }, [alunoRa, carregandoSessao]);
 
   async function atualizarListaChamados(ra: string) {
     const { data, error } = await supabase
@@ -405,7 +617,8 @@ export default function AlunoContatoPage() {
     }
 
     if (
-      !professorSelecionado ||
+      !professorSelecionado?.nome ||
+      !turmaSelecionadaId ||
       !assuntoProfessor.trim() ||
       !mensagemProfessor.trim()
     ) {
@@ -429,7 +642,7 @@ export default function AlunoContatoPage() {
           assunto: assuntoSelecionado,
           mensagem: textoMensagem,
           destinatario_tipo: "Professor",
-          destinatario_nome: professorSelecionado,
+          destinatario_nome: professorSelecionado.nome,
         },
       ]);
 
@@ -443,7 +656,8 @@ export default function AlunoContatoPage() {
         return;
       }
 
-      setProfessorSelecionado("");
+      setTurmaSelecionadaId("");
+      setProfessorSelecionado(null);
       setAssuntoProfessor("");
       setMensagemProfessor("");
       abrirFeedback(
@@ -652,26 +866,43 @@ export default function AlunoContatoPage() {
                     id="disciplina-professor"
                     name="disciplina"
                     className={inputClass}
-                    value={professorSelecionado}
-                    onChange={(e) => setProfessorSelecionado(e.target.value)}
+                    value={turmaSelecionadaId}
+                    onChange={(e) => {
+                      const id = e.target.value;
+                      setTurmaSelecionadaId(id);
+                      const disciplina = disciplinasAluno.find(
+                        (item) => String(item.id) === id
+                      );
+                      setProfessorSelecionado(disciplina?.professor ?? null);
+                    }}
                   >
                     <option value="" disabled>
                       Selecione a disciplina
                     </option>
                     {disciplinasAluno.map((item) => (
-                      <option key={item.id} value={item.professor}>
-                        {item.curso} - Prof. {item.professor}
+                      <option key={item.id} value={item.id}>
+                        {item.nomeDisciplina} - Prof. {item.professor.nome}
                       </option>
                     ))}
                   </select>
-                  {disponibilidadeProf ? (
-                    <p className="mt-2 flex items-start gap-1.5 text-sm text-zinc-500">
-                      <Clock className="w-3.5 h-3.5 shrink-0 mt-0.5" />
-                      <span>
-                        {formatarAtendimentoBanner(disponibilidadeProf)}
-                      </span>
-                    </p>
-                  ) : null}
+                  {professorSelecionado?.preferencias?.atendimento && (
+                    <div className="mt-2 p-3 bg-zinc-950/80 rounded-md border border-zinc-800 text-sm">
+                      <p className="text-zinc-400 font-medium mb-1 flex items-center gap-1.5">
+                        <Clock className="w-3.5 h-3.5 shrink-0" />
+                        Horário de Atendimento do Professor:
+                      </p>
+                      <p className="text-zinc-500">
+                        Dias:{" "}
+                        {professorSelecionado.preferencias.atendimento.dias.join(
+                          ", "
+                        )}
+                        <br />
+                        Horário: das{" "}
+                        {professorSelecionado.preferencias.atendimento.inicio} às{" "}
+                        {professorSelecionado.preferencias.atendimento.fim}
+                      </p>
+                    </div>
+                  )}
                 </div>
                 <div>
                   <label
@@ -736,7 +967,7 @@ export default function AlunoContatoPage() {
             ) : meusChamados.length === 0 ? (
               <div className="bg-zinc-900/50 border border-zinc-800 rounded-xl px-6 py-8 text-center">
                 <p className="text-sm text-zinc-400">
-                  Você ainda não abriu nenhum chamado.
+                  Nenhum chamado ou mensagem em aberto no momento.
                 </p>
               </div>
             ) : (

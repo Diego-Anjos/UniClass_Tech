@@ -91,8 +91,11 @@ function iniciaisDe(nome: string) {
 
 function formatarSemestre(raw: unknown): string {
   if (raw == null || raw === "") return "1º Semestre";
-  const texto = String(raw);
-  return texto.includes("Semestre") ? texto : `${texto}º Semestre`;
+  const texto = String(raw).trim();
+  if (!texto) return "1º Semestre";
+  if (/semestre/i.test(texto)) return texto.replace(/ºº+/g, "º");
+  const numero = texto.replace(/º/g, "").trim();
+  return numero ? `${numero}º Semestre` : "1º Semestre";
 }
 
 function toNum(valor: unknown): number | null {

@@ -41,6 +41,8 @@ type EventoCalendario = {
   descricao: string | null;
   turma: string;
   disciplina: string | null;
+  professor_id?: string | null;
+  nome_professor?: string | null;
 };
 
 const MESES_CURTOS = [
@@ -117,7 +119,7 @@ export default function AlunoCalendarioPage() {
         const { data, error } = await supabase
           .from("calendario_academico")
           .select(
-            "id, titulo, tipo_evento, data_evento, descricao, turma, disciplina"
+            "id, titulo, tipo_evento, data_evento, descricao, turma, disciplina, professor_id"
           )
           .eq("turma", turma)
           .order("data_evento", { ascending: true });
@@ -127,9 +129,60 @@ export default function AlunoCalendarioPage() {
         if (error) {
           console.error("Erro ao carregar calendário:", error.message);
           setEventos([]);
-        } else {
-          setEventos((data as EventoCalendario[]) ?? []);
+          return;
         }
+
+        const eventosBrutos = (data as EventoCalendario[]) ?? [];
+
+        if (eventosBrutos.length === 0) {
+          setEventos([]);
+          return;
+        }
+
+        const idsProfessores = [
+          ...new Set(
+            eventosBrutos
+              .map((e) => e.professor_id?.trim())
+              .filter((id): id is string => Boolean(id))
+          ),
+        ];
+
+        const mapProfessores: Record<string, string> = {};
+
+        if (idsProfessores.length > 0) {
+          const { data: professoresData, error: professoresError } =
+            await supabase
+              .from("professores")
+              .select("id, nome")
+              .in("id", idsProfessores);
+
+          if (cancelado) return;
+
+          if (professoresError) {
+            console.error(
+              "Erro ao carregar nomes dos professores:",
+              professoresError.message
+            );
+          } else {
+            for (const prof of professoresData ?? []) {
+              const id = String(prof.id ?? "").trim();
+              const nome = String(prof.nome ?? "").trim();
+              if (id && nome) mapProfessores[id] = nome;
+            }
+          }
+        }
+
+        if (cancelado) return;
+
+        setEventos(
+          eventosBrutos.map((evento) => {
+            const pid = evento.professor_id?.trim();
+            return {
+              ...evento,
+              nome_professor: pid ? mapProfessores[pid] ?? null : null,
+            };
+          })
+        );
       } catch (err) {
         console.error("Erro ao carregar calendário:", err);
         if (!cancelado) setEventos([]);
@@ -296,6 +349,9 @@ export default function AlunoCalendarioPage() {
 
                   <p className="text-xs text-zinc-400">
                     {evento.disciplina?.trim() || "—"}
+                    {evento.nome_professor
+                      ? ` • Prof. ${evento.nome_professor}`
+                      : ""}
                   </p>
 
                   <span
