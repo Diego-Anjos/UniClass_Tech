@@ -2,6 +2,7 @@
 
 import { useState, useEffect } from "react";
 import { supabase } from "@/lib/supabase";
+import { TIPOS_ACAO_LOGS_RECENTES } from "@/lib/logs-auditoria";
 import {
   Unplug,
   ShieldAlert,
@@ -73,12 +74,13 @@ export default function ConfiguracoesSistemaPage() {
   const [logs, setLogs] = useState<LogAuditoria[]>([]);
   const [carregandoLogs, setCarregandoLogs] = useState(false);
 
-  // Buscar logs de auditoria do Supabase
+  // Buscar logs de auditoria: apenas lançamento de notas e registro de chamada
   async function fetchLogs() {
     setCarregandoLogs(true);
     const { data, error } = await supabase
       .from("logs_auditoria")
       .select("*")
+      .in("tipo_acao", TIPOS_ACAO_LOGS_RECENTES)
       .order("created_at", { ascending: false });
 
     if (error) {
@@ -469,7 +471,7 @@ export default function ConfiguracoesSistemaPage() {
                     <div>
                       <h2 className="text-sm font-semibold text-white">Logs Recentes</h2>
                       <p className="text-xs text-zinc-500 mt-1">
-                        Auditoria de ações sensíveis no sistema acadêmico.
+                        Somente lançamentos de notas e registros de chamada dos professores.
                       </p>
                     </div>
                     {carregandoLogs && (

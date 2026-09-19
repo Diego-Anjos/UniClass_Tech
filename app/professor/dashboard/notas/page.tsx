@@ -26,6 +26,7 @@ import { ProfessorAvatar } from "@/components/professor/professor-avatar";
 import { ModalFeedback } from "@/components/ModalFeedback";
 import { Button } from "@/components/ui/button";
 import { supabase } from "@/lib/supabase";
+import { registrarLogAuditoria } from "@/lib/logs-auditoria";
 import {
   EVENTO_PREFS_ATUALIZADAS,
   lerPreferenciasLocal,
@@ -630,6 +631,16 @@ export default function DiarioDeClassePage() {
         .eq("turma", turmaSelecionada);
 
       if (error) throw new Error(error.message);
+
+      await registrarLogAuditoria({
+        usuario:
+          professorLogado?.nomeCompletoTitulo ||
+          professorLogado?.nome ||
+          "Professor",
+        acao: `Lançamento de notas para a turma ${turmaSelecionada}`,
+        tipo_acao: "LANCAMENTO_NOTA",
+      });
+
       return { label, valor };
     })();
 
@@ -768,6 +779,15 @@ export default function DiarioDeClassePage() {
       });
       return;
     }
+
+    await registrarLogAuditoria({
+      usuario:
+        professorLogado?.nomeCompletoTitulo ||
+        professorLogado?.nome ||
+        "Professor",
+      acao: `Lançamento de notas para a turma ${turmaSelecionada}`,
+      tipo_acao: "LANCAMENTO_NOTA",
+    });
 
     setModalFeedback({
       aberto: true,

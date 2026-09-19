@@ -556,12 +556,10 @@ export default function TurmasMatriculasPage() {
       andar: andarSelecionado || null,
       sala: salaSelecionada || null,
     };
+    // Não enviar campos só de UI (ex.: alunos_matriculados) — não existem na tabela
     const { error } = editingId
       ? await supabase.from("turmas").update(payloadBase).eq("id", editingId)
-      : await supabase.from("turmas").insert({
-          ...payloadBase,
-          alunos_matriculados: 0,
-        });
+      : await supabase.from("turmas").insert(payloadBase);
     setIsSubmitting(false);
 
     if (error) {

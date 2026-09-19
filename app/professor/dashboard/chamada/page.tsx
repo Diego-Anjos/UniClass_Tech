@@ -24,6 +24,7 @@ import {
 } from "lucide-react";
 import { toast } from "sonner";
 import { supabase } from "@/lib/supabase";
+import { registrarLogAuditoria } from "@/lib/logs-auditoria";
 import { ProfessorSettingsControl } from "@/components/professor/config-modal";
 import { ProfessorAvatar } from "@/components/professor/professor-avatar";
 import { ModalFeedback } from "@/components/ModalFeedback";
@@ -477,6 +478,15 @@ export default function ProfessorChamadaPage() {
         );
         return;
       }
+
+      await registrarLogAuditoria({
+        usuario:
+          professorLogado?.nomeCompletoTitulo ||
+          professorLogado?.nome ||
+          "Professor",
+        acao: `Registro de chamada para a turma ${turmaSelecionada}`,
+        tipo_acao: "REGISTRO_CHAMADA",
+      });
 
       await carregarHistoricoTurma(turmaSelecionada);
 
