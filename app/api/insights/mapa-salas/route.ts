@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { requireApiAuth } from "@/lib/api-auth";
+import { requireRole } from "@/lib/api-auth";
 import {
   buildPrompt,
   createGenAI,
@@ -12,14 +12,14 @@ const FALLBACK_DICA =
   "Não foi possível gerar a análise da IA no momento. Consulte os laboratórios com status 'Livre' para estudo durante seus horários vagos.";
 
 export async function POST(req: NextRequest) {
-  const denied = requireApiAuth(req);
+  const denied = requireRole(req, ["aluno", "professor", "admin"]);
   if (denied) return denied;
 
   try {
     const { andar, salaProxima } = await req.json();
 
     const prompt = buildPrompt(
-      `Aja como um assistente de campus inteligente. Dê uma dica curta e amigável em uma única frase sobre como o aluno pode aproveitar os laboratórios com status 'Livre' para estudar. Fale de forma natural e garanta que a frase tenha começo, meio e fim.
+      `Você é um orientador de campus acolhedor. Dê uma dica curta e amigável em uma única frase sobre como o aluno pode aproveitar os laboratórios livres para estudar. Fale de forma natural, humana e garanta que a frase tenha começo, meio e fim.
 Retorne no formato: { "dica": "sua frase aqui", "insight": "mesma frase aqui" }`,
       `O estudante está visualizando o ${andar}. Sua próxima aula é no ambiente '${salaProxima}'. Sugira como aproveitar um laboratório livre para estudar antes ou depois da aula.`
     );

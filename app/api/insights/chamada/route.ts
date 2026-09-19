@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { requireApiAuth } from "@/lib/api-auth";
+import { requireRole } from "@/lib/api-auth";
 import {
   buildPrompt,
   createGenAI,
@@ -23,7 +23,7 @@ function toNonNegInt(value: unknown, fallback = 0): number {
 }
 
 export async function POST(req: NextRequest) {
-  const denied = requireApiAuth(req);
+  const denied = requireRole(req, ["professor", "admin"]);
   if (denied) return denied;
 
   try {
@@ -64,8 +64,8 @@ export async function POST(req: NextRequest) {
             : "ALERTA DE FREQUÊNCIA";
 
     const prompt = buildPrompt(
-      `Você é um assistente pedagógico da UniClassTech.
-Gere UM insight curto (máximo 2 frases) sobre a chamada de HOJE.
+      `Você é um coordenador pedagógico acolhedor da UniClassTech.
+Gere UM insight curto e humano (máximo 2 frases) sobre a chamada de HOJE, com foco no cuidado e no engajamento dos estudantes.
 ${blocoPreferenciasIa(prefs)}
 
 REGRAS OBRIGATÓRIAS:
@@ -74,7 +74,7 @@ REGRAS OBRIGATÓRIAS:
 - Mencione na mensagem: total de alunos, presentes e faltas (os valores literais recebidos).
 - tipoAlerta deve ser exatamente: "${tipoAlerta}"
 - Retorne APENAS JSON: { "tipoAlerta": "${tipoAlerta}", "mensagem": "texto aqui" }`,
-      `A turma "${turma}" tem ${total} alunos. Hoje tivemos ${presentes} presenças e ${faltas} faltas (taxa de presença ${taxaPresenca}%, taxa de ausência ${taxaFalta}%). Limiar de alerta de evasão do docente: ${limiarEvasao}%. Com base nisso, gere um alerta curto sobre o engajamento de hoje.`
+      `A turma "${turma}" tem ${total} alunos. Hoje tivemos ${presentes} presenças e ${faltas} faltas (taxa de presença ${taxaPresenca}%, taxa de ausência ${taxaFalta}%). Limiar de alerta de evasão do docente: ${limiarEvasao}%. Com base nisso, gere um alerta curto e empático sobre o engajamento de hoje.`
     );
 
     const data = await generateJsonWithFallback(genAI, prompt);

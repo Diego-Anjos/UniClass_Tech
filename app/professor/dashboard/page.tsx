@@ -374,7 +374,7 @@ export default function ProfessorDashboardPage() {
     return () => {
       cancelado = true;
     };
-  }, [professorLogado]);
+  }, [professorLogado?.id]);
 
   if (carregandoSessao || !professorLogado) {
     return (

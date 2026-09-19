@@ -21,6 +21,7 @@ import { ProfessorAvatar } from "@/components/professor/professor-avatar";
 import { supabase } from "@/lib/supabase";
 import {
   limparSessaoProfessor,
+  parseTurmasProfessor,
   useProfessorSession,
 } from "@/lib/professor-session";
 
@@ -108,9 +109,9 @@ export default function AgendaSemestralPage() {
 
   const disciplinaProfessor = professorLogado?.disciplina?.trim() || "";
 
-  // Mesma lógica de chamada/notas: turmas da área do professor no Supabase
+  // Turmas atribuídas ao professor (códigos ou vínculo por nome)
   useEffect(() => {
-    if (!professorLogado) {
+    if (!professorLogado?.id) {
       setTurmas([]);
       setCarregandoTurmas(false);
       return;
@@ -120,12 +121,35 @@ export default function AgendaSemestralPage() {
 
     async function fetchTurmas() {
       setCarregandoTurmas(true);
-      const areaAtuacao = professorLogado!.area_atuacao?.trim() ?? "";
+      const codigos = parseTurmasProfessor(professorLogado!.turmas);
+      const vinculoProfessor = professorLogado!.nomeCompletoTitulo?.trim() ?? "";
+      const selectCols = "id, codigo, curso, turno";
 
-      const { data, error } = await supabase
-        .from("turmas")
-        .select("*")
-        .ilike("curso", `%${areaAtuacao}%`);
+      let data: Record<string, unknown>[] | null = null;
+      let error: { message: string } | null = null;
+
+      if (codigos.length > 0) {
+        const res = await supabase
+          .from("turmas")
+          .select(selectCols)
+          .in("codigo", codigos);
+        data = (res.data as Record<string, unknown>[] | null) ?? null;
+        error = res.error;
+      } else if (vinculoProfessor) {
+        const res = await supabase
+          .from("turmas")
+          .select(selectCols)
+          .eq("professor", vinculoProfessor);
+        data = (res.data as Record<string, unknown>[] | null) ?? null;
+        error = res.error;
+      } else {
+        if (!cancelado) {
+          setTurmas([]);
+          setTurmaSelecionada("");
+          setCarregandoTurmas(false);
+        }
+        return;
+      }
 
       if (cancelado) return;
 
@@ -165,7 +189,7 @@ export default function AgendaSemestralPage() {
     return () => {
       cancelado = true;
     };
-  }, [professorLogado]);
+  }, [professorLogado?.id, professorLogado?.turmas, professorLogado?.nomeCompletoTitulo]);
 
   // Recarrega eventos ao trocar a turma
   useEffect(() => {

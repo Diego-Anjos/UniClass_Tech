@@ -1,20 +1,23 @@
 import { NextResponse } from "next/server";
 import { GoogleGenerativeAI } from "@google/generative-ai";
-import { requireApiAuth } from "@/lib/api-auth";
+import { requireRole } from "@/lib/api-auth";
 import { modelosFallback } from "@/lib/gemini-fallback";
 
-function isRateLimitError(message: string): boolean {
+function isRateLimitOrUnavailableError(message: string): boolean {
   const lower = message.toLowerCase();
   return (
     lower.includes("429") ||
+    lower.includes("503") ||
     lower.includes("quota") ||
     lower.includes("too many requests") ||
-    lower.includes("rate limit")
+    lower.includes("rate limit") ||
+    lower.includes("service unavailable") ||
+    lower.includes("high demand")
   );
 }
 
 export async function GET(req: Request) {
-  const denied = requireApiAuth(req);
+  const denied = requireRole(req, ["admin"]);
   if (denied) return denied;
 
   if (!process.env.GEMINI_API_KEY) {
@@ -45,8 +48,8 @@ export async function GET(req: Request) {
       err instanceof Error ? err.message : "Falha ao conectar com o Gemini.";
     console.error("[/api/gemini/test] Erro:", message);
 
-    // Cota/rate limit = chave válida e rede OK — sucesso parcial, não falha de conexão
-    if (isRateLimitError(message)) {
+    // Cota/rate limit / 503 = chave válida e rede OK — sucesso parcial, não falha de conexão
+    if (isRateLimitOrUnavailableError(message)) {
       return NextResponse.json(
         {
           success: true,

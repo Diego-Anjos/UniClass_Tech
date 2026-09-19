@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { createClient } from "@supabase/supabase-js";
+import { applySessionCookies } from "@/lib/api-auth";
 
 function parseTurmas(raw: unknown): string[] {
   if (!raw) return [];
@@ -58,7 +59,9 @@ export async function POST(request: Request) {
     const supabase = createClient(url, key);
     const { data, error } = await supabase
       .from("professores")
-      .select("*")
+      .select(
+        "id, nome, titulacao, area_atuacao, foto_url, turno_aula, dias_aula, turmas, disciplina, pesos"
+      )
       .eq("email_institucional", emailCompleto)
       .eq("senha", senha)
       .single();
@@ -80,9 +83,10 @@ export async function POST(request: Request) {
       return Number.isFinite(n) && n >= 0 ? n : fallback;
     };
 
+    const professorId = String(data.id);
     const response = NextResponse.json({
       professor: {
-        id: data.id,
+        id: professorId,
         nome: data.nome,
         titulacao: data.titulacao,
         area_atuacao: data.area_atuacao,
@@ -112,12 +116,7 @@ export async function POST(request: Request) {
       },
     });
 
-    response.cookies.set("uniclass_role", "professor", {
-      path: "/",
-      sameSite: "lax",
-      maxAge: 60 * 60 * 24 * 7,
-      httpOnly: true,
-    });
+    applySessionCookies(response, "professor", professorId);
 
     return response;
   } catch {

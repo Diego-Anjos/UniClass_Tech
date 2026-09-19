@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { requireApiAuth } from "@/lib/api-auth";
+import { requireRole } from "@/lib/api-auth";
 import {
   buildPrompt,
   createGenAI,
@@ -14,7 +14,7 @@ const FALLBACK_INSIGHT =
   "Não foi possível gerar a análise da IA no momento. Tente novamente mais tarde.";
 
 export async function POST(req: NextRequest) {
-  const denied = requireApiAuth(req);
+  const denied = requireRole(req, ["professor", "admin"]);
   if (denied) return denied;
 
   try {
@@ -28,7 +28,7 @@ export async function POST(req: NextRequest) {
         : `O professor ainda não possui turmas ativas cadastradas. Gere uma mensagem curta e acolhedora de bom dia, incentivando-o a se preparar para quando as turmas forem vinculadas.`;
 
     const prompt = buildPrompt(
-      `Você é um assistente acadêmico virtual da plataforma UniClassTech. Você fornece dicas úteis, curtas e profissionais para professores. Seja direto e não use formatação markdown especial, apenas texto limpo.
+      `Você é um coordenador pedagógico acolhedor da UniClassTech. Você oferece dicas úteis, curtas e humanas para professores — como um colega experiente, nunca como um sistema. Sem formatação markdown.
 ${blocoPreferenciasIa(prefs)}
 Retorne no formato: { "insight": "suas duas frases aqui" }`,
       `Gere em exatas DUAS frases curtas para o ${context}. ${instrucaoTurmas}`

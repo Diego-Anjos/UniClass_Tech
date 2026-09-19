@@ -198,10 +198,10 @@ export default function ProfessorMensagensPage() {
   }
 
   useEffect(() => {
-    if (!professorLogado) return;
+    if (!professorLogado?.id) return;
     void carregarMensagens();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [professorLogado]);
+  }, [professorLogado?.id]);
 
   function handleSelecionarMensagem(msg: MensagemChamado) {
     setMensagemSelecionada(msg);

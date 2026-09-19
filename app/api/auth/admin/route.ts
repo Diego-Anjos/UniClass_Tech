@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { applySessionCookies } from "@/lib/api-auth";
 
 export async function POST(request: Request) {
   try {
@@ -30,12 +31,7 @@ export async function POST(request: Request) {
       },
     });
 
-    response.cookies.set("uniclass_role", "admin", {
-      path: "/",
-      sameSite: "lax",
-      maxAge: 60 * 60 * 24 * 7,
-      httpOnly: true,
-    });
+    applySessionCookies(response, "admin", "admin");
 
     return response;
   } catch {

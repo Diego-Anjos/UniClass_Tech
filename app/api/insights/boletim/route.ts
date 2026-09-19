@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { requireApiAuth } from "@/lib/api-auth";
+import { requireRole } from "@/lib/api-auth";
 import {
   buildPrompt,
   createGenAI,
@@ -12,14 +12,14 @@ const FALLBACK_INSIGHT =
   "Não foi possível gerar a análise da IA no momento. Tente novamente mais tarde.";
 
 export async function POST(req: NextRequest) {
-  const denied = requireApiAuth(req);
+  const denied = requireRole(req, ["aluno", "professor", "admin"]);
   if (denied) return denied;
 
   try {
     const { alunoNome, totalDisciplinas, disciplinasPendentes } = await req.json();
 
     const prompt = buildPrompt(
-      `Você é um mentor acadêmico virtual da UniClassTech. Com base na situação das disciplinas do aluno, forneça uma recomendação clara e encorajadora em exatamente DUAS frases curtas, orientando onde ele deve focar seus estudos. Sem formatação markdown.
+      `Você é um mentor acadêmico acolhedor da UniClassTech. Com base na situação das disciplinas do aluno, forneça uma recomendação clara, encorajadora e humana em exatamente DUAS frases curtas, orientando onde ele deve focar seus estudos para evoluir. Sem formatação markdown.
 Retorne no formato: { "insight": "suas duas frases aqui" }`,
       `O estudante ${alunoNome} está cursando ${totalDisciplinas} disciplinas. Disciplinas que demandam atenção ou estão em andamento: ${disciplinasPendentes}. Dê uma orientação prática sobre metas de estudo para fechar o semestre com aprovação.`
     );

@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { createClient } from "@supabase/supabase-js";
+import { applySessionCookies } from "@/lib/api-auth";
 
 export async function POST(request: Request) {
   try {
@@ -34,7 +35,9 @@ export async function POST(request: Request) {
     const supabase = createClient(url, key);
     const { data: aluno, error } = await supabase
       .from("alunos")
-      .select("*")
+      .select(
+        "ra, nome, curso, semestre_atual, semestre, foto_url, avatar_url"
+      )
       .eq("ra", ra)
       .single();
 
@@ -50,23 +53,19 @@ export async function POST(request: Request) {
       (typeof aluno.avatar_url === "string" && aluno.avatar_url.trim()) ||
       "";
 
+    const raSessao = String(aluno.ra ?? ra);
     const response = NextResponse.json({
       aluno: {
-        ra: String(aluno.ra ?? ra),
+        ra: raSessao,
         nome: String(aluno.nome ?? "Estudante"),
         curso: String(aluno.curso ?? ""),
         semestreAtual:
-          aluno.semestre_atual ?? aluno.semestre ?? aluno.SemestreAtual ?? "",
+          aluno.semestre_atual ?? aluno.semestre ?? "",
         foto_url: fotoRaw || null,
       },
     });
 
-    response.cookies.set("uniclass_role", "aluno", {
-      path: "/",
-      sameSite: "lax",
-      maxAge: 60 * 60 * 24 * 7,
-      httpOnly: true,
-    });
+    applySessionCookies(response, "aluno", raSessao);
 
     return response;
   } catch {

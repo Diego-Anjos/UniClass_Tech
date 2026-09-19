@@ -1,8 +1,8 @@
 import { NextResponse } from "next/server";
-import { requireApiAuth } from "@/lib/api-auth";
+import { requireRole } from "@/lib/api-auth";
 
 export async function GET(req: Request) {
-  const denied = requireApiAuth(req);
+  const denied = requireRole(req, ["admin"]);
   if (denied) return denied;
 
   if (!process.env.RESEND_API_KEY) {

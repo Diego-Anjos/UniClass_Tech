@@ -29,7 +29,6 @@ import {
 } from "recharts";
 import { toast } from "sonner";
 import { supabase } from "@/lib/supabase";
-import { BoletimPDF } from "@/components/BoletimPDF";
 import { Button } from "@/components/ui/button";
 import { AlunoAvatar } from "@/components/aluno/aluno-avatar";
 import {
@@ -38,9 +37,11 @@ import {
 } from "@/lib/aluno-session";
 import { PESOS_AVALIACAO_PADRAO } from "@/lib/professor-session";
 
-const PDFDownloadLink = dynamic(
+const BoletimDownloadButton = dynamic(
   () =>
-    import("@react-pdf/renderer").then((mod) => mod.PDFDownloadLink),
+    import("@/components/pdf/BoletimDownloadButton").then(
+      (mod) => mod.BoletimDownloadButton
+    ),
   {
     ssr: false,
     loading: () => <Button disabled>Carregando gerador...</Button>,
@@ -61,6 +62,7 @@ type AlunoInfo = {
   nome: string;
   ra: string;
   curso: string;
+  turma?: string;
   professor?: string;
 };
 
@@ -69,6 +71,7 @@ type NotaBoletim = {
   professor: string;
   n1: number;
   n2: number;
+  n3: number;
   faltas: number;
   atv1: number;
   atv2: number;
@@ -76,6 +79,41 @@ type NotaBoletim = {
   atv4: number;
   prova: number;
 };
+
+function toNotaNum(value: unknown): number {
+  const n = Number(value);
+  return Number.isFinite(n) ? n : 0;
+}
+
+function mapLinhaNotas(row: Record<string, unknown>): NotaBoletim {
+  const atv1 = toNotaNum(row.atv1);
+  const atv2 = toNotaNum(row.atv2);
+  const atv3 = toNotaNum(row.atv3);
+  const atv4 = toNotaNum(row.atv4);
+  const prova = toNotaNum(row.prova);
+
+  const n1Db = row.n1 != null && row.n1 !== "" ? toNotaNum(row.n1) : null;
+  const n1 =
+    n1Db != null && n1Db > 0
+      ? n1Db
+      : atv1 + atv2 + atv3 + atv4 + prova || n1Db || 0;
+
+  return {
+    disciplina: String(
+      row.disciplina ?? row.turma ?? row.curso ?? "Disciplina"
+    ).trim() || "Disciplina",
+    professor: String(row.professor ?? "—"),
+    n1,
+    n2: toNotaNum(row.n2),
+    n3: toNotaNum(row.n3),
+    faltas: toNotaNum(row.faltas),
+    atv1,
+    atv2,
+    atv3,
+    atv4,
+    prova,
+  };
+}
 
 function statusBadgeClasses(status: string) {
   const s = status.toLowerCase();
@@ -137,22 +175,22 @@ export default function AlunoNotasPage() {
 
     async function carregarBoletim() {
       setCarregando(true);
+      const ra = alunoLogado!.ra;
 
-      const { data, error } = await supabase
+      // Perfil do aluno (dados cadastrais)
+      const { data: alunosRows, error: alunoError } = await supabase
         .from("alunos")
-        .select(
-          "nome, ra, curso, professor, turma, atv1, atv2, atv3, atv4, prova, n1, n2, faltas, semestre_atual"
-        )
-        .eq("ra", alunoLogado!.ra);
+        .select("nome, ra, curso, professor, turma, semestre_atual")
+        .eq("ra", ra);
 
       if (cancelado) return;
 
-      if (error) {
-        console.error("Erro ao buscar boletim:", error.message);
+      if (alunoError) {
+        console.error("Erro ao buscar aluno:", alunoError.message);
         toast.error("Não foi possível carregar o boletim.");
         setAluno({
           nome: alunoLogado!.nome,
-          ra: alunoLogado!.ra,
+          ra,
           curso: alunoLogado!.curso || "Tecnologia da Informação",
         });
         setDadosNotas([]);
@@ -160,12 +198,14 @@ export default function AlunoNotasPage() {
         return;
       }
 
-      const rows = data ?? [];
+      const primeiro = (alunosRows ?? [])[0] as
+        | Record<string, unknown>
+        | undefined;
 
-      if (rows.length === 0) {
+      if (!primeiro) {
         setAluno({
           nome: alunoLogado!.nome,
-          ra: alunoLogado!.ra,
+          ra,
           curso: alunoLogado!.curso || "Tecnologia da Informação",
         });
         setDadosNotas([]);
@@ -173,13 +213,13 @@ export default function AlunoNotasPage() {
         return;
       }
 
-      const primeiro = rows[0];
       setAluno({
         nome: String(primeiro.nome ?? alunoLogado!.nome ?? "Estudante"),
-        ra: String(primeiro.ra || alunoLogado!.ra),
+        ra: String(primeiro.ra || ra),
         curso: String(
           primeiro.curso || alunoLogado!.curso || "Tecnologia da Informação"
         ),
+        turma: primeiro.turma ? String(primeiro.turma) : undefined,
         professor: primeiro.professor
           ? String(primeiro.professor)
           : undefined,
@@ -189,29 +229,87 @@ export default function AlunoNotasPage() {
         primeiro.semestre_atual ?? alunoLogado!.semestreAtual ?? "";
       setSemestreSelecionado(formatarSemestreLabel(semestre));
 
-      setDadosNotas(
-        rows.map((row) => {
-          const atv1 = Number(row.atv1) || 0;
-          const atv2 = Number(row.atv2) || 0;
-          const atv3 = Number(row.atv3) || 0;
-          const atv4 = Number(row.atv4) || 0;
-          const prova = Number(row.prova) || 0;
-          const n1 = atv1 + atv2 + atv3 + atv4 + prova;
+      // Notas reais por disciplina (tabela `notas` + vínculo com turmas)
+      let linhas: NotaBoletim[] = [];
+      const { data: notasData, error: notasError } = await supabase
+        .from("notas")
+        .select(
+          "n1, n2, n3, media_final, faltas, turma, turmas(codigo, curso, professor)"
+        )
+        .eq("ra_aluno", ra);
 
-          return {
-            disciplina: String(row.turma ?? row.curso ?? "Disciplina"),
-            professor: String(row.professor ?? "—"),
-            n1,
-            n2: Number(row.n2) || 0,
-            faltas: Number(row.faltas) || 0,
-            atv1,
-            atv2,
-            atv3,
-            atv4,
-            prova,
-          };
-        })
-      );
+      if (cancelado) return;
+
+      if (notasError) {
+        console.warn(
+          "Erro ao buscar notas com join (tentando select simples):",
+          notasError.message
+        );
+        const simples = await supabase
+          .from("notas")
+          .select("n1, n2, n3, media_final, faltas, turma")
+          .eq("ra_aluno", ra);
+
+        if (simples.error) {
+          console.warn(
+            "Erro ao buscar notas (fallback alunos):",
+            simples.error.message
+          );
+        } else {
+          linhas = (simples.data ?? []).map((row) =>
+            mapLinhaNotas(row as Record<string, unknown>)
+          );
+        }
+      } else {
+        linhas = (notasData ?? []).map((row) => {
+          const raw = row as Record<string, unknown>;
+          const turmasRel = raw.turmas as Record<string, unknown> | null;
+          return mapLinhaNotas({
+            ...raw,
+            disciplina:
+              turmasRel?.curso ??
+              turmasRel?.codigo ??
+              raw.turma ??
+              "Disciplina",
+            professor: turmasRel?.professor ?? "—",
+          });
+        });
+      }
+
+      // Fallback: se não houver linhas em `notas`, usa campos de nota na ficha do aluno
+      if (linhas.length === 0) {
+        const { data: fichaNotas, error: fichaError } = await supabase
+          .from("alunos")
+          .select(
+            "nome, ra, curso, professor, turma, atv1, atv2, atv3, atv4, prova, n1, n2, n3, faltas"
+          )
+          .eq("ra", ra);
+
+        if (fichaError) {
+          console.error("Erro no fallback de notas:", fichaError.message);
+        } else {
+          linhas = (fichaNotas ?? []).map((row) =>
+            mapLinhaNotas(row as Record<string, unknown>)
+          );
+        }
+      }
+
+      // Faltas agregadas da chamada, se a coluna em notas vier zerada
+      const { data: chamadaRows, error: chamadaError } = await supabase
+        .from("registro_chamada")
+        .select("status")
+        .eq("aluno_ra", ra);
+
+      if (!chamadaError && chamadaRows && chamadaRows.length > 0) {
+        const totalFaltas = chamadaRows.filter(
+          (r) => String(r.status ?? "").toLowerCase() === "falta"
+        ).length;
+        if (linhas.length === 1 && linhas[0].faltas === 0 && totalFaltas > 0) {
+          linhas = [{ ...linhas[0], faltas: totalFaltas }];
+        }
+      }
+
+      setDadosNotas(linhas);
       setCarregando(false);
     }
 
@@ -363,22 +461,23 @@ export default function AlunoNotasPage() {
               >
                 <option value={semestreSelecionado}>{semestreSelecionado}</option>
               </select>
-              {alunoLogado && (
-                <PDFDownloadLink
-                  document={
-                    <BoletimPDF aluno={alunoLogado} notas={dadosNotas} />
-                  }
-                  fileName={`Boletim_${alunoLogado.ra}.pdf`}
-                  className="inline-flex no-underline"
-                >
-                  {({ loading }) => (
-                    <Button variant="outline">
-                      {loading
-                        ? "Preparando documento..."
-                        : "Baixar Boletim em PDF"}
-                    </Button>
-                  )}
-                </PDFDownloadLink>
+              {aluno && (
+                <BoletimDownloadButton
+                  aluno={{
+                    nome: aluno.nome,
+                    ra: aluno.ra,
+                    curso: aluno.curso,
+                    turma: aluno.turma,
+                  }}
+                  notas={dadosNotas.map((n) => ({
+                    disciplina: n.disciplina,
+                    n1: Number(n.n1.toFixed(1)),
+                    n2: Number(n.n2.toFixed(1)),
+                    n3: Number(n.n3.toFixed(1)),
+                    faltas: n.faltas,
+                  }))}
+                  className="w-auto"
+                />
               )}
             </div>
           </div>
@@ -513,10 +612,13 @@ export default function AlunoNotasPage() {
                       const chave = `${item.disciplina}-${index}`;
                       const aberto = linhaExpandida === chave;
                       const media =
-                        (Number(item.n1) + Number(item.n2)) / 2;
+                        item.n3 > 0
+                          ? (Number(item.n1) + Number(item.n2) + Number(item.n3)) /
+                            3
+                          : (Number(item.n1) + Number(item.n2)) / 2;
                       const label = statusPorMedia(
                         Number(item.n1),
-                        Number(item.n2)
+                        item.n3 > 0 ? Number(item.n3) : Number(item.n2)
                       );
                       const composicao = composicaoN1De(item);
                       return (

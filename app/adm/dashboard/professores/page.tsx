@@ -256,28 +256,31 @@ function normalizarDiasAula(valor: unknown): string[] {
 
 function mapProfessor(row: Record<string, unknown>): Professor {
   const nome = String(row.nome ?? "");
-  const emailInstitucional = String(
-    row.email_institucional ?? row.email ?? "—"
-  );
+  const emailInstitucional = String(row.email_institucional ?? "").trim();
+  const emailExibicao = emailInstitucional || "E-mail não vinculado";
   const turno = String(row.turno_aula ?? "Noite");
+  const areaAtuacao = String(row.area_atuacao ?? "").trim();
+
   return {
     id: String(row.id ?? ""),
-    matricula: String(row.matricula ?? "—"),
+    matricula: String(row.matricula ?? "").trim() || "Não informada",
     nome,
-    cpf: String(row.cpf ?? ""),
-    titulacao: normalizarTitulacao(String(row.titulacao ?? "Especialista")),
-    area_atuacao: String(row.area_atuacao ?? row.area ?? "—"),
-    disciplina: String(row.disciplina ?? ""),
-    carga_horaria: Number(row.carga_horaria ?? row.carga_horaria_semanal ?? 0),
+    cpf: String(row.cpf ?? "").trim() || "Não informado",
+    titulacao: normalizarTitulacao(
+      String(row.titulacao ?? "").trim() || "Especialista"
+    ),
+    area_atuacao: areaAtuacao || "Não informada",
+    disciplina: String(row.disciplina ?? "").trim() || "Não informada",
+    carga_horaria: Number(row.carga_horaria ?? 0) || 0,
     status: (String(row.status ?? "Ativo")) as StatusProfessor,
-    email: emailInstitucional,
+    email: emailExibicao,
     iniciais: iniciaisDe(nome) || "—",
     diarioFechado: Boolean(row.diario_fechado ?? false),
-    pis: String(row.pis ?? ""),
-    lattes_url: String(row.lattes_url ?? ""),
-    email_pessoal: String(row.email_pessoal ?? ""),
-    email_institucional: emailInstitucional === "—" ? "" : emailInstitucional,
-    telefone: String(row.telefone ?? ""),
+    pis: String(row.pis ?? "").trim() || "Não informado",
+    lattes_url: String(row.lattes_url ?? "").trim() || "Não informado",
+    email_pessoal: String(row.email_pessoal ?? "").trim() || "Não informado",
+    email_institucional: emailInstitucional,
+    telefone: String(row.telefone ?? "").trim() || "Não informado",
     turno_aula: turnosAula.includes(turno as (typeof turnosAula)[number])
       ? turno
       : "Noite",
@@ -338,7 +341,9 @@ export default function GestaoProfessoresPage() {
     setIsLoading(true);
     const { data, error } = await supabase
       .from("professores")
-      .select("*")
+      .select(
+        "id, nome, matricula, titulacao, area_atuacao, disciplina, email_institucional, foto_url, status, turno_aula, dias_aula"
+      )
       .order("created_at", { ascending: false });
 
     if (error) {
@@ -778,9 +783,15 @@ export default function GestaoProfessoresPage() {
     void (async () => {
       await fetchTurmasDisponiveis();
 
-      const { data: lista } = await supabase
+      const { data: lista, error: listaError } = await supabase
         .from("turmas")
         .select("id, sala, andar, codigo, curso, turno");
+
+      if (listaError) {
+        console.error("Erro ao carregar turmas no edit:", listaError.message);
+        toast.error("Não foi possível carregar as turmas do professor.");
+        return;
+      }
 
       const disponiveis = (lista ?? []).map((t) => ({
         id: String(t.id),

@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { requireApiAuth } from "@/lib/api-auth";
+import { requireRole } from "@/lib/api-auth";
 import {
   buildPrompt,
   createGenAI,
@@ -14,7 +14,7 @@ const FALLBACK_INSIGHT =
   "Não foi possível gerar a análise da IA no momento. Tente novamente mais tarde.";
 
 export async function POST(req: NextRequest) {
-  const denied = requireApiAuth(req);
+  const denied = requireRole(req, ["professor", "admin"]);
   if (denied) return denied;
 
   try {
@@ -22,10 +22,10 @@ export async function POST(req: NextRequest) {
     const prefs = await buscarPreferenciasProfessor(professorId);
 
     const prompt = buildPrompt(
-      `Você é um assistente pedagógico. Analise os dados de presença da turma e gere um alerta conciso de até duas frases para o professor sobre retenção, engajamento ou acompanhamento de faltas. Não use markdown especial.
+      `Você é um coordenador pedagógico acolhedor. Analise os dados de presença da turma e gere um alerta conciso e empático de até duas frases para o professor sobre retenção, engajamento ou acompanhamento de faltas — sempre com foco no cuidado com os estudantes. Não use markdown especial.
 ${blocoPreferenciasIa(prefs)}
 Retorne no formato: { "insight": "seu alerta aqui" }`,
-      `Na turma ${turma}, de ${totalAlunos} alunos registrados hoje, houve ${totalFaltas} falta(s). Dê uma orientação direta ao professor sobre o engajamento desta aula.`
+      `Na turma ${turma}, de ${totalAlunos} alunos registrados hoje, houve ${totalFaltas} falta(s). Dê uma orientação humana ao professor sobre o engajamento desta aula.`
     );
 
     const data = await generateJsonWithFallback(genAI, prompt);

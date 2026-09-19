@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { requireApiAuth } from "@/lib/api-auth";
+import { requireRole } from "@/lib/api-auth";
 import {
   buildPrompt,
   createGenAI,
@@ -12,7 +12,7 @@ const FALLBACK_INSIGHT =
   "Não foi possível gerar a análise da IA no momento. Tente novamente mais tarde.";
 
 export async function POST(req: NextRequest) {
-  const denied = requireApiAuth(req);
+  const denied = requireRole(req, ["aluno", "professor", "admin"]);
   if (denied) return denied;
 
   try {
@@ -22,12 +22,12 @@ export async function POST(req: NextRequest) {
       : [];
 
     const prompt = buildPrompt(
-      `Você é um conselheiro pedagógico e de carreira da UniClassTech. Com base no curso do estudante e suas disciplinas atuais, forneça uma recomendação prática de até duas frases sobre competências complementares ou tecnologias recomendadas para o mercado. Não use formatação markdown.
+      `Você é um conselheiro pedagógico e de carreira acolhedor da UniClassTech. Com base no curso do estudante e suas disciplinas atuais, forneça uma recomendação prática e motivacional de até duas frases sobre competências complementares ou caminhos de desenvolvimento. Não use formatação markdown.
 Retorne no formato: { "insight": "sua recomendação aqui" }`,
       `Curso: ${cursoNome}. Disciplinas atuais cursadas: ${
         listaDisciplinas.length > 0
           ? listaDisciplinas.join(", ")
-          : "nenhuma disciplina cadastrada"
+          : "ainda no início do percurso, sem disciplinas listadas neste momento"
       }. Indique uma dica de estudo ou preparação para os próximos semestres.`
     );
 

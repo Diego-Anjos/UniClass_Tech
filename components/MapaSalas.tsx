@@ -320,10 +320,18 @@ export function MapaSalas({ usuarioLogado, role }: Props) {
             .eq("ra_aluno", ra);
 
           if (joinError) {
-            const { data: notasSimples } = await supabase
-              .from("notas")
-              .select("turma")
-              .eq("ra_aluno", ra);
+            const { data: notasSimples, error: notasSimplesError } =
+              await supabase
+                .from("notas")
+                .select("turma")
+                .eq("ra_aluno", ra);
+
+            if (notasSimplesError) {
+              console.error(
+                "Erro ao buscar turmas do aluno (fallback):",
+                notasSimplesError.message
+              );
+            }
 
             const ids = [
               ...new Set(
@@ -334,10 +342,18 @@ export function MapaSalas({ usuarioLogado, role }: Props) {
             ];
 
             if (ids.length > 0) {
-              const { data: turmasPorId } = await supabase
-                .from("turmas")
-                .select(COLUNAS_TURMA_MAPA)
-                .in("id", ids);
+              const { data: turmasPorId, error: turmasPorIdError } =
+                await supabase
+                  .from("turmas")
+                  .select(COLUNAS_TURMA_MAPA)
+                  .in("id", ids);
+
+              if (turmasPorIdError) {
+                console.error(
+                  "Erro ao buscar turmas por id:",
+                  turmasPorIdError.message
+                );
+              }
 
               turmasAluno = (turmasPorId ?? [])
                 .map((t) => normalizarTurma(t))

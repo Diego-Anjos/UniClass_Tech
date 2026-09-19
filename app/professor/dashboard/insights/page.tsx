@@ -33,6 +33,7 @@ import { ProfessorSettingsControl } from "@/components/professor/config-modal";
 import { ProfessorAvatar } from "@/components/professor/professor-avatar";
 import {
   limparSessaoProfessor,
+  parseTurmasProfessor,
   useProfessorSession,
 } from "@/lib/professor-session";
 
@@ -60,6 +61,13 @@ type AlunoInsight = {
   semestre: number;
   professor: string;
   n1: number | null;
+};
+
+type NotasAlunoResumo = {
+  n1: number | null;
+  n2: number | null;
+  n3: number | null;
+  media: number | null;
 };
 
 type TurmaOption = {
@@ -185,6 +193,7 @@ export default function ProfessorInsightsPage() {
   );
   const [resumoAluno, setResumoAluno] = useState<ResumoEngajamento | null>(null);
   const [mediaAluno, setMediaAluno] = useState<number | null>(null);
+  const [notasAluno, setNotasAluno] = useState<NotasAlunoResumo | null>(null);
   const [carregandoAlunos, setCarregandoAlunos] = useState(false);
   const [carregandoResumo, setCarregandoResumo] = useState(false);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
@@ -224,9 +233,13 @@ export default function ProfessorInsightsPage() {
     const taxaPresenca = resumoAluno?.taxaPresenca;
     const media =
       mediaAluno ??
+      notasAluno?.media ??
       (alunoSelecionado.n1 != null && Number.isFinite(alunoSelecionado.n1)
         ? alunoSelecionado.n1
         : null);
+    const n1 = notasAluno?.n1 ?? alunoSelecionado.n1;
+    const n2 = notasAluno?.n2 ?? null;
+    const n3 = notasAluno?.n3 ?? null;
 
     return [
       `Nome: ${alunoSelecionado.nome}`,
@@ -235,15 +248,18 @@ export default function ProfessorInsightsPage() {
       `Semestre do aluno: ${alunoSelecionado.semestre}`,
       `Turma selecionada: ${turmaSelecionada || "—"}`,
       `Professor vinculado: ${alunoSelecionado.professor || "—"}`,
+      `N1: ${n1 != null ? Number(n1).toFixed(1) : "indisponível no banco"}`,
+      `N2: ${n2 != null ? Number(n2).toFixed(1) : "indisponível no banco"}`,
+      `N3: ${n3 != null ? Number(n3).toFixed(1) : "indisponível no banco"}`,
       media != null
-        ? `Média recente (N1/média): ${media.toFixed(1)}`
-        : "Média recente: indisponível no banco",
+        ? `Média atual: ${media.toFixed(1)}`
+        : "Média atual: indisponível no banco",
       taxaPresenca != null
         ? `Taxa de presença: ${taxaPresenca}%`
         : "Taxa de presença: indisponível",
       taxaFaltas != null
-        ? `Taxa de faltas: ${taxaFaltas}%`
-        : "Taxa de faltas: indisponível",
+        ? `Percentual de faltas: ${taxaFaltas}%`
+        : "Percentual de faltas: indisponível",
       resumoAluno
         ? `Registros de chamada: ${resumoAluno.presentes} presentes, ${resumoAluno.faltas} faltas em ${resumoAluno.totalRegistros} aula(s).`
         : "Sem registros de chamada carregados.",
@@ -252,19 +268,20 @@ export default function ProfessorInsightsPage() {
     ]
       .filter(Boolean)
       .join("\n");
-  }, [alunoSelecionado, resumoAluno, mediaAluno, turmaSelecionada]);
+  }, [alunoSelecionado, resumoAluno, mediaAluno, notasAluno, turmaSelecionada]);
 
   function limparContextoIndividual() {
     setAlunoSelecionado(null);
     setResumoAluno(null);
     setMediaAluno(null);
+    setNotasAluno(null);
     setMessages([]);
     setInputChat("");
     setIsTyping(false);
   }
 
   useEffect(() => {
-    if (!professorLogado) {
+    if (!professorLogado?.id) {
       setTurmas([]);
       setTurmaSelecionada("");
       setCarregandoTurmas(false);
@@ -275,12 +292,35 @@ export default function ProfessorInsightsPage() {
 
     async function fetchTurmas() {
       setCarregandoTurmas(true);
-      const areaAtuacao = professorLogado!.area_atuacao?.trim() ?? "";
+      const codigos = parseTurmasProfessor(professorLogado!.turmas);
+      const vinculoProfessor = professorLogado!.nomeCompletoTitulo?.trim() ?? "";
+      const selectCols = "id, codigo, curso, turno";
 
-      const { data, error } = await supabase
-        .from("turmas")
-        .select("*")
-        .ilike("curso", `%${areaAtuacao}%`);
+      let data: Record<string, unknown>[] | null = null;
+      let error: { message: string } | null = null;
+
+      if (codigos.length > 0) {
+        const res = await supabase
+          .from("turmas")
+          .select(selectCols)
+          .in("codigo", codigos);
+        data = (res.data as Record<string, unknown>[] | null) ?? null;
+        error = res.error;
+      } else if (vinculoProfessor) {
+        const res = await supabase
+          .from("turmas")
+          .select(selectCols)
+          .eq("professor", vinculoProfessor);
+        data = (res.data as Record<string, unknown>[] | null) ?? null;
+        error = res.error;
+      } else {
+        if (!cancelado) {
+          setTurmas([]);
+          setTurmaSelecionada("");
+          setCarregandoTurmas(false);
+        }
+        return;
+      }
 
       if (cancelado) return;
 
@@ -318,13 +358,14 @@ export default function ProfessorInsightsPage() {
     return () => {
       cancelado = true;
     };
-  }, [professorLogado]);
+  }, [professorLogado?.id, professorLogado?.turmas, professorLogado?.nomeCompletoTitulo]);
 
   // 1. Cascata Turma → Aluno: reset exclusivo (deps limpas)
   useEffect(() => {
     setAlunoSelecionado(null);
     setResumoAluno(null);
     setMediaAluno(null);
+    setNotasAluno(null);
     setMessages([]);
     setInputChat("");
     setIsTyping(false);
@@ -394,11 +435,12 @@ export default function ProfessorInsightsPage() {
     };
   }, [turmaSelecionada]);
 
-  // Raio-X: frequência + média real do aluno selecionado
+  // Raio-X: frequência + notas reais (N1/N2/N3/média) do aluno selecionado
   useEffect(() => {
     if (!alunoRa) {
       setResumoAluno(null);
       setMediaAluno(null);
+      setNotasAluno(null);
       return;
     }
 
@@ -414,7 +456,7 @@ export default function ProfessorInsightsPage() {
           .eq("aluno_ra", alunoRa),
         supabase
           .from("notas")
-          .select("media_final")
+          .select("n1, n2, n3, media_final")
           .eq("ra_aluno", alunoRa),
       ]);
 
@@ -456,17 +498,28 @@ export default function ProfessorInsightsPage() {
       }
 
       if (notasRes.error) {
-        console.error("Erro ao buscar média do aluno:", notasRes.error.message);
+        console.error("Erro ao buscar notas do aluno:", notasRes.error.message);
         setMediaAluno(alunoSelecionado?.n1 ?? null);
+        setNotasAluno({
+          n1: alunoSelecionado?.n1 ?? null,
+          n2: null,
+          n3: null,
+          media: alunoSelecionado?.n1 ?? null,
+        });
       } else {
-        const medias = (notasRes.data ?? [])
-          .map((r) => Number(r.media_final))
-          .filter((v) => Number.isFinite(v));
-        if (medias.length > 0) {
-          setMediaAluno(mediaNumeros(medias));
-        } else {
-          setMediaAluno(alunoSelecionado?.n1 ?? null);
-        }
+        const rows = notasRes.data ?? [];
+        const avgCampo = (campo: "n1" | "n2" | "n3" | "media_final") => {
+          const vals = rows
+            .map((r) => Number(r[campo]))
+            .filter((v) => Number.isFinite(v));
+          return vals.length > 0 ? mediaNumeros(vals) : null;
+        };
+        const n1 = avgCampo("n1") ?? alunoSelecionado?.n1 ?? null;
+        const n2 = avgCampo("n2");
+        const n3 = avgCampo("n3");
+        const media = avgCampo("media_final") ?? n1;
+        setNotasAluno({ n1, n2, n3, media });
+        setMediaAluno(media);
       }
 
       setCarregandoResumo(false);
@@ -715,7 +768,9 @@ export default function ProfessorInsightsPage() {
       cancelado = true;
     };
     // Array de tamanho fixo — sem objetos/arrays dinâmicos
-  }, [turmaSelecionada, ano, semestre, professorId, turmaId, professorTitulo, professorArea]);
+    // professorTitulo/Area lidos via closure (não devem re-disparar Gemini)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [turmaSelecionada, ano, semestre, professorId, turmaId]);
 
   function handleSelecionarAluno(alunoIdSelecionado: string) {
     if (!alunoIdSelecionado) {
@@ -727,6 +782,7 @@ export default function ProfessorInsightsPage() {
     if (!aluno) {
       setResumoAluno(null);
       setMediaAluno(null);
+      setNotasAluno(null);
       setMessages([]);
     }
   }
@@ -748,7 +804,7 @@ export default function ProfessorInsightsPage() {
     setInputChat("");
     setIsTyping(true);
 
-    // 3. Payload blindado: contexto + métricas reais do aluno
+    // 3. Payload blindado: contexto + métricas reais do aluno (N1/N2/N3 + faltas)
     const payload = {
       messages: novasMensagens,
       professor: professorLogado.nomeCompletoTitulo,
@@ -760,7 +816,11 @@ export default function ProfessorInsightsPage() {
         ra: alunoSelecionado.ra,
         curso: alunoSelecionado.curso,
         turma: turmaSelecionada,
-        mediaRecente: mediaAluno ?? alunoSelecionado.n1,
+        n1: notasAluno?.n1 ?? alunoSelecionado.n1,
+        n2: notasAluno?.n2 ?? null,
+        n3: notasAluno?.n3 ?? null,
+        mediaRecente: mediaAluno ?? notasAluno?.media ?? alunoSelecionado.n1,
+        media: mediaAluno ?? notasAluno?.media ?? alunoSelecionado.n1,
         taxaPresenca: resumoAluno?.taxaPresenca ?? null,
         taxaFaltas: resumoAluno?.taxaFaltas ?? null,
         presentes: resumoAluno?.presentes ?? null,
@@ -770,9 +830,13 @@ export default function ProfessorInsightsPage() {
         nome: alunoSelecionado.nome,
         ra: alunoSelecionado.ra,
         turma: turmaSelecionada,
-        media: mediaAluno ?? alunoSelecionado.n1,
+        n1: notasAluno?.n1 ?? alunoSelecionado.n1,
+        n2: notasAluno?.n2 ?? null,
+        n3: notasAluno?.n3 ?? null,
+        media: mediaAluno ?? notasAluno?.media ?? alunoSelecionado.n1,
         faltas: resumoAluno?.faltas ?? null,
         taxaPresenca: resumoAluno?.taxaPresenca ?? null,
+        taxaFaltas: resumoAluno?.taxaFaltas ?? null,
       },
     };
 

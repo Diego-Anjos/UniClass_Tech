@@ -20,6 +20,7 @@ export type BoletimNota = {
   disciplina: string;
   n1: number | string;
   n2: number | string;
+  n3?: number | string;
   faltas: number | string;
 };
 
@@ -143,9 +144,9 @@ const styles = StyleSheet.create({
     paddingVertical: 9,
     paddingHorizontal: 10,
   },
-  colDisciplina: { width: "46%" },
-  colNota: { width: "18%", textAlign: "center" },
-  colFaltas: { width: "18%", textAlign: "center" },
+  colDisciplina: { width: "40%" },
+  colNota: { width: "15%", textAlign: "center" },
+  colFaltas: { width: "15%", textAlign: "center" },
   cellText: {
     fontSize: 9.5,
     color: "#18181b",
@@ -268,6 +269,7 @@ export function BoletimDocument({ aluno, notas }: BoletimDocumentProps) {
             </Text>
             <Text style={[styles.tableHeaderCell, styles.colNota]}>N1</Text>
             <Text style={[styles.tableHeaderCell, styles.colNota]}>N2</Text>
+            <Text style={[styles.tableHeaderCell, styles.colNota]}>N3</Text>
             <Text style={[styles.tableHeaderCell, styles.colFaltas]}>
               Faltas
             </Text>
@@ -284,12 +286,19 @@ export function BoletimDocument({ aluno, notas }: BoletimDocumentProps) {
                 style={rowStyle(index, notas.length)}
               >
                 <Text style={[styles.cellText, styles.colDisciplina]}>
-                  {nota.disciplina}
+                  {String(nota.disciplina ?? "—")}
                 </Text>
-                <Text style={[styles.cellText, styles.colNota]}>{nota.n1}</Text>
-                <Text style={[styles.cellText, styles.colNota]}>{nota.n2}</Text>
+                <Text style={[styles.cellText, styles.colNota]}>
+                  {String(nota.n1 ?? "—")}
+                </Text>
+                <Text style={[styles.cellText, styles.colNota]}>
+                  {String(nota.n2 ?? "—")}
+                </Text>
+                <Text style={[styles.cellText, styles.colNota]}>
+                  {String(nota.n3 ?? "—")}
+                </Text>
                 <Text style={[styles.cellText, styles.colFaltas]}>
-                  {nota.faltas}
+                  {String(nota.faltas ?? "—")}
                 </Text>
               </View>
             ))

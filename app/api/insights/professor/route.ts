@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { requireApiAuth } from "@/lib/api-auth";
+import { requireRole } from "@/lib/api-auth";
 import {
   buildPrompt,
   createGenAI,
@@ -22,7 +22,7 @@ const FALLBACK_PROFESSOR = {
 };
 
 export async function POST(req: NextRequest) {
-  const denied = requireApiAuth(req);
+  const denied = requireRole(req, ["professor", "admin"]);
   if (denied) return denied;
 
   try {
@@ -37,17 +37,17 @@ export async function POST(req: NextRequest) {
     const prefs = await buscarPreferenciasProfessor(professorId);
 
     const prompt = buildPrompt(
-      `Você é um analista acadêmico sênior do ERP educacional UniClassTech.
+      `Você é um coordenador de curso experiente e humano da UniClassTech.
 ${blocoPreferenciasIa(prefs)}
 Analise os dados do docente e retorne um objeto JSON com o seguinte formato:
 {
   "tipoAlerta": "ALERTA DE RETENÇÃO" ou "DESEMPENHO POSITIVO" ou "EQUILÍBRIO DE CARGA",
   "corAlerta": "amber" ou "emerald" ou "blue",
-  "mensagem": "Texto curto de até 2 frases explicando o diagnóstico acadêmico para a diretoria.",
+  "mensagem": "Texto curto e empático de até 2 frases explicando o diagnóstico acadêmico para a diretoria, com foco no desenvolvimento dos estudantes.",
   "metricaValor": "-12%" ou "+18%" ou "100%",
   "metricaLabel": "QUEDA" ou "ENGAGEMENT" ou "ADERÊNCIA",
   "turmaDestaque": "Sigla da turma ou área",
-  "detalheComparativo": "Texto explicativo de 1 linha sobre a métrica."
+  "detalheComparativo": "Texto explicativo de 1 linha sobre a métrica, em linguagem natural."
 }`,
       `Docente: ${titulacao} ${nome}
 Área: ${area_atuacao}

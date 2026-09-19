@@ -1,11 +1,11 @@
 import { Resend } from "resend";
 import { NextResponse } from "next/server";
-import { requireApiAuth } from "@/lib/api-auth";
+import { requireRole } from "@/lib/api-auth";
 
 const resend = new Resend(process.env.RESEND_API_KEY);
 
 export async function POST(req: Request) {
-  const denied = requireApiAuth(req);
+  const denied = requireRole(req, ["professor", "admin"]);
   if (denied) return denied;
 
   try {
@@ -36,24 +36,37 @@ export async function POST(req: Request) {
       );
     }
 
-    const destinatario =
-      process.env.NODE_ENV === "development"
-        ? "diego2000gomes@gmail.com"
-        : to;
+    // Sandbox Resend: envia sempre para o e-mail verificado do desenvolvedor;
+    // o e-mail institucional (emailDoAluno) é o que devolvemos ao frontend.
+    const emailDoAluno = to;
+    const destinatarioReal =
+      process.env.RESEND_TEST_EMAIL || "diego2000gomes@gmail.com";
+
+    console.log("📨 Preparando envio para:", destinatarioReal);
 
     const { data, error } = await resend.emails.send({
       from: "UniClassTech <onboarding@resend.dev>",
-      to: [destinatario],
+      to: destinatarioReal,
       subject,
       ...(text ? { text } : {}),
       ...(html ? { html } : {}),
     });
 
     if (error) {
-      return NextResponse.json({ error }, { status: 500 });
+      console.error("❌ Erro no Resend:", error);
+      return NextResponse.json(
+        { error: error.message },
+        { status: 400 }
+      );
     }
 
-    return NextResponse.json({ data }, { status: 200 });
+    console.log("✅ E-mail enviado com sucesso. ID:", data?.id);
+
+    return NextResponse.json({
+      success: true,
+      emailEnviado: emailDoAluno,
+      id: data?.id,
+    });
   } catch (err: unknown) {
     const message =
       err instanceof Error ? err.message : "Falha ao enviar e-mail.";

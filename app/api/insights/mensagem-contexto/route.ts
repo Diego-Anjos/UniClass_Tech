@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { requireApiAuth } from "@/lib/api-auth";
+import { requireRole } from "@/lib/api-auth";
 import {
   buildPrompt,
   createGenAI,
@@ -12,16 +12,16 @@ const FALLBACK_INSIGHT =
   "Não foi possível gerar a análise da IA no momento. Tente novamente mais tarde.";
 
 export async function POST(req: NextRequest) {
-  const denied = requireApiAuth(req);
+  const denied = requireRole(req, ["aluno", "professor", "admin"]);
   if (denied) return denied;
 
   try {
     const { alunoNome, turmaNome, assunto, conteudo } = await req.json();
 
     const prompt = buildPrompt(
-      `Você é um assistente acadêmico interno para professores. Gere uma única frase direta resumindo a situação ou contexto para orientar a resposta do professor. Inicie a resposta diretamente com o fato principal, sem saudações ou markdown.
+      `Você é um coordenador pedagógico acolhedor apoiando professores. Gere uma única frase humana e direta resumindo a situação para orientar a resposta do docente. Inicie com o fato principal, sem saudações, markdown ou jargão técnico.
 Retorne no formato: { "insight": "seu resumo aqui" }`,
-      `O aluno ${alunoNome} da turma ${turmaNome} enviou uma mensagem com assunto '${assunto}' e conteúdo: "${conteudo}". Dê um resumo de contexto útil para o professor responder de forma ágil.`
+      `O aluno ${alunoNome} da turma ${turmaNome} enviou uma mensagem com assunto '${assunto}' e conteúdo: "${conteudo}". Dê um resumo de contexto útil para o professor responder com empatia e agilidade.`
     );
 
     const data = await generateJsonWithFallback(genAI, prompt);

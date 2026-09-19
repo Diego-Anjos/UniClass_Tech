@@ -19,6 +19,18 @@ export const fallbackModels = modelosFallback;
 export const JSON_ONLY_INSTRUCTION =
   "RETORNE APENAS UM JSON VÁLIDO E MAIS NADA, SEM MARCADORES MARKDOWN.";
 
+/**
+ * Tom de voz pedagógico — injetado em TODOS os prompts via buildPrompt.
+ * Garante comunicação humana, empática e sem jargão técnico no front-end.
+ */
+export const PEDAGOGICAL_VOICE_RULES = `REGRAS DE TOM DE VOZ (OBRIGATÓRIAS EM TODO TEXTO GERADO PARA O USUÁRIO):
+- Tom de voz: Acolhedor, empático, motivacional e pedagógico. Aja como um coordenador de curso experiente e humano.
+- Proibição estrita: NUNCA use jargões técnicos de programação ou banco de dados nos textos exibidos (ex.: "banco de dados", "null", "array", "indisponível no sistema", "dado não encontrado", "registro ausente").
+- Tratamento de dados ausentes: Se faltarem notas (N2, N3) ou faltas, aja naturalmente. Diga algo como "Como ainda estamos no início do semestre e aguardamos as próximas avaliações..." ou "Ainda não temos registros suficientes de frequência para uma análise completa..." — NUNCA diga que os dados "não existem", "estão faltando no sistema" ou "são indisponíveis".
+- Foco no aluno: A mensagem deve ser orientada ao desenvolvimento e melhoria contínua do estudante (ou da turma, quando o público for docente).
+- Linguagem: Português do Brasil, natural e conversacional. Evite tom robótico, relatórios frios ou frases engessadas.
+- A estrutura JSON de resposta permanece obrigatória; as regras acima aplicam-se apenas aos campos de texto (mensagem, insight, reply, analise, dica, etc.).`;
+
 const QUOTA_MESSAGE =
   "O assistente atingiu o limite de uso gratuito temporário do Google. Por favor, tente novamente em alguns minutos.";
 
@@ -105,11 +117,12 @@ export function isQuotaOrUnavailableError(error: unknown): boolean {
   );
 }
 
-/** Remove cercas ```json e extrai o primeiro objeto/array JSON do texto. */
+/** Remove cercas ```json / ``` e extrai o primeiro objeto/array JSON do texto. */
 export function parseJsonFromText(text: string): unknown {
-  const cleaned = text
-    .replace(/^```(?:json)?\s*/i, "")
-    .replace(/\s*```$/i, "")
+  // Gemini frequentemente envolve JSON em markdown; limpar antes do parse evita crash.
+  const cleaned = String(text ?? "")
+    .replace(/```json/gi, "")
+    .replace(/```/g, "")
     .trim();
 
   try {
@@ -178,7 +191,9 @@ export async function generateJsonWithFallback(
         continue;
       }
 
+      // 404 / modelo descontinuado / JSON inválido → tenta o próximo sem travar.
       console.warn(`Falha no modelo ${modeloNome}:`, message);
+      continue;
     }
   }
 
@@ -194,6 +209,8 @@ export async function generateJsonWithFallback(
 
 export function buildPrompt(system: string, user: string): string {
   return `${system}
+
+${PEDAGOGICAL_VOICE_RULES}
 
 ${JSON_ONLY_INSTRUCTION}
 

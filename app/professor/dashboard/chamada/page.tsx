@@ -31,6 +31,7 @@ import { Button } from "@/components/ui/button";
 import { PaginationFooter } from "@/components/ui/pagination-footer";
 import {
   limparSessaoProfessor,
+  parseTurmasProfessor,
   useProfessorSession,
 } from "@/lib/professor-session";
 
@@ -218,6 +219,7 @@ export default function ProfessorChamadaPage() {
   const alunosExibidos = alunosFiltrados.slice(indiceInicial, indiceFinal);
 
   const totalAlunos = alunosTurma.length;
+  const alunosRasKey = alunosTurma.map((a) => a.ra).join("|");
   // Contagem alinhada à lista atual da turma (evita chaves stale em chamadaStatus)
   const presentes = alunosTurma.filter(
     (aluno) => (chamadaStatus[aluno.ra] ?? "presente") === "presente"
@@ -325,11 +327,17 @@ export default function ProfessorChamadaPage() {
     let destinatario = emailDoAluno(aluno);
 
     if (!destinatario && aluno.ra) {
-      const { data } = await supabase
+      const { data, error } = await supabase
         .from("alunos")
         .select("email_institucional, email_pessoal")
         .eq("ra", aluno.ra)
         .maybeSingle();
+
+      if (error) {
+        console.error("Erro ao buscar e-mail do aluno:", error.message);
+        toast.error("Não foi possível buscar o e-mail do aluno.");
+        return;
+      }
 
       if (data) {
         destinatario = emailDoAluno({
@@ -490,15 +498,41 @@ export default function ProfessorChamadaPage() {
   }
 
   useEffect(() => {
-    if (!professorLogado) return;
+    if (!professorLogado?.id) return;
+
+    let cancelado = false;
 
     async function fetchTurmas() {
-      const areaAtuacao = professorLogado!.area_atuacao?.trim() ?? "";
+      const codigos = parseTurmasProfessor(professorLogado!.turmas);
+      const vinculoProfessor = professorLogado!.nomeCompletoTitulo?.trim() ?? "";
+      const selectCols = "id, codigo, curso, turno";
 
-      const { data, error } = await supabase
-        .from("turmas")
-        .select("*")
-        .ilike("curso", `%${areaAtuacao}%`);
+      let data: TurmaOption[] | null = null;
+      let error: { message: string } | null = null;
+
+      if (codigos.length > 0) {
+        const res = await supabase
+          .from("turmas")
+          .select(selectCols)
+          .in("codigo", codigos);
+        data = (res.data as TurmaOption[] | null) ?? null;
+        error = res.error;
+      } else if (vinculoProfessor) {
+        const res = await supabase
+          .from("turmas")
+          .select(selectCols)
+          .eq("professor", vinculoProfessor);
+        data = (res.data as TurmaOption[] | null) ?? null;
+        error = res.error;
+      } else {
+        if (!cancelado) {
+          setTurmas([]);
+          setTurmaSelecionada("");
+        }
+        return;
+      }
+
+      if (cancelado) return;
 
       if (error) {
         console.error("Erro ao buscar turmas:", error.message);
@@ -527,7 +561,11 @@ export default function ProfessorChamadaPage() {
     }
 
     void fetchTurmas();
-  }, [professorLogado]);
+
+    return () => {
+      cancelado = true;
+    };
+  }, [professorLogado?.id, professorLogado?.turmas, professorLogado?.nomeCompletoTitulo]);
 
   useEffect(() => {
     let cancelado = false;
@@ -539,7 +577,7 @@ export default function ProfessorChamadaPage() {
 
     async function buscarAlunosDaTurma(turmaId: string) {
       const turma = turmas.find((t) => t.id === turmaId);
-      if (!turma || !professorLogado) {
+      if (!turma || !professorLogado?.id) {
         if (!cancelado) {
           setAlunosTurma([]);
           setHistoricoTurma([]);
@@ -548,55 +586,15 @@ export default function ProfessorChamadaPage() {
       }
 
       const codigoTurma = turma.codigo.trim();
-      const cursoTurma = turma.curso;
-      const vinculoProfessor = professorLogado.nomeCompletoTitulo;
       const selectCols =
         "id, nome, ra, professor, curso, email_institucional, email_pessoal";
 
-      // Prioriza vínculo real: alunos.turma = código da turma (ex: GTI-5A-N)
-      let { data, error } = await supabase
+      // Somente alunos matriculados na turma (sem fallback por curso)
+      const { data, error } = await supabase
         .from("alunos")
         .select(selectCols)
         .eq("turma", codigoTurma)
         .order("nome", { ascending: true });
-
-      // Fallback 1: mesmo curso da turma
-      if (error || !data || data.length === 0) {
-        const porCurso = await supabase
-          .from("alunos")
-          .select(selectCols)
-          .eq("curso", cursoTurma)
-          .order("nome", { ascending: true });
-
-        if (!porCurso.error && porCurso.data && porCurso.data.length > 0) {
-          data = porCurso.data;
-          error = porCurso.error;
-        } else {
-          // Fallback 2: alunos vinculados ao professor logado
-          const porProfessor = await supabase
-            .from("alunos")
-            .select(selectCols)
-            .eq("professor", vinculoProfessor)
-            .order("nome", { ascending: true });
-
-          if (porProfessor.error) {
-            if (!cancelado) {
-              console.error(
-                "Erro ao buscar alunos:",
-                error?.message ??
-                  porCurso.error?.message ??
-                  porProfessor.error.message
-              );
-              setAlunosTurma([]);
-              setHistoricoTurma([]);
-            }
-            return;
-          }
-
-          data = porProfessor.data;
-          error = porProfessor.error;
-        }
-      }
 
       if (cancelado) return;
 
@@ -645,7 +643,7 @@ export default function ProfessorChamadaPage() {
     return () => {
       cancelado = true;
     };
-  }, [turmaSelecionada, professorLogado, turmas]);
+  }, [turmaSelecionada, professorLogado?.id, turmas]);
 
   // Carrega status da chamada para a turma + data selecionadas
   useEffect(() => {
@@ -659,7 +657,7 @@ export default function ProfessorChamadaPage() {
     async function carregarChamadaDoDia() {
       const { data: registros, error } = await supabase
         .from("registro_chamada")
-        .select("*")
+        .select("aluno_ra, status, data_aula")
         .eq("turma_curso", turmaSelecionada)
         .eq("data_aula", dataChamada);
 
@@ -691,7 +689,8 @@ export default function ProfessorChamadaPage() {
     return () => {
       cancelado = true;
     };
-  }, [turmaSelecionada, dataChamada, alunosTurma]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [turmaSelecionada, dataChamada, alunosRasKey]);
 
   useEffect(() => {
     setPaginaAtual(1);
@@ -730,11 +729,11 @@ export default function ProfessorChamadaPage() {
     } satisfies AiInsightChamada;
   }
 
-  // Análise de IA com debounce (1.5s) — só após status sincronizado com a lista
+  // Análise de IA com debounce (1.5s) — deps primitivas para evitar tempestade de requests
   useEffect(() => {
     const statusSincronizado =
       totalAlunos > 0 &&
-      alunosTurma.every((aluno) => aluno.ra in chamadaStatus);
+      Object.keys(chamadaStatus).length >= totalAlunos;
 
     if (!turmaSelecionada || !statusSincronizado) {
       setAiInsight(null);
@@ -745,7 +744,6 @@ export default function ProfessorChamadaPage() {
     const turma = turmas.find((t) => t.id === turmaSelecionada);
     const nomeTurma = turma ? labelTurma(turma) : turmaSelecionada;
 
-    // Snapshot dos números no momento do agendamento (evita closure stale)
     const payload = {
       turma: nomeTurma,
       totalAlunos,
@@ -773,15 +771,8 @@ export default function ProfessorChamadaPage() {
     return () => {
       window.clearTimeout(timeoutId);
     };
-  }, [
-    turmaSelecionada,
-    turmas,
-    alunosTurma,
-    chamadaStatus,
-    presentes,
-    faltas,
-    totalAlunos,
-  ]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [turmaSelecionada, totalAlunos, presentes, faltas]);
 
   if (carregandoSessao || !professorLogado) {
     return (

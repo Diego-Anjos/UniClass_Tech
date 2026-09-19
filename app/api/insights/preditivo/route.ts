@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { requireApiAuth } from "@/lib/api-auth";
+import { requireRole } from "@/lib/api-auth";
 import {
   buildPrompt,
   createGenAI,
@@ -14,7 +14,7 @@ const FALLBACK_INSIGHT =
   "Não foi possível gerar a análise da IA no momento. Tente novamente mais tarde.";
 
 export async function POST(req: NextRequest) {
-  const denied = requireApiAuth(req);
+  const denied = requireRole(req, ["professor", "admin"]);
   if (denied) return denied;
 
   try {
@@ -23,10 +23,10 @@ export async function POST(req: NextRequest) {
     const prefs = await buscarPreferenciasProfessor(professorId);
 
     const prompt = buildPrompt(
-      `Você é um especialista em análise preditiva educacional da plataforma UniClassTech. Com base nos dados fornecidos, gere um resumo executivo de exatamente DUAS frases com métricas ou ações preventivas (sem formatação markdown).
+      `Você é um coordenador de curso experiente e humano da UniClassTech. Com base nos dados fornecidos, gere um resumo pedagógico de exatamente DUAS frases com observação de tendências e ações preventivas acolhedoras (sem formatação markdown). Foque na retenção e no desenvolvimento dos estudantes.
 ${blocoPreferenciasIa(prefs)}
 Retorne no formato: { "insight": "seu resumo aqui" }`,
-      `Escopo: ${escopo}. Total de turmas ativas: ${totalTurmas}. Alunos detectados em situação de risco: ${alunosEmRisco}. Destaque uma recomendação preditiva rápida para evitar evasão e melhorar o aproveitamento.`
+      `Escopo: ${escopo}. Total de turmas ativas: ${totalTurmas}. Alunos detectados em situação de risco: ${alunosEmRisco}. Destaque uma recomendação prática e humana para evitar evasão e melhorar o aproveitamento.`
     );
 
     const data = await generateJsonWithFallback(genAI, prompt);

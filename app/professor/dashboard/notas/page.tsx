@@ -36,6 +36,7 @@ import {
   limparSessaoProfessor,
   lerSessaoProfessor,
   normalizarPesosAvaliacao,
+  parseTurmasProfessor,
   PESOS_AVALIACAO_PADRAO,
   useProfessorSession,
   type PesosAvaliacao,
@@ -221,9 +222,9 @@ export default function DiarioDeClassePage() {
   const diarioPublicado = Boolean(turmaAtual?.diario_fechado);
   const notasBloqueadas = travarEdicaoNotas && diarioPublicado;
 
-  // Mesma lógica estrutural de chamada/page.tsx: turmas da área do professor
+  // Mesma lógica estrutural de chamada/page.tsx: turmas atribuídas ao professor
   useEffect(() => {
-    if (!professorLogado) {
+    if (!professorLogado?.id) {
       setTurmas([]);
       setCarregandoTurmas(false);
       return;
@@ -233,12 +234,35 @@ export default function DiarioDeClassePage() {
 
     async function fetchTurmas() {
       setCarregandoTurmas(true);
-      const areaAtuacao = professorLogado!.area_atuacao?.trim() ?? "";
+      const codigos = parseTurmasProfessor(professorLogado!.turmas);
+      const vinculoProfessor = professorLogado!.nomeCompletoTitulo?.trim() ?? "";
+      const selectCols = "id, codigo, curso, turno, diario_fechado";
 
-      const { data, error } = await supabase
-        .from("turmas")
-        .select("*")
-        .ilike("curso", `%${areaAtuacao}%`);
+      let data: Record<string, unknown>[] | null = null;
+      let error: { message: string } | null = null;
+
+      if (codigos.length > 0) {
+        const res = await supabase
+          .from("turmas")
+          .select(selectCols)
+          .in("codigo", codigos);
+        data = (res.data as Record<string, unknown>[] | null) ?? null;
+        error = res.error;
+      } else if (vinculoProfessor) {
+        const res = await supabase
+          .from("turmas")
+          .select(selectCols)
+          .eq("professor", vinculoProfessor);
+        data = (res.data as Record<string, unknown>[] | null) ?? null;
+        error = res.error;
+      } else {
+        if (!cancelado) {
+          setTurmas([]);
+          setTurmaSelecionada("");
+          setCarregandoTurmas(false);
+        }
+        return;
+      }
 
       if (cancelado) return;
 
@@ -278,10 +302,10 @@ export default function DiarioDeClassePage() {
     return () => {
       cancelado = true;
     };
-  }, [professorLogado]);
+  }, [professorLogado?.id, professorLogado?.turmas, professorLogado?.nomeCompletoTitulo]);
 
   useEffect(() => {
-    if (!professorLogado) return;
+    if (!professorLogado?.id) return;
 
     setPesos(normalizarPesosAvaliacao(professorLogado.pesos));
 
@@ -338,7 +362,7 @@ export default function DiarioDeClassePage() {
       cancelado = true;
       window.removeEventListener(EVENTO_PREFS_ATUALIZADAS, onPrefsAtualizadas);
     };
-  }, [professorLogado]);
+  }, [professorLogado?.id]);
 
   useEffect(() => {
     let cancelado = false;
@@ -360,40 +384,14 @@ export default function DiarioDeClassePage() {
 
       setLoadingAlunos(true);
 
-      // Prioriza alunos vinculados ao código da turma (ex: GTI-5A-N)
-      let { data, error } = await supabase
+      // Somente alunos matriculados na turma (sem fallback por curso)
+      const { data, error } = await supabase
         .from("alunos")
         .select(
           "ra, nome, atv1, atv2, atv3, atv4, prova, faltas, n1, email_institucional, email_pessoal"
         )
         .eq("turma", codigoTurma)
         .order("nome", { ascending: true });
-
-      // Fallback: alunos do mesmo curso da turma
-      if (error || !data || data.length === 0) {
-        const porCurso = await supabase
-          .from("alunos")
-          .select(
-            "ra, nome, atv1, atv2, atv3, atv4, prova, faltas, n1, email_institucional, email_pessoal"
-          )
-          .eq("curso", turma.curso)
-          .order("nome", { ascending: true });
-
-        if (porCurso.error) {
-          if (!cancelado) {
-            console.error(
-              "Erro ao buscar alunos da turma:",
-              error?.message ?? porCurso.error.message
-            );
-            setAlunosTurma([]);
-            setLoadingAlunos(false);
-          }
-          return;
-        }
-
-        data = porCurso.data;
-        error = porCurso.error;
-      }
 
       if (cancelado) return;
 
@@ -480,11 +478,17 @@ export default function DiarioDeClassePage() {
 
     // Garante e-mail atualizado do banco caso a lista tenha vindo sem o campo
     if (!destinatario && aluno.ra) {
-      const { data } = await supabase
+      const { data, error } = await supabase
         .from("alunos")
         .select("email_institucional, email_pessoal")
         .eq("ra", aluno.ra)
         .maybeSingle();
+
+      if (error) {
+        console.error("Erro ao buscar e-mail do aluno:", error.message);
+        toast.error("Não foi possível buscar o e-mail do aluno.");
+        return;
+      }
 
       if (data) {
         destinatario = emailDoAluno({

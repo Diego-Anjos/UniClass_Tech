@@ -39,13 +39,6 @@ const BoletimDownloadButton = dynamic(
   }
 );
 
-const NOTAS_BOLETIM_EXEMPLO: BoletimNota[] = [
-  { disciplina: "Banco de Dados", n1: 7.5, n2: 8.0, faltas: 4 },
-  { disciplina: "Engenharia de Software", n1: 8.2, n2: 7.8, faltas: 2 },
-  { disciplina: "Redes de Computadores", n1: 6.5, n2: 7.0, faltas: 1 },
-  { disciplina: "Estruturas de Dados", n1: 9.0, n2: 8.5, faltas: 0 },
-];
-
 type StatusAluno = "Ativo" | "Evadido" | "Trancado" | string;
 type AbaProntuario = "Cadastral" | "Acadêmico" | "Insights de IA";
 type AbaCadastro = "academico" | "documentos" | "contato";
@@ -119,7 +112,15 @@ type TurmaDisponivel = {
   id: string;
   codigo: string;
   curso: string;
+  semestre: string;
 };
+
+/** Extrai o número do semestre da turma ("1º Semestre" | "1" → "1") para o formulário. */
+function semestreTurmaParaForm(semestre: unknown): string {
+  if (semestre == null || semestre === "") return "";
+  const match = String(semestre).trim().match(/(\d+)/);
+  return match?.[1] ?? "";
+}
 
 const CURSOS_DISPONIVEIS = [
   "Ciência da Computação",
@@ -437,9 +438,8 @@ function sugerirProfessorPorArea(
 function mapAluno(row: Record<string, unknown>): Aluno {
   const nome = String(row.nome ?? "");
   const status = String(row.status ?? "Ativo");
-  const emailInstitucional = String(
-    row.email_institucional ?? row.email ?? "—"
-  );
+  const emailInstitucional = String(row.email_institucional ?? "").trim();
+
   return {
     id: String(row.id ?? ""),
     ra: String(row.ra ?? "—"),
@@ -447,23 +447,22 @@ function mapAluno(row: Record<string, unknown>): Aluno {
     curso: String(row.curso ?? "—"),
     turma: String(row.turma ?? ""),
     semestre: Number(row.semestre ?? 1),
-    professor: String(
-      row.professor ?? row.professor_vinculado ?? row.orientador ?? ""
-    ),
+    professor: String(row.professor ?? ""),
     status,
-    email: emailInstitucional,
-    telefone: String(row.telefone ?? row.celular ?? "—"),
+    // UI da tabela — coluna `email` não existe no banco
+    email: emailInstitucional || "E-mail não vinculado",
+    telefone: String(row.telefone ?? "").trim(),
     iniciais: iniciaisDe(nome) || "—",
-    cpf: String(row.cpf ?? ""),
-    rg: String(row.rg ?? ""),
-    data_nascimento: String(row.data_nascimento ?? ""),
-    email_pessoal: String(row.email_pessoal ?? ""),
-    email_institucional: emailInstitucional === "—" ? "" : emailInstitucional,
-    cep: String(row.cep ?? ""),
-    logradouro: String(row.logradouro ?? ""),
-    bairro: String(row.bairro ?? ""),
-    cidade: String(row.cidade ?? ""),
-    estado: String(row.estado ?? ""),
+    cpf: String(row.cpf ?? "").trim(),
+    rg: String(row.rg ?? "").trim(),
+    data_nascimento: String(row.data_nascimento ?? "").trim(),
+    email_pessoal: String(row.email_pessoal ?? "").trim(),
+    email_institucional: emailInstitucional,
+    cep: String(row.cep ?? "").trim(),
+    logradouro: String(row.logradouro ?? "").trim(),
+    bairro: String(row.bairro ?? "").trim(),
+    cidade: String(row.cidade ?? "").trim(),
+    estado: String(row.estado ?? "").trim(),
   };
 }
 
@@ -504,6 +503,8 @@ export default function GestaoAlunosPage() {
     null
   );
   const [carregandoAiAluno, setCarregandoAiAluno] = useState(false);
+  const [boletimNotas, setBoletimNotas] = useState<BoletimNota[]>([]);
+  const [isEnviandoEmail, setIsEnviandoEmail] = useState(false);
   const [notificandoResend, setNotificandoResend] = useState(false);
   const [enviandoEmail, setEnviandoEmail] = useState<string | null>(null);
   const [cursosAtivos, setCursosAtivos] = useState<string[]>([]);
@@ -565,6 +566,8 @@ export default function GestaoAlunosPage() {
 
   async function fetchAlunos() {
     setIsLoading(true);
+    // Admin: payload completo para o modal (Documentação MEC + Contato & Endereço).
+    // select('*') evita listar colunas inventadas (email, celular, etc.).
     const { data, error } = await supabase
       .from("alunos")
       .select("*")
@@ -606,7 +609,7 @@ export default function GestaoAlunosPage() {
   async function fetchTurmasDisponiveis() {
     const { data, error } = await supabase
       .from("turmas")
-      .select("id, codigo, curso")
+      .select("id, codigo, curso, semestre")
       .order("codigo", { ascending: true });
 
     if (error) {
@@ -621,6 +624,7 @@ export default function GestaoAlunosPage() {
           id: String(t.id ?? ""),
           codigo: String(t.codigo ?? "").trim(),
           curso: String(t.curso ?? "").trim(),
+          semestre: String(t.semestre ?? "").trim(),
         }))
         .filter((t) => t.codigo && t.curso)
     );
@@ -799,6 +803,7 @@ export default function GestaoAlunosPage() {
     if (!alunoSelecionado) {
       setAiInsightAluno(null);
       setCarregandoAiAluno(false);
+      setBoletimNotas([]);
       return;
     }
 
@@ -808,7 +813,122 @@ export default function GestaoAlunosPage() {
     async function carregarInsightAluno() {
       setCarregandoAiAluno(true);
       setAiInsightAluno(null);
+
       try {
+        // Dados reais do ERP antes de chamar o Gemini (anti-alucinação).
+        // Consultas diretas e simples — sem joins nem colunas assumidas (n1/n2 podem não existir).
+        const [notasRes, chamadaRes, alunoRowRes] = await Promise.all([
+          supabase.from("notas").select("*").eq("ra_aluno", aluno.ra),
+          supabase
+            .from("registro_chamada")
+            .select("*")
+            .eq("aluno_ra", aluno.ra),
+          supabase
+            .from("alunos")
+            .select("*")
+            .eq("ra", aluno.ra)
+            .maybeSingle(),
+        ]);
+
+        if (cancelado) return;
+
+        // Só aborta se a busca do aluno falhar de fato
+        if (alunoRowRes.error) {
+          console.error(
+            "Erro ao buscar aluno:",
+            alunoRowRes.error.message || alunoRowRes.error
+          );
+          setAiInsightAluno(null);
+          setCarregandoAiAluno(false);
+          return;
+        }
+
+        // Erro de schema/coluna → lista vazia; o insight segue com o que houver
+        if (notasRes.error) {
+          console.warn(
+            "Insight: notas indisponíveis:",
+            notasRes.error.message
+          );
+        }
+        if (chamadaRes.error) {
+          console.warn(
+            "Insight: chamada indisponível:",
+            chamadaRes.error.message
+          );
+        }
+
+        const notasRows = (
+          notasRes.error ? [] : (notasRes.data ?? [])
+        ) as Record<string, unknown>[];
+        const chamadaRows = (
+          chamadaRes.error ? [] : (chamadaRes.data ?? [])
+        ) as Record<string, unknown>[];
+
+        // PDF do boletim: dados reais da tabela `notas`
+        setBoletimNotas(
+          notasRows.map((row) => {
+            const turmasRel = row.turmas as Record<string, unknown> | null;
+            const disciplina =
+              String(
+                turmasRel?.curso ??
+                  turmasRel?.codigo ??
+                  row.disciplina ??
+                  row.turma ??
+                  "Disciplina"
+              ).trim() || "Disciplina";
+            return {
+              disciplina,
+              n1: Number.isFinite(Number(row.n1)) ? Number(row.n1) : "—",
+              n2: Number.isFinite(Number(row.n2)) ? Number(row.n2) : "—",
+              n3: Number.isFinite(Number(row.n3)) ? Number(row.n3) : "—",
+              faltas: Number.isFinite(Number(row.faltas))
+                ? Number(row.faltas)
+                : 0,
+            };
+          })
+        );
+
+        const avg = (campo: string): number | null => {
+          const vals = notasRows
+            .map((r) => Number(r[campo]))
+            .filter((n) => Number.isFinite(n));
+          if (vals.length === 0) return null;
+          return vals.reduce((a, b) => a + b, 0) / vals.length;
+        };
+
+        const alunoRow = (alunoRowRes.data ?? null) as Record<
+          string,
+          unknown
+        > | null;
+        const n1 =
+          avg("n1") ??
+          (alunoRow && Number.isFinite(Number(alunoRow.n1))
+            ? Number(alunoRow.n1)
+            : null);
+        const n2 = avg("n2");
+        const n3 = avg("n3");
+        const media = avg("media_final");
+
+        let percentualFaltas: number | null = null;
+        let taxaPresenca: number | null = null;
+        let faltas = 0;
+        let presentes = 0;
+        let totalAulas = 0;
+
+        if (chamadaRows.length > 0) {
+          totalAulas = chamadaRows.length;
+          presentes = chamadaRows.filter(
+            (r) => String(r.status ?? "").toLowerCase() === "presente"
+          ).length;
+          faltas = chamadaRows.filter(
+            (r) => String(r.status ?? "").toLowerCase() === "falta"
+          ).length;
+          taxaPresenca = Math.round((presentes / totalAulas) * 100);
+          percentualFaltas = Math.round((faltas / totalAulas) * 100);
+        } else if (alunoRow && Number.isFinite(Number(alunoRow.faltas))) {
+          faltas = Number(alunoRow.faltas);
+        }
+
         const res = await fetch("/api/insights/aluno", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -817,13 +937,51 @@ export default function GestaoAlunosPage() {
             curso: aluno.curso,
             semestre: aluno.semestre,
             professor: aluno.professor,
+            n1,
+            n2,
+            n3,
+            media,
+            percentualFaltas,
+            taxaPresenca,
+            faltas: totalAulas > 0 ? faltas : null,
+            presentes: totalAulas > 0 ? presentes : null,
+            totalAulas: totalAulas > 0 ? totalAulas : null,
           }),
         });
-        const data = (await res.json()) as AiInsightAluno;
-        if (!cancelado) setAiInsightAluno(data);
+
+        const data = (await res.json().catch(() => ({}))) as AiInsightAluno & {
+          _fallback?: boolean;
+        };
+
+        if (cancelado) return;
+
+        if (!res.ok || !data?.mensagem) {
+          setAiInsightAluno({
+            tipoAlerta: "ALERTA TEMPORÁRIO",
+            corAlerta: "amber",
+            mensagem:
+              "Não foi possível carregar o insight preditivo. Tente novamente em alguns minutos.",
+            riscoLabel: "Indisponível",
+            metricaLabel: "STATUS",
+            metricaValor: "—",
+          });
+          return;
+        }
+
+        setAiInsightAluno(data);
       } catch (err) {
         console.error("Erro ao buscar insight do aluno:", err);
-        if (!cancelado) setAiInsightAluno(null);
+        if (!cancelado) {
+          setAiInsightAluno({
+            tipoAlerta: "ALERTA TEMPORÁRIO",
+            corAlerta: "amber",
+            mensagem:
+              "Não foi possível carregar o insight preditivo. Verifique a conexão e tente novamente.",
+            riscoLabel: "Indisponível",
+            metricaLabel: "STATUS",
+            metricaValor: "—",
+          });
+        }
       } finally {
         if (!cancelado) setCarregandoAiAluno(false);
       }
@@ -932,21 +1090,124 @@ export default function GestaoAlunosPage() {
     }, 300);
   }
 
-  async function notificarViaResend() {
-    if (!alunoSelecionado || notificandoResend) return;
-    setNotificandoResend(true);
-    await new Promise((resolve) => window.setTimeout(resolve, 800));
-    const destino =
+  async function handleEnviarNotificacao() {
+    if (!alunoSelecionado || isEnviandoEmail || notificandoResend) return;
+
+    if (!aiInsightAluno?.mensagem) {
+      toast.error("Não há insight de IA disponível para notificar.");
+      return;
+    }
+
+    const destinatario = (
       alunoSelecionado.email_institucional ||
       alunoSelecionado.email_pessoal ||
-      alunoSelecionado.email;
-    setModalFeedback({
-      aberto: true,
-      tipo: "sucesso",
-      titulo: "Notificação Emitida",
-      mensagem: `Alerta pedagógico enviado com sucesso para ${destino}.`,
-    });
-    setNotificandoResend(false);
+      alunoSelecionado.email ||
+      ""
+    ).trim();
+
+    if (!destinatario || destinatario === "—") {
+      toast.error("Este aluno não possui e-mail cadastrado.");
+      return;
+    }
+
+    const escaparHtml = (valor: string) =>
+      valor
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;")
+        .replace(/"/g, "&quot;");
+
+    const nomeAluno = alunoSelecionado.nome.trim() || "aluno(a)";
+    const tipoAlerta = aiInsightAluno.tipoAlerta || "Alerta pedagógico";
+    const dataEnvio = new Date().toLocaleDateString("pt-BR");
+
+    const texto =
+      `Olá, ${nomeAluno}!\n\n` +
+      `${tipoAlerta}\n\n` +
+      `${aiInsightAluno.mensagem}\n\n` +
+      `Risco: ${aiInsightAluno.riscoLabel}\n` +
+      `${aiInsightAluno.metricaLabel}: ${aiInsightAluno.metricaValor}\n\n` +
+      `Este alerta foi enviado pela coordenação via UniClassTech em ${dataEnvio}.`;
+
+    const html = `
+<div style="background-color: #000000; padding: 40px 20px; font-family: sans-serif; color: #ffffff;">
+  <div style="max-width: 600px; margin: 0 auto; background-color: #141414; border: 1px solid #333; border-radius: 8px; padding: 30px;">
+    <h2 style="margin-top: 0; font-size: 24px; font-weight: bold;">UniClassTech</h2>
+    <h3 style="font-size: 18px; font-weight: 600; margin-top: 20px;">Olá, ${escaparHtml(nomeAluno)}!</h3>
+    <p style="font-size: 12px; text-transform: uppercase; letter-spacing: 0.08em; color: #fbbf24; margin-top: 16px;">
+      ${escaparHtml(tipoAlerta)}
+    </p>
+    <div style="background-color: #1e1e1e; padding: 20px; border-radius: 6px; margin-top: 16px;">
+      <p style="margin: 0; color: #cccccc; font-size: 14px; line-height: 1.6;">
+        ${escaparHtml(aiInsightAluno.mensagem)}
+      </p>
+      <hr style="border: 0; border-top: 1px solid #333; margin: 16px 0;" />
+      <p style="margin: 0; color: #888; font-size: 13px;">
+        Risco: <strong style="color: #fff;">${escaparHtml(aiInsightAluno.riscoLabel)}</strong>
+        &nbsp;·&nbsp;
+        ${escaparHtml(aiInsightAluno.metricaLabel)}:
+        <strong style="color: #fff;">${escaparHtml(aiInsightAluno.metricaValor)}</strong>
+      </p>
+    </div>
+    <p style="font-size: 13px; color: #888; margin-top: 25px;">
+      Este alerta pedagógico foi enviado pela coordenação via UniClassTech em ${dataEnvio}.
+    </p>
+  </div>
+</div>
+    `.trim();
+
+    setIsEnviandoEmail(true);
+    setNotificandoResend(true);
+    toast.info(`Enviando e-mail para: ${destinatario}`);
+
+    try {
+      const res = await fetch("/api/email", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          to: destinatario,
+          subject: `Alerta pedagógico UniClassTech — ${nomeAluno}`,
+          text: texto,
+          html,
+          nome: nomeAluno,
+          mensagem: aiInsightAluno.mensagem,
+        }),
+      });
+
+      const data = (await res.json().catch(() => ({}))) as {
+        error?: unknown;
+        success?: boolean;
+        emailEnviado?: string;
+        id?: string;
+      };
+
+      if (!res.ok || data.error) {
+        const detalhe =
+          typeof data.error === "string"
+            ? data.error
+            : data.error &&
+                typeof data.error === "object" &&
+                "message" in data.error
+              ? String((data.error as { message: unknown }).message)
+              : "Não foi possível enviar a notificação.";
+        toast.error(detalhe);
+        return;
+      }
+
+      const emailExibido = (data.emailEnviado || destinatario).trim();
+      toast.success(
+        `Alerta pedagógico enviado com sucesso para ${emailExibido}.`
+      );
+    } catch (err: unknown) {
+      const message =
+        err instanceof Error
+          ? err.message
+          : "Erro inesperado ao enviar notificação.";
+      toast.error(message);
+    } finally {
+      setIsEnviandoEmail(false);
+      setNotificandoResend(false);
+    }
   }
 
   async function handleEnviarEmailTeste(aluno: Aluno) {
@@ -1057,8 +1318,20 @@ export default function GestaoAlunosPage() {
       ...prev,
       curso: cursoSelecionado,
       turma: "",
+      semestre: "",
     }));
     sugerirProfessorPorCurso(cursoSelecionado);
+  }
+
+  function aoSelecionarTurma(codigoSelecionado: string) {
+    const turma = turmasDisponiveis.find(
+      (t) => t.codigo === codigoSelecionado
+    );
+    setFormData((prev) => ({
+      ...prev,
+      turma: codigoSelecionado,
+      semestre: semestreTurmaParaForm(turma?.semestre),
+    }));
   }
 
   function fecharModal() {
@@ -1148,21 +1421,26 @@ export default function GestaoAlunosPage() {
       curso: curso || "",
       turma: turmaSalva,
       semestre,
-      cpf: aluno.cpf,
-      rg: aluno.rg,
-      data_nascimento: aluno.data_nascimento
-        ? aluno.data_nascimento.slice(0, 10)
-        : "",
-      email_pessoal: aluno.email_pessoal,
+      cpf: aluno.cpf === "Não informado" ? "" : aluno.cpf,
+      rg: aluno.rg === "Não informado" ? "" : aluno.rg,
+      data_nascimento:
+        !aluno.data_nascimento || aluno.data_nascimento === "Não informado"
+          ? ""
+          : aluno.data_nascimento.slice(0, 10),
+      email_pessoal:
+        aluno.email_pessoal === "Não informado" ? "" : aluno.email_pessoal,
       email_institucional:
         aluno.email_institucional ||
         gerarEmailInstitucional(aluno.nome, aluno.ra),
-      telefone: aluno.telefone === "—" ? "" : aluno.telefone,
-      cep: aluno.cep,
-      logradouro: aluno.logradouro,
-      bairro: aluno.bairro,
-      cidade: aluno.cidade,
-      estado: aluno.estado,
+      telefone:
+        aluno.telefone === "—" || aluno.telefone === "Não informado"
+          ? ""
+          : aluno.telefone,
+      cep: aluno.cep === "Não informado" ? "" : aluno.cep,
+      logradouro: aluno.logradouro === "Não informado" ? "" : aluno.logradouro,
+      bairro: aluno.bairro === "Não informado" ? "" : aluno.bairro,
+      cidade: aluno.cidade === "Não informado" ? "" : aluno.cidade,
+      estado: aluno.estado === "Não informado" ? "" : aluno.estado,
     });
 
     let lista = professoresDisponiveis;
@@ -1170,7 +1448,7 @@ export default function GestaoAlunosPage() {
       supabase.from("professores").select("id, nome, area_atuacao, titulacao"),
       supabase
         .from("turmas")
-        .select("id, codigo, curso")
+        .select("id, codigo, curso, semestre")
         .order("codigo", { ascending: true }),
     ]);
 
@@ -1185,15 +1463,24 @@ export default function GestaoAlunosPage() {
     }
 
     if (!turmasResult.error && turmasResult.data) {
-      setTurmasDisponiveis(
-        turmasResult.data
-          .map((t) => ({
-            id: String(t.id ?? ""),
-            codigo: String(t.codigo ?? "").trim(),
-            curso: String(t.curso ?? "").trim(),
-          }))
-          .filter((t) => t.codigo && t.curso)
-      );
+      const turmasMapeadas = turmasResult.data
+        .map((t) => ({
+          id: String(t.id ?? ""),
+          codigo: String(t.codigo ?? "").trim(),
+          curso: String(t.curso ?? "").trim(),
+          semestre: String(t.semestre ?? "").trim(),
+        }))
+        .filter((t) => t.codigo && t.curso);
+      setTurmasDisponiveis(turmasMapeadas);
+
+      // Semestre do aluno segue o da turma vinculada
+      if (turmaSalva) {
+        const turmaMatch = turmasMapeadas.find((t) => t.codigo === turmaSalva);
+        const semestreTurma = semestreTurmaParaForm(turmaMatch?.semestre);
+        if (semestreTurma) {
+          setFormData((prev) => ({ ...prev, semestre: semestreTurma }));
+        }
+      }
     }
 
     const professorSalvo = (aluno.professor || "").trim();
@@ -1748,7 +2035,7 @@ export default function GestaoAlunosPage() {
                         curso: alunoSelecionado.curso,
                         turma: alunoSelecionado.turma,
                       }}
-                      notas={NOTAS_BOLETIM_EXEMPLO}
+                      notas={boletimNotas}
                     />
                   </div>
                 )}
@@ -1836,13 +2123,13 @@ export default function GestaoAlunosPage() {
 
                             <button
                               type="button"
-                              onClick={() => void notificarViaResend()}
-                              disabled={notificandoResend}
+                              onClick={() => void handleEnviarNotificacao()}
+                              disabled={notificandoResend || isEnviandoEmail}
                               className="w-full inline-flex items-center justify-center gap-2 px-4 py-2.5 rounded-lg bg-white text-black text-sm font-medium hover:bg-zinc-200 transition-colors disabled:opacity-50"
                             >
                               <Mail className="w-4 h-4" />
                               {notificandoResend
-                                ? "Enviando notificação..."
+                                ? "Enviando..."
                                 : "Notificar via Resend"}
                             </button>
                           </>
@@ -1975,8 +2262,8 @@ export default function GestaoAlunosPage() {
                         id="turma"
                         value={formData.turma}
                         onChange={(e) =>
-                          // Sempre persiste o `codigo` da turma (ex: GTI-5A-N)
-                          atualizarCampo("turma", e.target.value)
+                          // Persiste o código e herda o semestre da turma
+                          aoSelecionarTurma(e.target.value)
                         }
                         disabled={!formData.curso}
                         className={`${inputClass} font-mono disabled:opacity-50 disabled:cursor-not-allowed`}
@@ -2076,13 +2363,13 @@ export default function GestaoAlunosPage() {
                       <select
                         id="semestre"
                         value={formData.semestre}
-                        onChange={(e) =>
-                          atualizarCampo("semestre", e.target.value)
-                        }
-                        className={inputClass}
+                        disabled
+                        className={`${inputClass} disabled:opacity-50 disabled:cursor-not-allowed`}
                       >
-                        <option value="" disabled>
-                          Selecione o semestre
+                        <option value="">
+                          {formData.turma
+                            ? "Semestre da turma"
+                            : "Selecione uma turma primeiro"}
                         </option>
                         {Array.from({ length: 10 }, (_, i) => i + 1).map(
                           (n) => (
@@ -2092,6 +2379,9 @@ export default function GestaoAlunosPage() {
                           )
                         )}
                       </select>
+                      <span className="text-[11px] text-zinc-500 mt-1.5 block">
+                        Semestre vinculado automaticamente à turma selecionada
+                      </span>
                     </div>
                   </>
                 )}

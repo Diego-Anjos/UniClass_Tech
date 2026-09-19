@@ -5,7 +5,7 @@ import {
   normalizarPreferencias,
   type PreferenciasProfessor,
 } from "@/lib/professor-preferencias";
-import { requireApiAuth } from "@/lib/api-auth";
+import { requireRole, requireProfessorOwnership } from "@/lib/api-auth";
 
 export const runtime = "nodejs";
 
@@ -21,7 +21,10 @@ function adminClient() {
 }
 
 async function garantirBucket(supabase: SupabaseClient) {
-  const { data: buckets } = await supabase.storage.listBuckets();
+  const { data: buckets, error: listError } = await supabase.storage.listBuckets();
+  if (listError) {
+    throw listError;
+  }
   const existe = buckets?.some((b) => b.name === BUCKET);
   if (!existe) {
     const { error } = await supabase.storage.createBucket(BUCKET, {
@@ -76,7 +79,7 @@ async function salvarNoStorage(
 }
 
 export async function GET(request: Request) {
-  const denied = requireApiAuth(request);
+  const denied = requireRole(request, ["professor", "admin"]);
   if (denied) return denied;
 
   try {
@@ -88,6 +91,9 @@ export async function GET(request: Request) {
         { status: 400 }
       );
     }
+
+    const ownershipDenied = requireProfessorOwnership(request, professorId);
+    if (ownershipDenied) return ownershipDenied;
 
     const supabase = adminClient();
 
@@ -211,7 +217,7 @@ export async function GET(request: Request) {
 }
 
 export async function PUT(request: Request) {
-  const denied = requireApiAuth(request);
+  const denied = requireRole(request, ["professor", "admin"]);
   if (denied) return denied;
 
   try {
@@ -242,6 +248,9 @@ export async function PUT(request: Request) {
         { status: 400 }
       );
     }
+
+    const ownershipDenied = requireProfessorOwnership(request, professorId);
+    if (ownershipDenied) return ownershipDenied;
 
     const preferencias = normalizarPreferencias(body.preferencias);
 
