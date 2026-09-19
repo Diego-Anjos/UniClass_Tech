@@ -271,7 +271,8 @@ function mapProfessor(row: Record<string, unknown>): Professor {
     ),
     area_atuacao: areaAtuacao || "Não informada",
     disciplina: String(row.disciplina ?? "").trim() || "Não informada",
-    carga_horaria: Number(row.carga_horaria ?? 0) || 0,
+    carga_horaria:
+      Number(row.carga_horaria_semanal ?? row.carga_horaria ?? 0) || 0,
     status: (String(row.status ?? "Ativo")) as StatusProfessor,
     email: emailExibicao,
     iniciais: iniciaisDe(nome) || "—",
@@ -342,7 +343,7 @@ export default function GestaoProfessoresPage() {
     const { data, error } = await supabase
       .from("professores")
       .select(
-        "id, nome, matricula, titulacao, area_atuacao, disciplina, email_institucional, foto_url, status, turno_aula, dias_aula"
+        "id, nome, matricula, titulacao, area_atuacao, disciplina, carga_horaria_semanal, email_institucional, foto_url, status, turno_aula, dias_aula"
       )
       .order("created_at", { ascending: false });
 
@@ -539,18 +540,76 @@ export default function GestaoProfessoresPage() {
 
   async function dispararCobrancaDiario() {
     if (!professorSelecionado || disparandoCobranca) return;
-    setDisparandoCobranca(true);
-    await new Promise((resolve) => window.setTimeout(resolve, 800));
-    const destino =
+
+    const emailProfessor = (
       professorSelecionado.email_institucional ||
       professorSelecionado.email_pessoal ||
-      professorSelecionado.email;
-    abrirFeedback(
-      "sucesso",
-      "Cobrança Enviada",
-      `Notificação formal enviada com sucesso para ${destino}.`
-    );
-    setDisparandoCobranca(false);
+      professorSelecionado.email ||
+      ""
+    ).trim();
+
+    if (!emailProfessor || emailProfessor === "—") {
+      abrirFeedback(
+        "erro",
+        "E-mail ausente",
+        "Este professor não possui e-mail cadastrado para receber a cobrança."
+      );
+      return;
+    }
+
+    const turmasPendentes = turmasDoProfessor.filter((t) => !t.diario_fechado);
+    const listaTurmas =
+      turmasPendentes.length > 0
+        ? turmasPendentes.map((t) => t.codigo).join(", ")
+        : "todas as turmas vinculadas";
+
+    const mensagemCobranca =
+      turmasPendentes.length > 0
+        ? `Pendência: diário de classe em aberto nas turmas ${listaTurmas}. Solicita-se o fechamento imediato no Portal do Professor.`
+        : `Pendência: diário de classe ainda não encerrado. Solicita-se a regularização imediata no Portal do Professor.`;
+
+    setDisparandoCobranca(true);
+    try {
+      const res = await fetch("/api/email/cobranca-diario", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          nomeProfessor: professorSelecionado.nome,
+          emailProfessor,
+          mensagemCobranca,
+        }),
+      });
+
+      const data = (await res.json().catch(() => ({}))) as {
+        error?: unknown;
+        success?: boolean;
+        emailEnviado?: string;
+      };
+
+      if (!res.ok || data.error) {
+        const detalhe =
+          typeof data.error === "string"
+            ? data.error
+            : "Não foi possível enviar a cobrança de diário.";
+        abrirFeedback("erro", "Falha no envio", detalhe);
+        return;
+      }
+
+      const destino = (data.emailEnviado || emailProfessor).trim();
+      abrirFeedback(
+        "sucesso",
+        "Cobrança Enviada",
+        `Notificação formal enviada com sucesso para ${destino}.`
+      );
+    } catch (err: unknown) {
+      const message =
+        err instanceof Error
+          ? err.message
+          : "Erro inesperado ao enviar a cobrança.";
+      abrirFeedback("erro", "Falha no envio", message);
+    } finally {
+      setDisparandoCobranca(false);
+    }
   }
 
   function atualizarCampo<K extends keyof FormDataProfessor>(
@@ -852,13 +911,15 @@ export default function GestaoProfessoresPage() {
 
     setIsSubmitting(true);
     const area_atuacao = turmas.join(", ");
+    const cargaHorariaSemanal =
+      !Number.isNaN(cargaHoraria) && cargaHoraria > 0 ? cargaHoraria : 20;
     const payload = {
       matricula,
       nome,
       titulacao,
       area_atuacao,
       disciplina,
-      carga_horaria: Number.isNaN(cargaHoraria) ? null : cargaHoraria,
+      carga_horaria_semanal: cargaHorariaSemanal,
       cpf: formData.cpf.trim(),
       pis: formData.pis.trim(),
       lattes_url: formData.lattes_url.trim(),
