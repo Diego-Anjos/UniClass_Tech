@@ -71,8 +71,9 @@ type NotaBoletim = {
   disciplina: string;
   professor: string;
   n1: number;
-  n2: number;
-  n3: number;
+  /** Ausente no schema atual de `alunos` — null até existir lançamento. */
+  n2: number | null;
+  n3: number | null;
   faltas: number;
   atv1: number;
   atv2: number;
@@ -86,6 +87,18 @@ function toNotaNum(value: unknown): number {
   return Number.isFinite(n) ? n : 0;
 }
 
+/** Lê nota opcional: null se a coluna não veio no payload. */
+function lerNotaOpcional(
+  row: Record<string, unknown>,
+  campo: string
+): number | null {
+  if (!(campo in row) || row[campo] == null || row[campo] === "") {
+    return null;
+  }
+  const n = Number(row[campo]);
+  return Number.isFinite(n) ? n : null;
+}
+
 function mapLinhaNotas(row: Record<string, unknown>): NotaBoletim {
   const atv1 = toNotaNum(row.atv1);
   const atv2 = toNotaNum(row.atv2);
@@ -93,7 +106,7 @@ function mapLinhaNotas(row: Record<string, unknown>): NotaBoletim {
   const atv4 = toNotaNum(row.atv4);
   const prova = toNotaNum(row.prova);
 
-  const n1Db = row.n1 != null && row.n1 !== "" ? toNotaNum(row.n1) : null;
+  const n1Db = lerNotaOpcional(row, "n1");
   const n1 =
     n1Db != null && n1Db > 0
       ? n1Db
@@ -105,8 +118,8 @@ function mapLinhaNotas(row: Record<string, unknown>): NotaBoletim {
     ).trim() || "Disciplina",
     professor: String(row.professor ?? "—"),
     n1,
-    n2: toNotaNum(row.n2),
-    n3: toNotaNum(row.n3),
+    n2: lerNotaOpcional(row, "n2"),
+    n3: lerNotaOpcional(row, "n3"),
     faltas: toNotaNum(row.faltas),
     atv1,
     atv2,
@@ -123,8 +136,16 @@ function statusBadgeClasses(status: string) {
   return "bg-gray-800 text-gray-300";
 }
 
-function statusPorMedia(n1: number, n2: number) {
-  const media = (n1 + n2) / 2;
+/** Média parcial só com notas já lançadas (N1 obrigatória; N2/N3 se existirem). */
+function mediaParcial(n1: number, n2: number | null, n3: number | null): number {
+  const vals = [n1, n2, n3].filter(
+    (v): v is number => v != null && Number.isFinite(v)
+  );
+  if (vals.length === 0) return 0;
+  return vals.reduce((acc, v) => acc + v, 0) / vals.length;
+}
+
+function statusPorMedia(media: number) {
   if (media >= 7) return "Cursando";
   if (media >= 6) return "Pendente";
   return "Em risco";
@@ -277,12 +298,13 @@ export default function AlunoNotasPage() {
         });
       }
 
-      // Fallback: se não houver linhas em `notas`, usa campos de nota na ficha do aluno
+      // Fallback: se não houver linhas em `notas`, usa campos reais da ficha do aluno
+      // Schema atual de `alunos`: atv1–atv4, prova, n1, faltas (sem n2/n3)
       if (linhas.length === 0) {
         const { data: fichaNotas, error: fichaError } = await supabase
           .from("alunos")
           .select(
-            "nome, ra, curso, professor, turma, atv1, atv2, atv3, atv4, prova, n1, n2, n3, faltas"
+            "nome, ra, curso, professor, turma, atv1, atv2, atv3, atv4, prova, n1, faltas"
           )
           .eq("ra", ra);
 
@@ -478,8 +500,8 @@ export default function AlunoNotasPage() {
                   notas={dadosNotas.map((n) => ({
                     disciplina: n.disciplina,
                     n1: Number(n.n1.toFixed(1)),
-                    n2: Number(n.n2.toFixed(1)),
-                    n3: Number(n.n3.toFixed(1)),
+                    n2: n.n2 != null ? Number(n.n2.toFixed(1)) : "—",
+                    n3: n.n3 != null ? Number(n.n3.toFixed(1)) : "—",
                     faltas: n.faltas,
                   }))}
                   className="w-auto"
@@ -617,15 +639,8 @@ export default function AlunoNotasPage() {
                     dadosNotas.map((item, index) => {
                       const chave = `${item.disciplina}-${index}`;
                       const aberto = linhaExpandida === chave;
-                      const media =
-                        item.n3 > 0
-                          ? (Number(item.n1) + Number(item.n2) + Number(item.n3)) /
-                            3
-                          : (Number(item.n1) + Number(item.n2)) / 2;
-                      const label = statusPorMedia(
-                        Number(item.n1),
-                        item.n3 > 0 ? Number(item.n3) : Number(item.n2)
-                      );
+                      const media = mediaParcial(item.n1, item.n2, item.n3);
+                      const label = statusPorMedia(media);
                       const composicao = composicaoN1De(item);
                       return (
                         <Fragment key={chave}>
