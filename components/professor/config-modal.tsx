@@ -725,10 +725,10 @@ export function ProfessorSettingsControl() {
                                 type="button"
                                 aria-pressed={ativo}
                                 onClick={() => toggleDiaAtendimento(valor)}
-                                className={`flex-1 rounded-lg px-2 py-2.5 text-sm font-medium transition-colors cursor-pointer ${
+                                className={`flex-1 rounded-lg px-2 py-2.5 text-sm transition-colors cursor-pointer border ${
                                   ativo
-                                    ? "bg-white text-black border border-white"
-                                    : "bg-transparent text-zinc-400 border border-gray-800 hover:border-zinc-600 hover:text-zinc-200"
+                                    ? "bg-blue-500/20 border-blue-400 text-blue-300 font-medium shadow-sm shadow-blue-500/10"
+                                    : "bg-gray-900/60 border-gray-800 text-gray-400 hover:border-gray-700 hover:text-gray-200"
                                 }`}
                               >
                                 {label}
@@ -760,7 +760,7 @@ export function ProfessorSettingsControl() {
                               onChange={(e) =>
                                 setAtendimentoDe(e.target.value)
                               }
-                              className="w-full rounded-lg bg-black/40 border border-gray-800 px-3 py-2.5 text-sm text-white focus:outline-none focus:border-zinc-600"
+                              className="w-full rounded-lg bg-gray-950/60 border border-gray-800 px-3 py-2.5 text-sm text-blue-200 focus:outline-none focus:border-blue-400 focus:ring-1 focus:ring-blue-400"
                             />
                           </div>
                           <span className="text-zinc-600 mt-5">até</span>
@@ -778,7 +778,7 @@ export function ProfessorSettingsControl() {
                               onChange={(e) =>
                                 setAtendimentoAte(e.target.value)
                               }
-                              className="w-full rounded-lg bg-black/40 border border-gray-800 px-3 py-2.5 text-sm text-white focus:outline-none focus:border-zinc-600"
+                              className="w-full rounded-lg bg-gray-950/60 border border-gray-800 px-3 py-2.5 text-sm text-blue-200 focus:outline-none focus:border-blue-400 focus:ring-1 focus:ring-blue-400"
                             />
                           </div>
                         </div>
@@ -806,13 +806,13 @@ export function ProfessorSettingsControl() {
                               setNotificarMensagens((v) => !v)
                             }
                             className={`relative w-11 h-6 rounded-full transition-colors shrink-0 cursor-pointer ${
-                              notificarMensagens ? "bg-white" : "bg-zinc-700"
+                              notificarMensagens ? "bg-blue-500" : "bg-zinc-700"
                             }`}
                           >
                             <span
                               className={`absolute top-0.5 left-0.5 w-5 h-5 rounded-full transition-transform ${
                                 notificarMensagens
-                                  ? "translate-x-5 bg-black"
+                                  ? "translate-x-5 bg-white"
                                   : "translate-x-0 bg-zinc-400"
                               }`}
                             />
@@ -834,13 +834,13 @@ export function ProfessorSettingsControl() {
                             aria-checked={notificarAlertas}
                             onClick={() => setNotificarAlertas((v) => !v)}
                             className={`relative w-11 h-6 rounded-full transition-colors shrink-0 cursor-pointer ${
-                              notificarAlertas ? "bg-white" : "bg-zinc-700"
+                              notificarAlertas ? "bg-blue-500" : "bg-zinc-700"
                             }`}
                           >
                             <span
                               className={`absolute top-0.5 left-0.5 w-5 h-5 rounded-full transition-transform ${
                                 notificarAlertas
-                                  ? "translate-x-5 bg-black"
+                                  ? "translate-x-5 bg-white"
                                   : "translate-x-0 bg-zinc-400"
                               }`}
                             />
