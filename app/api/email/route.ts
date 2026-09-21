@@ -1,4 +1,4 @@
-import { Resend } from "resend";
+import { Resend, type CreateEmailOptions } from "resend";
 import { NextResponse } from "next/server";
 import { requireRole } from "@/lib/api-auth";
 
@@ -44,13 +44,15 @@ export async function POST(req: Request) {
 
     console.log("📨 Preparando envio para:", destinatarioReal);
 
-    const { data, error } = await resend.emails.send({
+    const payload = {
       from: "UniClassTech <onboarding@resend.dev>",
       to: destinatarioReal,
       subject,
       ...(text ? { text } : {}),
       ...(html ? { html } : {}),
-    });
+    } as CreateEmailOptions;
+
+    const { data, error } = await resend.emails.send(payload);
 
     if (error) {
       console.error("❌ Erro no Resend:", error);

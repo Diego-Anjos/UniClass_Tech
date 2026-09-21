@@ -418,8 +418,9 @@ export default function GestaoProfessoresPage() {
       const ocupadas = new Set<string>();
       for (const raw of data) {
         const t = normalizarTurma(raw);
+        if (!t) continue;
         const temProfessor =
-          Boolean(t?.professor_id?.trim()) || Boolean(t?.professor?.trim());
+          Boolean(t.professor_id?.trim()) || Boolean(t.professor?.trim());
         if (!temProfessor || !t.sala?.trim()) continue;
         if (!ocorreHoje(t, hoje)) continue;
         ocupadas.add(chaveAlocacao(t.andar, t.sala));

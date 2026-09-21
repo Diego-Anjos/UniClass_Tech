@@ -250,7 +250,8 @@ export default function DiarioDeClassePage() {
         return;
       }
 
-      const data = (res.data as Record<string, unknown>[] | null) ?? [];
+      const data =
+        (res.data as unknown as Record<string, unknown>[] | null) ?? [];
 
       const lista = data.map((turma) => ({
         id: String(turma.id),
