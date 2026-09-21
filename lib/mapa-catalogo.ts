@@ -286,12 +286,26 @@ export function normalizarTurma(raw: unknown): TurmaMapa | null {
       : t.sala_nome != null
         ? String(t.sala_nome)
         : null;
-  const professor =
-    t.professor != null
-      ? String(t.professor)
-      : t.nome != null
-        ? String(t.nome)
-        : null;
+
+  // Nome só para exibição: join `professores` → legado textual → alias `nome`
+  let professor: string | null = null;
+  const nested = t.professores;
+  if (nested && typeof nested === "object") {
+    const obj = Array.isArray(nested) ? nested[0] : nested;
+    if (obj && typeof obj === "object" && (obj as Record<string, unknown>).nome != null) {
+      const n = String((obj as Record<string, unknown>).nome).trim();
+      if (n) professor = n;
+    }
+  }
+  if (!professor && t.professor != null) {
+    const n = String(t.professor).trim();
+    if (n) professor = n;
+  }
+  if (!professor && t.nome != null) {
+    const n = String(t.nome).trim();
+    if (n) professor = n;
+  }
+
   const curso =
     t.curso != null
       ? String(t.curso)
@@ -384,12 +398,13 @@ export function chaveAlocacao(andar?: string | null, sala?: string | null) {
     .toLowerCase()}`;
 }
 
-/** Salas ocupadas hoje: combinações andar+sala com professor vinculado. */
+/** Salas ocupadas hoje: combinações andar+sala com professor vinculado (FK). */
 export function salasOcupadasHoje(turmas: TurmaMapa[]): Set<string> {
   const hoje = diaHoje();
   const ocupadas = new Set<string>();
   for (const t of turmas) {
-    if (!t.professor?.trim() || !t.sala?.trim()) continue;
+    const temProfessor = Boolean(t.professor_id?.trim()) || Boolean(t.professor?.trim());
+    if (!temProfessor || !t.sala?.trim()) continue;
     if (!ocorreHoje(t, hoje)) continue;
     ocupadas.add(chaveAlocacao(t.andar, t.sala));
   }

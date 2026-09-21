@@ -112,12 +112,31 @@ function preferenciasDoProfessor(row: {
   return null;
 }
 
-function chaveNomeProfessor(nome: string) {
-  return nome
-    .trim()
-    .toLowerCase()
-    .normalize("NFD")
-    .replace(/[\u0300-\u036f]/g, "");
+const SELECT_TURMA_CONTATO =
+  "id, curso, codigo, professor_id, professores!professor_id(id, nome, preferencias, dias_atendimento, atendimento_de, atendimento_ate)";
+
+function professorContatoDoJoin(
+  turma: Record<string, unknown>
+): ProfessorContato {
+  const nested = turma.professores;
+  const obj = Array.isArray(nested)
+    ? (nested[0] as Record<string, unknown> | undefined)
+    : (nested as Record<string, unknown> | null | undefined);
+
+  if (obj && typeof obj === "object") {
+    const nome = String(obj.nome ?? "").trim();
+    return {
+      id: String(obj.id ?? turma.professor_id ?? ""),
+      nome: nome || "Professor não informado",
+      preferencias: preferenciasDoProfessor(obj),
+    };
+  }
+
+  return {
+    id: turma.professor_id != null ? String(turma.professor_id) : "",
+    nome: "Professor não informado",
+    preferencias: null,
+  };
 }
 
 type ChamadoAluno = {
@@ -218,10 +237,10 @@ export default function AlunoContatoPage() {
 
     async function carregarDisciplinasAluno() {
       try {
-        // 1) Matrículas via notas + join com turmas
+        // 1) Matrículas via notas + join com turmas → professores (FK)
         const { data: notasJoin, error: notasJoinError } = await supabase
           .from("notas")
-          .select("turma, turmas(id, curso, codigo, professor)")
+          .select(`turma, turmas(${SELECT_TURMA_CONTATO})`)
           .eq("ra_aluno", alunoRa);
 
         if (cancelado) return;
@@ -246,12 +265,6 @@ export default function AlunoContatoPage() {
             }
             continue;
           }
-
-          // Join nulo: tenta o valor cru de notas.turma depois
-          const turmaRef = String(nota.turma ?? "").trim();
-          if (turmaRef && !idsVistos.has(turmaRef)) {
-            idsVistos.add(`ref:${turmaRef}`);
-          }
         }
 
         // 2) Busca por IDs/refs quando o join não trouxe linhas
@@ -266,7 +279,7 @@ export default function AlunoContatoPage() {
         if (turmasRows.length === 0 && turmaRefs.length > 0) {
           const { data: turmasPorId, error: turmasIdError } = await supabase
             .from("turmas")
-            .select("id, curso, codigo, professor")
+            .select(SELECT_TURMA_CONTATO)
             .in("id", turmaRefs);
 
           if (cancelado) return;
@@ -283,11 +296,10 @@ export default function AlunoContatoPage() {
             }
           }
 
-          // Refs que podem ser código/nome da disciplina
           if (turmasRows.length === 0) {
             const { data: turmasPorCodigo, error: codigoError } = await supabase
               .from("turmas")
-              .select("id, curso, codigo, professor")
+              .select(SELECT_TURMA_CONTATO)
               .in("codigo", turmaRefs);
 
             if (cancelado) return;
@@ -312,11 +324,11 @@ export default function AlunoContatoPage() {
           }
         }
 
-        // 3) Fallback: turmas do curso do aluno (mesma regra de frequência/grade)
+        // 3) Fallback: turmas do curso do aluno
         if (turmasRows.length === 0 && alunoCurso) {
           const { data: turmasCurso, error: turmasCursoError } = await supabase
             .from("turmas")
-            .select("id, curso, codigo, professor")
+            .select(SELECT_TURMA_CONTATO)
             .ilike("curso", `%${alunoCurso}%`);
 
           if (cancelado) return;
@@ -339,104 +351,15 @@ export default function AlunoContatoPage() {
           return;
         }
 
-        // 4) Enriquecer com id/nome/preferencias dos professores
-        const nomesProfessores = [
-          ...new Set(
-            turmasRows
-              .map((t) => String(t.professor ?? "").trim())
-              .filter(Boolean)
-          ),
-        ];
-
-        const mapaProfessores = new Map<string, ProfessorContato>();
-
-        if (nomesProfessores.length > 0) {
-          const { data: professoresData, error: professoresError } =
-            await supabase
-              .from("professores")
-              .select(
-                "id, nome, preferencias, dias_atendimento, atendimento_de, atendimento_ate"
-              )
-              .in("nome", nomesProfessores);
-
-          if (cancelado) return;
-
-          if (professoresError) {
-            console.warn(
-              "Busca exata de professores falhou, tentando lista ampla:",
-              professoresError.message
-            );
-          }
-
-          let professoresRows =
-            (professoresData as Record<string, unknown>[] | null) ?? [];
-
-          // Se o .in por nome não trouxe todos (variação de grafia), busca por ilike
-          if (professoresRows.length < nomesProfessores.length) {
-            const faltantes = nomesProfessores.filter((nome) => {
-              const chave = chaveNomeProfessor(nome);
-              return !professoresRows.some(
-                (p) => chaveNomeProfessor(String(p.nome ?? "")) === chave
-              );
-            });
-
-            for (const nome of faltantes) {
-              const { data: match, error: matchError } = await supabase
-                .from("professores")
-                .select(
-                  "id, nome, preferencias, dias_atendimento, atendimento_de, atendimento_ate"
-                )
-                .ilike("nome", `%${nome}%`)
-                .limit(1)
-                .maybeSingle();
-
-              if (cancelado) return;
-
-              if (matchError) {
-                console.warn(
-                  `Erro ao buscar professor "${nome}":`,
-                  matchError.message
-                );
-                continue;
-              }
-
-              if (match) {
-                professoresRows = [
-                  ...professoresRows,
-                  match as Record<string, unknown>,
-                ];
-              }
-            }
-          }
-
-          for (const p of professoresRows) {
-            const nome = String(p.nome ?? "").trim();
-            if (!nome) continue;
-            mapaProfessores.set(chaveNomeProfessor(nome), {
-              id: String(p.id ?? ""),
-              nome,
-              preferencias: preferenciasDoProfessor(p),
-            });
-          }
-        }
-
         if (cancelado) return;
 
+        // Nome/preferências vêm do join relacional — sem busca por texto do nome
         const disciplinas: DisciplinaAluno[] = turmasRows.map((t, index) => {
           const id = String(t.id ?? `turma-${index}`);
-          const nomeProfTurma = String(t.professor ?? "").trim();
-          const profEncontrado = nomeProfTurma
-            ? mapaProfessores.get(chaveNomeProfessor(nomeProfTurma))
-            : undefined;
-
           return {
             id,
             nomeDisciplina: nomeDisciplinaTurma(t),
-            professor: profEncontrado ?? {
-              id: "",
-              nome: nomeProfTurma || "Professor não informado",
-              preferencias: null,
-            },
+            professor: professorContatoDoJoin(t),
           };
         });
 

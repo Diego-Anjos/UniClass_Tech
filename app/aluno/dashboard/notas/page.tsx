@@ -36,6 +36,7 @@ import {
   useAlunoSession,
 } from "@/lib/aluno-session";
 import { PESOS_AVALIACAO_PADRAO } from "@/lib/professor-session";
+import { nomeProfessorDoJoin } from "@/lib/professor-relacao";
 
 const BoletimDownloadButton = dynamic(
   () =>
@@ -234,7 +235,7 @@ export default function AlunoNotasPage() {
       const { data: notasData, error: notasError } = await supabase
         .from("notas")
         .select(
-          "n1, n2, n3, media_final, faltas, turma, turmas(codigo, curso, professor)"
+          "n1, n2, n3, media_final, faltas, turma, turmas(codigo, curso, professor_id, professores!professor_id(nome))"
         )
         .eq("ra_aluno", ra);
 
@@ -271,7 +272,7 @@ export default function AlunoNotasPage() {
               turmasRel?.codigo ??
               raw.turma ??
               "Disciplina",
-            professor: turmasRel?.professor ?? "—",
+            professor: nomeProfessorDoJoin(turmasRel) || "—",
           });
         });
       }

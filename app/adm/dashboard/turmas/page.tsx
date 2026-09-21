@@ -27,6 +27,10 @@ import {
   ocorreHoje,
   salasDoAndar,
 } from "@/lib/mapa-catalogo";
+import {
+  nomeProfessorDoJoin,
+  SELECT_TURMA_COM_PROFESSOR,
+} from "@/lib/professor-relacao";
 
 type Turno = "Manhã" | "Noite";
 type StatusTurma = "Aberta" | "Em andamento" | "Fechada";
@@ -171,7 +175,7 @@ function mapTurma(row: Record<string, unknown>): Turma {
     sala: String(row.sala ?? ""),
     andar: String(row.andar ?? ""),
     professor_id: row.professor_id ? String(row.professor_id) : null,
-    professor: String(row.professor ?? ""),
+    professor: nomeProfessorDoJoin(row),
   };
 }
 
@@ -229,7 +233,7 @@ export default function TurmasMatriculasPage() {
 
     const { data: turmasData, error: turmasError } = await supabase
       .from("turmas")
-      .select("*")
+      .select(SELECT_TURMA_COM_PROFESSOR)
       .order("created_at", { ascending: false });
 
     if (turmasError) {
@@ -572,7 +576,9 @@ export default function TurmasMatriculasPage() {
 
     let query = supabase
       .from("turmas")
-      .select("id, professor, dias_aula, curso, codigo")
+      .select(
+        "id, professor_id, dias_aula, curso, codigo, professores!professor_id(nome)"
+      )
       .eq("sala", salaSelecionada)
       .eq("turno", formData.turno);
 
@@ -588,9 +594,9 @@ export default function TurmasMatriculasPage() {
     if (!registros || registros.length === 0) return null;
 
     // Sem dias no formulário de turma: qualquer ocupação da sala no turno é conflito
-    const conflito = registros[0];
+    const conflito = registros[0] as Record<string, unknown>;
     return (
-      String(conflito.professor ?? "").trim() ||
+      nomeProfessorDoJoin(conflito) ||
       String(conflito.curso ?? conflito.codigo ?? "outra turma")
     );
   }
@@ -628,9 +634,6 @@ export default function TurmasMatriculasPage() {
       return;
     }
 
-    const docente = professoresOptions.find((p) => p.id === professorId);
-    const nomeProfessor = docente?.nome?.trim() || null;
-
     setIsSubmitting(true);
     const payloadBase = {
       codigo,
@@ -641,10 +644,9 @@ export default function TurmasMatriculasPage() {
       andar: andarSelecionado || null,
       sala: salaSelecionada || null,
       professor_id: professorId,
-      // Denormalizado para mapa/conflitos legados; vínculo real é professor_id
-      professor: nomeProfessor,
     };
     // Não enviar campos só de UI (ex.: alunos_matriculados) — não existem na tabela
+    // Nem o texto denormalizado `professor`: o nome vem do join em professores.
     const { error } = editingId
       ? await supabase.from("turmas").update(payloadBase).eq("id", editingId)
       : await supabase.from("turmas").insert(payloadBase);

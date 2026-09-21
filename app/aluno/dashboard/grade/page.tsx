@@ -26,6 +26,10 @@ import {
   limparSessaoAluno,
   useAlunoSession,
 } from "@/lib/aluno-session";
+import {
+  nomeProfessorDoJoin,
+  SELECT_TURMA_COM_PROFESSOR,
+} from "@/lib/professor-relacao";
 
 const navItems = [
   { icon: LayoutDashboard, label: "Visão Geral", href: "/aluno/dashboard", active: false },
@@ -119,7 +123,7 @@ function mapTurmaParaDisciplina(
   return {
     id: String(row.id ?? row.codigo ?? nomeDisciplina(row)),
     nome: nomeDisciplina(row),
-    professor: row.professor != null ? String(row.professor) : null,
+    professor: nomeProfessorDoJoin(row) || null,
     cargaHoraria: toCargaHoraria(row.carga_horaria),
     semestre: extrairNumeroSemestre(
       row.semestre ?? row.semestre_atual ?? semestreFallback
@@ -369,7 +373,7 @@ export default function AlunoGradePage() {
         if (turmaIds.length > 0) {
           const { data: turmasPorId, error: turmasIdError } = await supabase
             .from("turmas")
-            .select("*")
+            .select(SELECT_TURMA_COM_PROFESSOR)
             .in("id", turmaIds);
 
           if (turmasIdError) {
@@ -398,7 +402,7 @@ export default function AlunoGradePage() {
 
           const { data: porCodigo, error: errCodigo } = await supabase
             .from("turmas")
-            .select("*")
+            .select(SELECT_TURMA_COM_PROFESSOR)
             .eq("codigo", alunoSessao.turmaCodigo);
 
           if (errCodigo) {
@@ -413,7 +417,7 @@ export default function AlunoGradePage() {
           if (turmaEncontrada.length === 0) {
             const { data: porId, error: errId } = await supabase
               .from("turmas")
-              .select("*")
+              .select(SELECT_TURMA_COM_PROFESSOR)
               .eq("id", alunoSessao.turmaCodigo);
 
             if (errId) {
@@ -453,7 +457,7 @@ export default function AlunoGradePage() {
         if (alunoSessao.curso) {
           const { data: turmasCurso, error: turmasCursoError } = await supabase
             .from("turmas")
-            .select("*")
+            .select(SELECT_TURMA_COM_PROFESSOR)
             .ilike("curso", `%${alunoSessao.curso}%`);
 
           if (turmasCursoError) {

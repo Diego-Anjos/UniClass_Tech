@@ -29,6 +29,7 @@ import {
   ocorreHoje,
   salasDoAndar,
 } from "@/lib/mapa-catalogo";
+import { nomeProfessorDoJoin } from "@/lib/professor-relacao";
 
 type StatusProfessor = "Ativo" | "Licença" | "Inativo";
 type Titulacao = "Especialista" | "Mestre(a)" | "Doutor(a)";
@@ -306,6 +307,25 @@ function campoEditavel(valor: string | null | undefined): string {
   return v;
 }
 
+/** Área acadêmica para a tabela (disciplina), com fallback pelos cursos das turmas. */
+function areaParaExibicao(
+  disciplina: string,
+  turmasCodigos: string[],
+  disponiveis: TurmaDisponivel[]
+): string {
+  const area = campoEditavel(disciplina);
+  if (area) return area;
+
+  const cursos = [
+    ...new Set(
+      turmasCodigos
+        .map((codigo) => disponiveis.find((t) => t.codigo === codigo)?.curso)
+        .filter((c): c is string => Boolean(c && c !== "—"))
+    ),
+  ];
+  return cursos.length > 0 ? cursos.join(" · ") : "Não informada";
+}
+
 export default function GestaoProfessoresPage() {
   const [professores, setProfessores] = useState<Professor[]>([]);
   const [isLoading, setIsLoading] = useState(true);
@@ -374,7 +394,9 @@ export default function GestaoProfessoresPage() {
   async function fetchTurmasDisponiveis() {
     const { data, error } = await supabase
       .from("turmas")
-      .select("id, codigo, curso, turno, professor, sala, andar, dias_aula");
+      .select(
+        "id, codigo, curso, turno, professor_id, sala, andar, dias_aula, professores!professor_id(nome)"
+      );
 
     if (error) {
       console.error("Erro ao buscar turmas:", error.message);
@@ -396,7 +418,9 @@ export default function GestaoProfessoresPage() {
       const ocupadas = new Set<string>();
       for (const raw of data) {
         const t = normalizarTurma(raw);
-        if (!t?.professor?.trim() || !t.sala?.trim()) continue;
+        const temProfessor =
+          Boolean(t?.professor_id?.trim()) || Boolean(t?.professor?.trim());
+        if (!temProfessor || !t.sala?.trim()) continue;
         if (!ocorreHoje(t, hoje)) continue;
         ocupadas.add(chaveAlocacao(t.andar, t.sala));
       }
@@ -727,7 +751,9 @@ export default function GestaoProfessoresPage() {
 
     const { data: registros, error } = await supabase
       .from("turmas")
-      .select("id, professor, dias_aula, curso, turno, sala")
+      .select(
+        "id, professor_id, dias_aula, curso, turno, sala, professores!professor_id(nome)"
+      )
       .eq("sala", salaSelecionada)
       .eq("turno", turnoAula);
 
@@ -738,14 +764,15 @@ export default function GestaoProfessoresPage() {
 
     if (!registros || registros.length === 0) return null;
 
-    const nomeAtual = formData.nome.trim().toLowerCase();
+    const idAtual = editingId?.trim() || null;
 
     const conflito = registros.find((reg) => {
       if (idsProprios.has(String(reg.id))) return false;
 
-      // Ignora registro do próprio docente (mesmo nome)
-      const profReg = String(reg.professor ?? "").trim().toLowerCase();
-      if (nomeAtual && profReg && profReg === nomeAtual) return false;
+      // Ignora registro do próprio docente (mesmo professor_id)
+      const profIdReg =
+        reg.professor_id != null ? String(reg.professor_id).trim() : "";
+      if (idAtual && profIdReg && profIdReg === idAtual) return false;
 
       const diasSalvos = normalizarDiasRegistro(reg.dias_aula);
       // Sem dias no banco → trata como ocupação total no turno
@@ -762,7 +789,7 @@ export default function GestaoProfessoresPage() {
     if (!conflito) return null;
 
     return (
-      String(conflito.professor ?? "").trim() ||
+      nomeProfessorDoJoin(conflito as Record<string, unknown>) ||
       String(conflito.curso ?? "outro docente")
     );
   }
@@ -1042,7 +1069,6 @@ export default function GestaoProfessoresPage() {
       (andarSelecionado || salaSelecionada || diasAula.length > 0)
     ) {
       const alocacao: Record<string, unknown> = {
-        professor: nome,
         professor_id: professorIdPersistido,
         turno: turnoAula,
         dias_aula: diasAula,
@@ -1179,7 +1205,7 @@ export default function GestaoProfessoresPage() {
             </div>
 
             <div className="overflow-x-auto">
-              <table className="w-full text-left min-w-[860px]">
+              <table className="w-full text-left min-w-[960px]">
                 <thead>
                   <tr className="border-b border-zinc-800">
                     <th className="px-6 py-3.5 text-xs font-medium text-zinc-500 uppercase tracking-widest">
@@ -1193,6 +1219,9 @@ export default function GestaoProfessoresPage() {
                     </th>
                     <th className="px-4 py-3.5 text-xs font-medium text-zinc-500 uppercase tracking-widest">
                       Área de Atuação
+                    </th>
+                    <th className="px-4 py-3.5 text-xs font-medium text-zinc-500 uppercase tracking-widest">
+                      Turmas
                     </th>
                     <th className="px-4 py-3.5 text-xs font-medium text-zinc-500 uppercase tracking-widest">
                       Carga Horária
@@ -1209,7 +1238,7 @@ export default function GestaoProfessoresPage() {
                   {isLoading ? (
                     <tr>
                       <td
-                        colSpan={7}
+                        colSpan={8}
                         className="px-6 py-16 text-center text-sm text-zinc-500"
                       >
                         Carregando professores...
@@ -1218,14 +1247,29 @@ export default function GestaoProfessoresPage() {
                   ) : professoresFiltrados.length === 0 ? (
                     <tr>
                       <td
-                        colSpan={7}
+                        colSpan={8}
                         className="px-6 py-12 text-center text-sm text-zinc-500"
                       >
                         Nenhum professor encontrado com os filtros aplicados.
                       </td>
                     </tr>
                   ) : (
-                    professoresFiltrados.map((prof) => (
+                    professoresFiltrados.map((prof) => {
+                      const turmasVinculadas = normalizarTurmasParaCodigos(
+                        parseTurmasSalvas(
+                          campoEditavel(prof.area_atuacao)
+                            ? prof.area_atuacao
+                            : ""
+                        ),
+                        turmasDisponiveis
+                      );
+                      const areaExibicao = areaParaExibicao(
+                        prof.disciplina,
+                        turmasVinculadas,
+                        turmasDisponiveis
+                      );
+
+                      return (
                       <tr
                         key={prof.id || prof.matricula}
                         onClick={() => abrirProntuario(prof)}
@@ -1247,7 +1291,34 @@ export default function GestaoProfessoresPage() {
                         <td className="px-4 py-4 text-sm text-zinc-400">
                           {prof.titulacao}
                         </td>
-                        <td className="px-4 py-4 text-sm text-zinc-400">{prof.area_atuacao}</td>
+                        <td className="px-4 py-4 text-sm text-zinc-300 max-w-[180px]">
+                          <span className="line-clamp-2" title={areaExibicao}>
+                            {areaExibicao}
+                          </span>
+                        </td>
+                        <td className="px-4 py-4">
+                          {turmasVinculadas.length === 0 ? (
+                            <span className="text-xs text-gray-500">
+                              Sem turmas
+                            </span>
+                          ) : (
+                            <div className="flex flex-wrap gap-1.5 max-w-[220px]">
+                              {turmasVinculadas.map((codigo) => (
+                                <span
+                                  key={`${prof.id}-${codigo}`}
+                                  className="inline-flex items-center rounded-md border border-zinc-700/80 bg-zinc-800/70 px-2 py-1 text-[11px] font-medium text-zinc-200 font-mono"
+                                  title={
+                                    turmasDisponiveis.find(
+                                      (t) => t.codigo === codigo
+                                    )?.curso ?? codigo
+                                  }
+                                >
+                                  {codigo}
+                                </span>
+                              ))}
+                            </div>
+                          )}
+                        </td>
                         <td className="px-4 py-4 text-sm text-zinc-400">
                           {prof.carga_horaria}h/semana
                         </td>
@@ -1285,7 +1356,8 @@ export default function GestaoProfessoresPage() {
                           </div>
                         </td>
                       </tr>
-                    ))
+                      );
+                    })
                   )}
                 </tbody>
               </table>

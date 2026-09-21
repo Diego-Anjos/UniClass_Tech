@@ -99,13 +99,25 @@ function normalizarTurma(raw: unknown): TurmaVinculo | null {
   if (Array.isArray(raw)) return raw[0] ? normalizarTurma(raw[0]) : null;
   if (typeof raw !== "object") return null;
   const t = raw as Record<string, unknown>;
+  let professor: string | null = null;
+  const nested = t.professores;
+  if (nested && typeof nested === "object") {
+    const obj = Array.isArray(nested) ? nested[0] : nested;
+    if (obj && typeof obj === "object" && (obj as Record<string, unknown>).nome != null) {
+      const n = String((obj as Record<string, unknown>).nome).trim();
+      if (n) professor = n;
+    }
+  }
+  if (!professor && t.professor != null) {
+    professor = String(t.professor);
+  }
   return {
     curso: t.curso != null ? String(t.curso) : null,
     sala: t.sala != null ? String(t.sala) : null,
     turno: t.turno != null ? String(t.turno) : null,
     dias_aula: (t.dias_aula as string[] | string | null) ?? null,
     carga_horaria: toNum(t.carga_horaria),
-    professor: t.professor != null ? String(t.professor) : null,
+    professor,
   };
 }
 
@@ -198,7 +210,7 @@ export default function AlunoDashboardPage() {
         const { data: notasData, error: notasError } = await supabase
           .from("notas")
           .select(
-            "media_final, turmas(curso, sala, turno, dias_aula, carga_horaria, professor)"
+            "media_final, turmas(curso, sala, turno, dias_aula, carga_horaria, professor_id, professores!professor_id(nome))"
           )
           .eq("ra_aluno", ra);
 

@@ -25,6 +25,7 @@ import {
   type AndarLabel,
   type TurmaMapa,
 } from "@/lib/mapa-catalogo";
+import { SELECT_TURMA_MAPA_COM_PROFESSOR } from "@/lib/professor-relacao";
 
 export type MapaRole = "aluno" | "professor" | "adm";
 
@@ -107,21 +108,35 @@ type OcupacaoMapa = {
 function turmaParaOcupacao(t: TurmaMapa): OcupacaoMapa | null {
   const andar = t.andar?.trim() ?? "";
   const sala_nome = t.sala?.trim() ?? "";
-  const nome = t.professor?.trim() ?? "";
-  if (!andar || !sala_nome || !nome) return null;
+  const temProfessor = Boolean(t.professor_id?.trim()) || Boolean(t.professor?.trim());
+  if (!andar || !sala_nome || !temProfessor) return null;
   return {
     id: t.id,
     andar,
     sala_nome,
-    nome,
+    nome: t.professor?.trim() || "Docente",
     disciplina: t.curso?.trim() || "Disciplina",
     turno: t.turno,
     dias_aula: t.dias_aula,
   };
 }
 
-const COLUNAS_TURMA_MAPA =
-  "id, curso, professor, sala, andar, dias_aula, turno";
+const COLUNAS_TURMA_MAPA = SELECT_TURMA_MAPA_COM_PROFESSOR;
+
+function ehTurmaDoProfessor(
+  t: TurmaMapa,
+  professorId?: string | null,
+  nomeFallback?: string | null
+): boolean {
+  if (professorId && t.professor_id) {
+    return String(t.professor_id) === String(professorId);
+  }
+  // Fallback legado apenas se a turma ainda não tiver FK
+  if (!t.professor_id && nomeFallback) {
+    return nomesIguais(t.professor, nomeFallback);
+  }
+  return false;
+}
 
 export function MapaSalas({ usuarioLogado, role }: Props) {
   const [andarSelecionado, setAndarSelecionado] =
@@ -163,9 +178,18 @@ export function MapaSalas({ usuarioLogado, role }: Props) {
           (normalizar(destaque.sala) === normalizar(salaRenderizada.codigo) ||
             normalizar(destaque.sala) === normalizar(salaRenderizada.nome));
       } else if (role === "professor") {
-        isProximaAula =
-          isOcupada &&
-          nomesIguais(professor, String(usuarioLogado?.nome ?? ""));
+        const ocupacaoTurma = alocacoes.find(
+          (t) =>
+            normalizar(t.andar) === normalizar(nomeDoAndarAtual) &&
+            (normalizar(t.sala) === normalizar(salaRenderizada.codigo) ||
+              normalizar(t.sala) === normalizar(salaRenderizada.nome)) &&
+            ehTurmaDoProfessor(
+              t,
+              usuarioLogado?.id != null ? String(usuarioLogado.id) : null,
+              usuarioLogado?.nome != null ? String(usuarioLogado.nome) : null
+            )
+        );
+        isProximaAula = isOcupada && !!ocupacaoTurma;
       }
 
       return {
@@ -180,8 +204,10 @@ export function MapaSalas({ usuarioLogado, role }: Props) {
   }, [
     andarSelecionado,
     dadosSupabase,
+    alocacoes,
     destaque,
     role,
+    usuarioLogado?.id,
     usuarioLogado?.nome,
   ]);
 
@@ -197,12 +223,17 @@ export function MapaSalas({ usuarioLogado, role }: Props) {
   const alaSul = ambientesDoAndar.filter((a) => a.posicao === "sul");
 
   const itinerario = useMemo((): ItinerarioItem[] => {
+    const professorId =
+      usuarioLogado?.id != null ? String(usuarioLogado.id) : null;
+    const nomeFallback =
+      usuarioLogado?.nome != null ? String(usuarioLogado.nome) : null;
+
     const fonte =
       role === "adm"
         ? alocacoes
         : role === "professor"
           ? alocacoes.filter((t) =>
-              nomesIguais(t.professor, String(usuarioLogado?.nome ?? ""))
+              ehTurmaDoProfessor(t, professorId, nomeFallback)
             )
           : minhasAulasHoje;
 
@@ -236,7 +267,7 @@ export function MapaSalas({ usuarioLogado, role }: Props) {
       return comIntervalo;
     }
     return itens;
-  }, [role, alocacoes, minhasAulasHoje, usuarioLogado?.nome]);
+  }, [role, alocacoes, minhasAulasHoje, usuarioLogado?.id, usuarioLogado?.nome]);
 
   async function fetchAiMapa(andar: string, sala: string) {
     setIsLoadingAi(true);
@@ -287,10 +318,12 @@ export function MapaSalas({ usuarioLogado, role }: Props) {
           .map((t) => normalizarTurma(t))
           .filter((t): t is TurmaMapa => t !== null);
 
-        // Alocações com professor + sala + andar (base para o mapa)
+        // Alocações com professor (FK ou legado) + sala + andar (base para o mapa)
         const alocadas = todas.filter(
           (t) =>
-            !!t.professor?.trim() && !!t.sala?.trim() && !!t.andar?.trim()
+            (Boolean(t.professor_id?.trim()) || Boolean(t.professor?.trim())) &&
+            !!t.sala?.trim() &&
+            !!t.andar?.trim()
         );
 
         // ADM: visão gerencial (todos os dias). Aluno/professor: só o dia atual.
@@ -376,9 +409,13 @@ export function MapaSalas({ usuarioLogado, role }: Props) {
             ) ??
             minhas[0] ??
             null;
-        } else if (role === "professor" && usuarioLogado?.nome) {
-          const nomeProf = String(usuarioLogado.nome);
-          minhas = paraMapa.filter((t) => nomesIguais(t.professor, nomeProf));
+        } else if (role === "professor" && usuarioLogado?.id) {
+          const professorId = String(usuarioLogado.id);
+          const nomeFallback =
+            usuarioLogado?.nome != null ? String(usuarioLogado.nome) : null;
+          minhas = paraMapa.filter((t) =>
+            ehTurmaDoProfessor(t, professorId, nomeFallback)
+          );
           setMinhasAulasHoje(minhas);
           destaqueLocal = minhas[0] ?? null;
         } else {
