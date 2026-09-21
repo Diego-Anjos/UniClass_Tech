@@ -1,3 +1,5 @@
+import { nomeProfessorDoJoin, professorIdDoRow } from "@/lib/professor-relacao";
+
 export const ANDARES = [
   "Térreo",
   "1º Andar",
@@ -287,24 +289,10 @@ export function normalizarTurma(raw: unknown): TurmaMapa | null {
         ? String(t.sala_nome)
         : null;
 
-  // Nome só para exibição: join `professores` → legado textual → alias `nome`
-  let professor: string | null = null;
-  const nested = t.professores;
-  if (nested && typeof nested === "object") {
-    const obj = Array.isArray(nested) ? nested[0] : nested;
-    if (obj && typeof obj === "object" && (obj as Record<string, unknown>).nome != null) {
-      const n = String((obj as Record<string, unknown>).nome).trim();
-      if (n) professor = n;
-    }
-  }
-  if (!professor && t.professor != null) {
-    const n = String(t.professor).trim();
-    if (n) professor = n;
-  }
-  if (!professor && t.nome != null) {
-    const n = String(t.nome).trim();
-    if (n) professor = n;
-  }
+  // Nome só para exibição: join `professores.nome` → legado textual
+  const professorNome = nomeProfessorDoJoin(t);
+  const professor = professorNome || null;
+  const professor_id = professorIdDoRow(t);
 
   const curso =
     t.curso != null
@@ -312,45 +300,61 @@ export function normalizarTurma(raw: unknown): TurmaMapa | null {
       : t.disciplina != null
         ? String(t.disciplina)
         : null;
+
+  const diasRaw =
+    t.dias_aula ?? t.dias_semana ?? t.diasAula ?? t.diasSemana ?? null;
+
   return {
     id: t.id != null ? String(t.id) : null,
     curso,
     professor,
-    professor_id: t.professor_id != null ? String(t.professor_id) : null,
+    professor_id,
     sala,
     andar: t.andar != null ? String(t.andar) : null,
-    dias_aula: (t.dias_aula as string[] | string | null) ?? null,
+    dias_aula: (diasRaw as string[] | string | null) ?? null,
     turno: t.turno != null ? String(t.turno) : null,
   };
 }
 
 export function normalizarDiasAula(raw: unknown): string[] {
   if (!raw) return [];
-  if (Array.isArray(raw)) return raw.map(String);
+  if (Array.isArray(raw)) return raw.map(String).map((s) => s.trim()).filter(Boolean);
   if (typeof raw === "string") {
     try {
       const parsed = JSON.parse(raw);
-      if (Array.isArray(parsed)) return parsed.map(String);
+      if (Array.isArray(parsed)) {
+        return parsed.map(String).map((s) => s.trim()).filter(Boolean);
+      }
     } catch {
-      return raw
-        .split(",")
-        .map((s) => s.trim())
-        .filter(Boolean);
+      // CSV / lista textual
     }
+    return raw
+      .split(/[,;/|]+/)
+      .map((s) => s.trim())
+      .filter(Boolean);
   }
   return [];
+}
+
+/** Chave curta para comparar "Segunda", "Seg", "segunda-feira", etc. */
+function chaveDiaSemana(valor: string): string {
+  return valor
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase()
+    .replace(/-feira/g, "")
+    .replace(/[^a-z]/g, "")
+    .slice(0, 3);
 }
 
 export function ocorreHoje(turma: TurmaMapa, hoje: string): boolean {
   const dias = normalizarDiasAula(turma.dias_aula);
   if (dias.length === 0) return true;
+  const chaveHoje = chaveDiaSemana(hoje);
+  if (!chaveHoje) return true;
   return dias.some((d) => {
-    const lower = d.toLowerCase();
-    return (
-      lower === hoje.toLowerCase() ||
-      lower.startsWith(hoje.toLowerCase().slice(0, 3)) ||
-      hoje.toLowerCase().startsWith(lower.slice(0, 3))
-    );
+    const chave = chaveDiaSemana(d);
+    return Boolean(chave) && chave === chaveHoje;
   });
 }
 

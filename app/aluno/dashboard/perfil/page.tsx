@@ -25,6 +25,7 @@ import { supabase } from "@/lib/supabase";
 import { AlunoAvatar } from "@/components/aluno/aluno-avatar";
 import { ModalFeedback } from "@/components/ModalFeedback";
 import { toast } from "sonner";
+import { urlComCacheBust } from "@/lib/utils";
 import {
   atualizarSessaoAlunoLocal,
   limparSessaoAluno,
@@ -545,7 +546,8 @@ export default function AlunoPerfilPage() {
         .from("avatares")
         .getPublicUrl(nomeArquivo);
 
-      const novaUrl = publicUrl.publicUrl;
+      // Cache bust: força o navegador a buscar a imagem nova
+      const novaUrl = urlComCacheBust(publicUrl.publicUrl);
 
       await persistirFotoUrl(novaUrl);
 

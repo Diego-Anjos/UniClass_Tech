@@ -416,7 +416,7 @@ export default function ProfessorInsightsPage() {
     };
   }, [turmaSelecionada]);
 
-  // Raio-X: frequência + notas reais (N1/N2/N3/média) do aluno selecionado
+  // Raio-X: frequência + notas reais do aluno (colunas em `alunos`, não em `notas`)
   useEffect(() => {
     if (!alunoRa) {
       setResumoAluno(null);
@@ -430,15 +430,26 @@ export default function ProfessorInsightsPage() {
     async function carregarRaioX() {
       setCarregandoResumo(true);
 
+      // Notas vivem na tabela `alunos` (atv1–atv4, prova, faltas, n1) —
+      // mesmo schema usado em app/professor/dashboard/notas/page.tsx
+      let alunosNotasQuery = supabase
+        .from("alunos")
+        .select("n1, atv1, atv2, atv3, atv4, prova, faltas")
+        .eq("ra", alunoRa);
+
+      if (turmaSelecionada.trim()) {
+        alunosNotasQuery = alunosNotasQuery.eq(
+          "turma",
+          turmaSelecionada.trim()
+        );
+      }
+
       const [chamadaRes, notasRes] = await Promise.all([
         supabase
           .from("registro_chamada")
           .select("status")
           .eq("aluno_ra", alunoRa),
-        supabase
-          .from("notas")
-          .select("n1, n2, n3, media_final")
-          .eq("ra_aluno", alunoRa),
+        alunosNotasQuery,
       ]);
 
       if (cancelado) return;
@@ -489,16 +500,18 @@ export default function ProfessorInsightsPage() {
         });
       } else {
         const rows = notasRes.data ?? [];
-        const avgCampo = (campo: "n1" | "n2" | "n3" | "media_final") => {
-          const vals = rows
-            .map((r) => Number(r[campo]))
-            .filter((v) => Number.isFinite(v));
-          return vals.length > 0 ? mediaNumeros(vals) : null;
-        };
-        const n1 = avgCampo("n1") ?? alunoSelecionado?.n1 ?? null;
-        const n2 = avgCampo("n2");
-        const n3 = avgCampo("n3");
-        const media = avgCampo("media_final") ?? n1;
+        // Schema real não possui n2/n3/media_final — só composição + n1
+        const n1Vals = rows
+          .map((r) => Number(r.n1))
+          .filter((v) => Number.isFinite(v));
+        const n1 =
+          n1Vals.length > 0
+            ? mediaNumeros(n1Vals)
+            : (alunoSelecionado?.n1 ?? null);
+        // N2/N3 ainda não são lançados neste fluxo de notas
+        const n2 = null;
+        const n3 = null;
+        const media = n1;
         setNotasAluno({ n1, n2, n3, media });
         setMediaAluno(media);
       }
@@ -510,7 +523,7 @@ export default function ProfessorInsightsPage() {
     return () => {
       cancelado = true;
     };
-  }, [alunoRa, alunoSelecionado?.n1]);
+  }, [alunoRa, alunoSelecionado?.n1, turmaSelecionada]);
 
   useEffect(() => {
     if (!alunoId) {
@@ -596,24 +609,8 @@ export default function ProfessorInsightsPage() {
           return;
         }
 
-        const { data: notasRows, error: notasError } = await supabase
-          .from("notas")
-          .select("media_final")
-          .in("ra_aluno", ras);
-
-        if (notasError) {
-          console.error("Erro ao agregar notas macro:", notasError.message);
-        }
-
-        let notaMediaTurma = mediaNumeros(
-          (notasRows ?? [])
-            .map((r) => Number(r.media_final))
-            .filter((v) => Number.isFinite(v))
-        );
-
-        if (notaMediaTurma <= 0 && mediaN1Fallback > 0) {
-          notaMediaTurma = mediaN1Fallback;
-        }
+        // Média da turma = média dos n1 em `alunos` (mesmo schema do lançamento de notas)
+        const notaMediaTurma = mediaN1Fallback;
 
         // Frequência no range real do semestre (data_aula)
         let chamadaQuery = supabase

@@ -25,7 +25,7 @@ import {
   type AndarLabel,
   type TurmaMapa,
 } from "@/lib/mapa-catalogo";
-import { SELECT_TURMA_MAPA_COM_PROFESSOR } from "@/lib/professor-relacao";
+import { SELECT_TURMA_MAPA_COM_PROFESSOR, SELECT_TURMA_MAPA_JOIN_SIMPLES } from "@/lib/professor-relacao";
 
 export type MapaRole = "aluno" | "professor" | "adm";
 
@@ -108,12 +108,14 @@ type OcupacaoMapa = {
 function turmaParaOcupacao(t: TurmaMapa): OcupacaoMapa | null {
   const andar = t.andar?.trim() ?? "";
   const sala_nome = t.sala?.trim() ?? "";
-  const temProfessor = Boolean(t.professor_id?.trim()) || Boolean(t.professor?.trim());
+  const temProfessor =
+    Boolean(t.professor_id?.trim()) || Boolean(t.professor?.trim());
   if (!andar || !sala_nome || !temProfessor) return null;
   return {
     id: t.id,
     andar,
     sala_nome,
+    // Nome vem do join `professores.nome` (já achatado em normalizarTurma)
     nome: t.professor?.trim() || "Docente",
     disciplina: t.curso?.trim() || "Disciplina",
     turno: t.turno,
@@ -121,7 +123,42 @@ function turmaParaOcupacao(t: TurmaMapa): OcupacaoMapa | null {
   };
 }
 
-const COLUNAS_TURMA_MAPA = SELECT_TURMA_MAPA_COM_PROFESSOR;
+const SELECT_MAPA_PRIMARY = SELECT_TURMA_MAPA_COM_PROFESSOR;
+const SELECT_MAPA_FALLBACK = SELECT_TURMA_MAPA_JOIN_SIMPLES;
+
+async function buscarTurmasComProfessor() {
+  const tentativaHint = await supabase
+    .from("turmas")
+    .select(SELECT_MAPA_PRIMARY);
+
+  if (!tentativaHint.error) {
+    return { data: tentativaHint.data, error: null as string | null };
+  }
+
+  console.warn(
+    "Mapa: join com hint falhou, tentando professores(id, nome, titulacao):",
+    tentativaHint.error.message
+  );
+
+  const tentativaSimples = await supabase
+    .from("turmas")
+    .select(SELECT_MAPA_FALLBACK);
+
+  if (!tentativaSimples.error) {
+    return { data: tentativaSimples.data, error: null as string | null };
+  }
+
+  console.warn(
+    "Mapa: join simples falhou, buscando turmas sem embed:",
+    tentativaSimples.error.message
+  );
+
+  const semJoin = await supabase.from("turmas").select("*");
+  return {
+    data: semJoin.data,
+    error: semJoin.error ? semJoin.error.message : null,
+  };
+}
 
 function ehTurmaDoProfessor(
   t: TurmaMapa,
@@ -227,24 +264,34 @@ export function MapaSalas({ usuarioLogado, role }: Props) {
       usuarioLogado?.id != null ? String(usuarioLogado.id) : null;
     const nomeFallback =
       usuarioLogado?.nome != null ? String(usuarioLogado.nome) : null;
+    const hoje = diaHoje();
 
-    const fonte =
+    const fonteBruta =
       role === "adm"
-        ? alocacoes
+        ? alocacoes.filter((t) => ocorreHoje(t, hoje))
         : role === "professor"
           ? alocacoes.filter((t) =>
               ehTurmaDoProfessor(t, professorId, nomeFallback)
             )
           : minhasAulasHoje;
 
+    const fonte = fonteBruta.filter(
+      (t) => !!t.sala?.trim() && !!t.andar?.trim()
+    );
+
     if (fonte.length === 0) return [];
 
     const itens: ItinerarioItem[] = fonte.map((t) => {
       const sala = t.sala || "Sala a definir";
       const andar = t.andar || "Andar a definir";
+      const disciplina = t.curso?.trim() || "Disciplina";
+      const docente = t.professor?.trim();
       return {
         hora: horarioDoTurno(t.turno),
-        label: t.curso || "Disciplina",
+        label:
+          role === "adm" && docente
+            ? `${disciplina} · Prof. ${docente}`
+            : disciplina,
         local: `${sala} – ${andar}`,
         tipo: "aula" as const,
       };
@@ -312,24 +359,25 @@ export function MapaSalas({ usuarioLogado, role }: Props) {
   }
 
   useEffect(() => {
+    let cancelado = false;
+
     async function carregarMapa() {
       setCarregando(true);
       const hoje = diaHoje();
 
       try {
-        const { data: turmasData, error: turmasError } = await supabase
-          .from("turmas")
-          .select(COLUNAS_TURMA_MAPA);
+        const { data: turmasData, error: turmasError } =
+          await buscarTurmasComProfessor();
 
         if (turmasError) {
-          console.error("Erro ao buscar turmas (mapa):", turmasError.message);
+          console.error("Erro ao buscar turmas (mapa):", turmasError);
         }
 
         const todas = (turmasData ?? [])
           .map((t) => normalizarTurma(t))
           .filter((t): t is TurmaMapa => t !== null);
 
-        // Alocações com professor (FK ou legado) + sala + andar (base para o mapa)
+        // Alocações com professor (FK ou nome do join) + sala + andar
         const alocadas = todas.filter(
           (t) =>
             (Boolean(t.professor_id?.trim()) || Boolean(t.professor?.trim())) &&
@@ -347,6 +395,8 @@ export function MapaSalas({ usuarioLogado, role }: Props) {
           .map(turmaParaOcupacao)
           .filter((o): o is OcupacaoMapa => o !== null);
 
+        if (cancelado) return;
+
         setAlocacoes(paraMapa);
         setDadosSupabase(ocupacoesMapa);
 
@@ -360,10 +410,14 @@ export function MapaSalas({ usuarioLogado, role }: Props) {
           let turmasAluno: TurmaMapa[] = [];
           const { data: notasJoin, error: joinError } = await supabase
             .from("notas")
-            .select(`turmas(${COLUNAS_TURMA_MAPA})`)
+            .select(`turmas(${SELECT_MAPA_FALLBACK})`)
             .eq("ra_aluno", ra);
 
           if (joinError) {
+            console.warn(
+              "Mapa aluno: embed turmas falhou, usando fallback por id:",
+              joinError.message
+            );
             const { data: notasSimples, error: notasSimplesError } =
               await supabase
                 .from("notas")
@@ -386,11 +440,20 @@ export function MapaSalas({ usuarioLogado, role }: Props) {
             ];
 
             if (ids.length > 0) {
-              const { data: turmasPorId, error: turmasPorIdError } =
+              let { data: turmasPorId, error: turmasPorIdError } =
                 await supabase
                   .from("turmas")
-                  .select(COLUNAS_TURMA_MAPA)
+                  .select(SELECT_MAPA_FALLBACK)
                   .in("id", ids);
+
+              if (turmasPorIdError) {
+                const retry = await supabase
+                  .from("turmas")
+                  .select(SELECT_MAPA_PRIMARY)
+                  .in("id", ids);
+                turmasPorId = retry.data;
+                turmasPorIdError = retry.error;
+              }
 
               if (turmasPorIdError) {
                 console.error(
@@ -405,12 +468,14 @@ export function MapaSalas({ usuarioLogado, role }: Props) {
             }
           } else {
             turmasAluno = (notasJoin ?? [])
-              .map((n) => normalizarTurma(n.turmas))
+              .map((n) =>
+                normalizarTurma((n as { turmas?: unknown }).turmas)
+              )
               .filter((t): t is TurmaMapa => t !== null);
           }
 
           minhas = turmasAluno.filter((t) => ocorreHoje(t, hoje));
-          setMinhasAulasHoje(minhas);
+          if (!cancelado) setMinhasAulasHoje(minhas);
 
           destaqueLocal =
             minhas.find(
@@ -427,12 +492,14 @@ export function MapaSalas({ usuarioLogado, role }: Props) {
           minhas = paraMapa.filter((t) =>
             ehTurmaDoProfessor(t, professorId, nomeFallback)
           );
-          setMinhasAulasHoje(minhas);
+          if (!cancelado) setMinhasAulasHoje(minhas);
           destaqueLocal = minhas[0] ?? null;
         } else {
-          setMinhasAulasHoje([]);
+          if (!cancelado) setMinhasAulasHoje([]);
           destaqueLocal = null;
         }
+
+        if (cancelado) return;
 
         setDestaque(destaqueLocal);
 
@@ -450,18 +517,38 @@ export function MapaSalas({ usuarioLogado, role }: Props) {
           setAmbienteSelecionadoId(catalogo["Térreo"][0]?.id ?? "");
         }
 
-        await fetchAiMapa(
+        // Libera itinerário/mapa ANTES da IA — Gemini não pode travar a UI
+        setCarregando(false);
+
+        void fetchAiMapa(
           destaqueLocal?.andar || "Térreo",
           destaqueLocal?.sala || ""
         );
+      } catch (err) {
+        console.error("Erro ao carregar mapa de salas:", err);
+        if (!cancelado) {
+          setAlocacoes([]);
+          setDadosSupabase([]);
+          setMinhasAulasHoje([]);
+          setDestaque(null);
+        }
       } finally {
-        setCarregando(false);
+        if (!cancelado) setCarregando(false);
       }
     }
 
     void carregarMapa();
+    return () => {
+      cancelado = true;
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [role, usuarioLogado?.ra, usuarioLogado?.nome, usuarioLogado?.curso]);
+  }, [
+    role,
+    usuarioLogado?.ra,
+    usuarioLogado?.id,
+    usuarioLogado?.nome,
+    usuarioLogado?.curso,
+  ]);
 
   function handleTrocarAndar(andar: AndarLabel) {
     setAndarSelecionado(andar);

@@ -16,6 +16,7 @@ import {
 } from "lucide-react";
 import { toast } from "sonner";
 import { ModalFeedback } from "@/components/ModalFeedback";
+import { urlComCacheBust } from "@/lib/utils";
 import {
   limparSessaoProfessor,
   lerSessaoProfessor,
@@ -460,7 +461,8 @@ export function ProfessorSettingsControl() {
           .from("avatares")
           .getPublicUrl(nomeArquivo);
 
-        novaFotoUrl = publicUrl.publicUrl;
+        // Cache bust: mesma path no CDN não deve reutilizar bitmap antigo
+        novaFotoUrl = urlComCacheBust(publicUrl.publicUrl);
       }
 
       const payload: Record<string, unknown> = {

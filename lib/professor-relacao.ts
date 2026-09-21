@@ -7,8 +7,14 @@
 export const SELECT_TURMA_COM_PROFESSOR =
   "*, professores!professor_id(id, nome, titulacao)";
 
-export const SELECT_TURMA_MAPA_COM_PROFESSOR =
-  "id, curso, sala, andar, dias_aula, turno, professor_id, professores!professor_id(nome)";
+/**
+ * Select do mapa (mesmo join do select padrão).
+ * Fallback sem hint: `*, professores(id, nome, titulacao)`.
+ */
+export const SELECT_TURMA_MAPA_COM_PROFESSOR = SELECT_TURMA_COM_PROFESSOR;
+
+export const SELECT_TURMA_MAPA_JOIN_SIMPLES =
+  "*, professores(id, nome, titulacao)";
 
 /** Extrai o objeto aninhado `professores` de um select com join do Supabase. */
 export function professorDoJoin(

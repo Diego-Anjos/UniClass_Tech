@@ -9,7 +9,7 @@ type AlunoAvatarProps = {
   fallback?: string;
 };
 
-/** Avatar circular: foto pública ou iniciais. */
+/** Avatar circular: foto pública (sessão global) ou iniciais. */
 export function AlunoAvatar({
   nome,
   fotoUrl,
@@ -17,12 +17,14 @@ export function AlunoAvatar({
   fallback = "AL",
 }: AlunoAvatarProps) {
   const iniciais = iniciaisDoAluno(nome);
+  const src = fotoUrl?.trim() || null;
 
-  if (fotoUrl) {
+  if (src) {
     return (
       // eslint-disable-next-line @next/next/no-img-element
       <img
-        src={fotoUrl}
+        key={src}
+        src={src}
         alt=""
         className={`rounded-full object-cover shrink-0 bg-zinc-800 ${className}`}
       />
