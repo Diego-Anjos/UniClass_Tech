@@ -4,6 +4,7 @@ import { FormEvent, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { GraduationCap } from "lucide-react";
+import { LegalConsentFooter } from "@/components/legal-consent";
 import { limparSessaoAluno } from "@/lib/aluno-session";
 import { limparSessaoProfessor } from "@/lib/professor-session";
 import { salvarSessaoAdmin } from "@/lib/admin-session";
@@ -115,17 +116,7 @@ export default function LoginAdmPage() {
             </div>
           </form>
 
-          <p className="text-center text-xs text-zinc-600 mt-8">
-            Ao continuar, você concorda com nossos{" "}
-            <Link href="#" className="underline hover:text-zinc-400">
-              Termos de Serviço
-            </Link>{" "}
-            e{" "}
-            <Link href="#" className="underline hover:text-zinc-400">
-              Política de Privacidade
-            </Link>
-            .
-          </p>
+          <LegalConsentFooter />
         </div>
       </div>
 
