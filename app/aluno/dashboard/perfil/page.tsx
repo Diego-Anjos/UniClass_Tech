@@ -1,22 +1,12 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import Link from "next/link";
 import { useRouter } from "next/navigation";
 import {
-  LayoutDashboard,
-  ClipboardList,
-  CalendarCheck,
-  CalendarDays,
-  BookOpen,
-  Map,
-  LogOut,
   Camera,
   GraduationCap,
-  Settings,
   User,
   MapPin,
-  MessageSquare,
   Pencil,
   X,
   Loader2,
@@ -28,7 +18,6 @@ import { toast } from "sonner";
 import { urlComCacheBust } from "@/lib/utils";
 import {
   atualizarSessaoAlunoLocal,
-  limparSessaoAluno,
   lerSessaoAluno,
   useAlunoSession,
 } from "@/lib/aluno-session";
@@ -132,16 +121,6 @@ type AlunoPerfil = {
   endereco: string;
   foto_url: string | null;
 };
-
-const navItems = [
-  { icon: LayoutDashboard, label: "Visão Geral",         href: "/aluno/dashboard",            active: false },
-  { icon: ClipboardList,   label: "Boletim e Notas",     href: "/aluno/dashboard/notas",      active: false },
-  { icon: CalendarDays,    label: "Meu Calendário",       href: "/aluno/dashboard/calendario", active: false },
-  { icon: CalendarCheck,   label: "Frequência",           href: "/aluno/dashboard/frequencia", active: false },
-  { icon: BookOpen,        label: "Grade e Matérias",     href: "/aluno/dashboard/grade",      active: false },
-  { icon: Map,             label: "Mapa de Salas e Labs", href: "/aluno/dashboard/mapa",       active: false },
-  { icon: MessageSquare,   label: "Contato",              href: "/aluno/dashboard/contato",    active: false },
-];
 
 export default function AlunoPerfilPage() {
   const router = useRouter();
@@ -583,7 +562,7 @@ export default function AlunoPerfilPage() {
 
   if (carregandoSessao || !sessaoAluno) {
     return (
-      <div className="flex h-screen items-center justify-center bg-black text-zinc-400 text-sm">
+      <div className="flex items-center justify-center py-20 text-zinc-400 text-sm">
         Carregando sessão...
       </div>
     );
@@ -593,92 +572,8 @@ export default function AlunoPerfilPage() {
   const raExibicao = alunoLogado?.ra || sessaoAluno.ra || "---";
 
   return (
-    <div className="flex h-screen bg-black text-white overflow-hidden">
-      <aside className="hidden md:flex flex-col w-64 shrink-0 bg-zinc-950 border-r border-zinc-800">
-        <div className="flex items-center gap-2.5 px-5 py-5 border-b border-zinc-800">
-          <div className="w-8 h-8 bg-gradient-to-br from-zinc-800 to-zinc-950 border border-zinc-700/50 shadow-[0_0_15px_rgba(255,255,255,0.05)] flex items-center justify-center rounded-lg shrink-0">
-            <GraduationCap className="w-5 h-5 text-white" />
-          </div>
-          <span className="text-sm tracking-tight">
-            <span className="text-white font-bold">UniClass</span>
-            <span className="text-zinc-400 font-light">Tech</span>
-          </span>
-        </div>
-
-        <div className="px-4 py-5 border-b border-zinc-800">
-          <div className="flex items-center justify-between gap-3">
-            <div className="flex items-center gap-3 min-w-0">
-              <div className="relative shrink-0">
-                <button
-                  type="button"
-                  onClick={abrirSeletorFoto}
-                  disabled={uploadingFoto || loadingRemocao}
-                  className="rounded-full cursor-pointer hover:opacity-90 transition-opacity disabled:opacity-50"
-                  aria-label="Trocar foto de perfil"
-                >
-                  <AlunoAvatar
-                    nome={nomeExibicao}
-                    fotoUrl={fotoUrl}
-                    className="w-10 h-10 text-base"
-                    fallback="UN"
-                  />
-                </button>
-                <button
-                  type="button"
-                  onClick={abrirSeletorFoto}
-                  disabled={uploadingFoto || loadingRemocao}
-                  className="absolute -bottom-0.5 -right-0.5 w-4 h-4 bg-zinc-700 border border-zinc-900 rounded-full flex items-center justify-center cursor-pointer hover:bg-zinc-600 transition-colors disabled:opacity-50"
-                  aria-label="Trocar foto de perfil"
-                >
-                  {uploadingFoto ? (
-                    <Loader2 className="w-2.5 h-2.5 text-zinc-300 animate-spin" />
-                  ) : (
-                    <Camera className="w-2.5 h-2.5 text-zinc-300" />
-                  )}
-                </button>
-              </div>
-              <div className="min-w-0">
-                <p className="text-sm font-medium truncate">{nomeExibicao}</p>
-                <p className="text-xs text-zinc-500">RA: {raExibicao}</p>
-              </div>
-            </div>
-            <Link href="/aluno/dashboard/perfil" className="text-zinc-500 hover:text-white transition-colors shrink-0">
-              <Settings className="w-4 h-4" />
-            </Link>
-          </div>
-        </div>
-
-        <nav className="flex flex-col gap-0.5 px-2 py-4 flex-1">
-          {navItems.map(({ icon: Icon, label, href, active }) => (
-            <a
-              key={label}
-              href={href}
-              className={`flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm transition-colors ${
-                active
-                  ? "bg-zinc-800 text-white font-medium"
-                  : "text-zinc-400 hover:bg-zinc-900 hover:text-white"
-              }`}
-            >
-              <Icon className="w-4 h-4 shrink-0" />
-              {label}
-            </a>
-          ))}
-        </nav>
-
-        <div className="px-2 py-4 border-t border-zinc-800">
-          <a
-            href="/"
-            onClick={() => limparSessaoAluno()}
-            className="flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm text-zinc-500 hover:bg-zinc-900 hover:text-white transition-colors"
-          >
-            <LogOut className="w-4 h-4 shrink-0" />
-            Sair
-          </a>
-        </div>
-      </aside>
-
-      <main className="flex-1 overflow-y-auto">
-        <div className="max-w-6xl mx-auto px-6 sm:px-10 py-10">
+    <>
+      <div className="max-w-6xl mx-auto px-4 sm:px-6 lg:px-10 py-6 sm:py-10">
           <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 mb-8">
             <div>
               <h1 className="text-2xl font-semibold tracking-tight">Meu Perfil</h1>
@@ -830,8 +725,7 @@ export default function AlunoPerfilPage() {
               </div>
             </>
           )}
-        </div>
-      </main>
+      </div>
 
       {modalEditarAberto && (
         <div className="fixed inset-0 z-[60] flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm">
@@ -939,6 +833,6 @@ export default function AlunoPerfilPage() {
         titulo={modalFeedback.titulo}
         mensagem={modalFeedback.mensagem}
       />
-    </div>
+    </>
   );
 }

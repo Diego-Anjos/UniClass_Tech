@@ -33,6 +33,8 @@ export const DIAS_SEMANA = [
 
 export type TurmaMapa = {
   id?: string | null;
+  /** Código da turma (ex.: A1) — usado para casar com `alunos.turma`. */
+  codigo?: string | null;
   curso?: string | null;
   professor?: string | null;
   professor_id?: string | null;
@@ -306,6 +308,7 @@ export function normalizarTurma(raw: unknown): TurmaMapa | null {
 
   return {
     id: t.id != null ? String(t.id) : null,
+    codigo: t.codigo != null ? String(t.codigo) : null,
     curso,
     professor,
     professor_id,

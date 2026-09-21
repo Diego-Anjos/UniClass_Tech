@@ -1,32 +1,16 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import Link from "next/link";
-import {
-  LayoutDashboard,
-  ClipboardList,
-  CalendarCheck,
-  CalendarDays,
-  BookOpen,
-  Map as MapIcon,
-  LogOut,
-  Camera,
-  GraduationCap,
-  Settings,
-  MessageSquare,
-  Headphones,
-  User,
-  Ticket,
-  Clock,
-} from "lucide-react";
+import { Headphones, User, Ticket, Clock } from "lucide-react";
 import { supabase } from "@/lib/supabase";
-import { AlunoAvatar } from "@/components/aluno/aluno-avatar";
 import { ModalFeedback } from "@/components/ModalFeedback";
 import { toast } from "sonner";
 import {
-  limparSessaoAluno,
-  useAlunoSession,
-} from "@/lib/aluno-session";
+  DESTINATARIO_ADMIN,
+  DESTINATARIO_PROFESSOR,
+  normalizarTipoDestinatario,
+} from "@/lib/chamados";
+import { useAlunoSession } from "@/lib/aluno-session";
 import {
   extrairAtendimentoSalvo,
   type AtendimentoPreferencias,
@@ -47,16 +31,6 @@ type DisciplinaAluno = {
   nomeDisciplina: string;
   professor: ProfessorContato;
 };
-
-const navItems = [
-  { icon: LayoutDashboard, label: "Visão Geral", href: "/aluno/dashboard", active: false },
-  { icon: ClipboardList, label: "Boletim e Notas", href: "/aluno/dashboard/notas", active: false },
-  { icon: CalendarDays, label: "Meu Calendário", href: "/aluno/dashboard/calendario", active: false },
-  { icon: CalendarCheck, label: "Frequência", href: "/aluno/dashboard/frequencia", active: false },
-  { icon: BookOpen, label: "Grade e Matérias", href: "/aluno/dashboard/grade", active: false },
-  { icon: MapIcon, label: "Mapa de Salas e Labs", href: "/aluno/dashboard/mapa", active: false },
-  { icon: MessageSquare, label: "Contato", href: "/aluno/dashboard/contato", active: true },
-];
 
 const inputClass =
   "w-full bg-black border border-zinc-800 rounded-md text-sm text-white px-3 py-2.5 placeholder:text-zinc-600 focus:outline-none focus:border-zinc-600 transition-colors";
@@ -190,7 +164,8 @@ function mapearChamadoAluno(row: Record<string, unknown>): ChamadoAluno {
 }
 
 function destinoChamado(chamado: ChamadoAluno) {
-  return chamado.destinatario_tipo === "Professor"
+  return normalizarTipoDestinatario(chamado.destinatario_tipo) ===
+    DESTINATARIO_PROFESSOR
     ? chamado.destinatario_nome || "Professor"
     : "Suporte / Secretaria";
 }
@@ -324,7 +299,40 @@ export default function AlunoContatoPage() {
           }
         }
 
-        // 3) Fallback: turmas do curso do aluno
+        // 3) Fallback: matrícula em alunos.turma (código)
+        if (turmasRows.length === 0 && alunoRa) {
+          const { data: fichas } = await supabase
+            .from("alunos")
+            .select("turma")
+            .eq("ra", alunoRa);
+
+          const codigos = [
+            ...new Set(
+              (fichas ?? [])
+                .map((f) => String(f.turma ?? "").trim())
+                .filter(Boolean)
+            ),
+          ];
+
+          if (codigos.length > 0) {
+            const { data: porCodigo } = await supabase
+              .from("turmas")
+              .select(SELECT_TURMA_CONTATO)
+              .in("codigo", codigos);
+
+            if (cancelado) return;
+
+            for (const t of (porCodigo ?? []) as Record<string, unknown>[]) {
+              const id = String(t.id ?? "").trim();
+              if (id && !idsVistos.has(id)) {
+                idsVistos.add(id);
+                turmasRows.push(t);
+              }
+            }
+          }
+        }
+
+        // 4) Fallback: turmas do curso do aluno
         if (turmasRows.length === 0 && alunoCurso) {
           const { data: turmasCurso, error: turmasCursoError } = await supabase
             .from("turmas")
@@ -487,16 +495,34 @@ export default function AlunoContatoPage() {
 
     setEnviandoSuporte(true);
     try {
-      const { error } = await supabase.from("chamados").insert([
-        {
-          ra_aluno: aluno.ra,
-          nome_aluno: aluno.nome,
-          assunto: assuntoSelecionado,
-          mensagem: textoMensagem,
-          destinatario_tipo: "Secretaria",
-          destinatario_nome: "Suporte / Secretaria",
-        },
-      ]);
+      const payloadBase = {
+        ra_aluno: aluno.ra,
+        nome_aluno: aluno.nome,
+        assunto: assuntoSelecionado,
+        mensagem: textoMensagem,
+        destinatario_tipo: DESTINATARIO_ADMIN,
+        destinatario_nome: "Suporte / Secretaria",
+        professor_id: null as string | null,
+        tipo_destinatario: DESTINATARIO_ADMIN,
+      };
+
+      let { error } = await supabase.from("chamados").insert([payloadBase]);
+
+      // Compat: coluna professor_id / tipo_destinatario ainda não migrada
+      if (
+        error &&
+        /professor_id|tipo_destinatario/i.test(error.message)
+      ) {
+        const { professor_id: _p, tipo_destinatario: _t, ...legado } =
+          payloadBase;
+        const retry = await supabase.from("chamados").insert([
+          {
+            ...legado,
+            destinatario_tipo: "Secretaria",
+          },
+        ]);
+        error = retry.error;
+      }
 
       if (error) {
         console.error("Erro ao inserir chamado:", error.message);
@@ -541,6 +567,7 @@ export default function AlunoContatoPage() {
     }
 
     if (
+      !professorSelecionado?.id ||
       !professorSelecionado?.nome ||
       !turmaSelecionadaId ||
       !assuntoProfessor.trim() ||
@@ -549,7 +576,7 @@ export default function AlunoContatoPage() {
       abrirFeedback(
         "atencao",
         "Campos incompletos",
-        "Selecione a disciplina e preencha o assunto e a mensagem para o professor."
+        "Selecione a disciplina/professor e preencha o assunto e a mensagem."
       );
       return;
     }
@@ -559,16 +586,33 @@ export default function AlunoContatoPage() {
 
     setEnviandoProfessor(true);
     try {
-      const { error } = await supabase.from("chamados").insert([
-        {
-          ra_aluno: aluno.ra,
-          nome_aluno: aluno.nome,
-          assunto: assuntoSelecionado,
-          mensagem: textoMensagem,
-          destinatario_tipo: "Professor",
-          destinatario_nome: professorSelecionado.nome,
-        },
-      ]);
+      const payloadBase = {
+        ra_aluno: aluno.ra,
+        nome_aluno: aluno.nome,
+        assunto: assuntoSelecionado,
+        mensagem: textoMensagem,
+        destinatario_tipo: DESTINATARIO_PROFESSOR,
+        destinatario_nome: professorSelecionado.nome,
+        professor_id: professorSelecionado.id,
+        tipo_destinatario: DESTINATARIO_PROFESSOR,
+      };
+
+      let { error } = await supabase.from("chamados").insert([payloadBase]);
+
+      if (
+        error &&
+        /professor_id|tipo_destinatario/i.test(error.message)
+      ) {
+        const { professor_id: _p, tipo_destinatario: _t, ...legado } =
+          payloadBase;
+        const retry = await supabase.from("chamados").insert([
+          {
+            ...legado,
+            destinatario_tipo: "Professor",
+          },
+        ]);
+        error = retry.error;
+      }
 
       if (error) {
         console.error("Erro ao inserir chamado para professor:", error.message);
@@ -604,95 +648,22 @@ export default function AlunoContatoPage() {
 
   if (carregandoSessao || !aluno) {
     return (
-      <div className="flex h-screen items-center justify-center bg-black text-zinc-400 text-sm">
+      <div className="flex items-center justify-center py-20 text-zinc-400 text-sm">
         Carregando sessão...
       </div>
     );
   }
 
   return (
-    <div className="flex h-screen bg-black text-white overflow-hidden">
-      <aside className="hidden md:flex flex-col w-64 shrink-0 bg-zinc-950 border-r border-zinc-800">
-        <div className="flex items-center gap-2.5 px-5 py-5 border-b border-zinc-800">
-          <div className="w-8 h-8 bg-gradient-to-br from-zinc-800 to-zinc-950 border border-zinc-700/50 shadow-[0_0_15px_rgba(255,255,255,0.05)] flex items-center justify-center rounded-lg shrink-0">
-            <GraduationCap className="w-5 h-5 text-white" />
-          </div>
-          <span className="text-sm tracking-tight">
-            <span className="text-white font-bold">UniClass</span>
-            <span className="text-zinc-400 font-light">Tech</span>
-          </span>
-        </div>
-
-        <div className="px-4 py-5 border-b border-zinc-800">
-          <div className="flex items-center justify-between gap-3">
-            <div className="flex items-center gap-3 min-w-0">
-              <div className="relative shrink-0">
-                <AlunoAvatar
-                  nome={aluno?.nome || alunoLogado?.nome || "Estudante"}
-                  fotoUrl={alunoLogado?.foto_url}
-                  className="w-10 h-10 text-base"
-                  fallback="UN"
-                />
-                <div className="absolute -bottom-0.5 -right-0.5 w-4 h-4 bg-zinc-700 border border-zinc-900 rounded-full flex items-center justify-center cursor-pointer hover:bg-zinc-600 transition-colors">
-                  <Camera className="w-2.5 h-2.5 text-zinc-300" />
-                </div>
-              </div>
-              <div className="min-w-0">
-                <p className="text-sm font-medium truncate">
-                  {aluno?.nome || "Carregando..."}
-                </p>
-                <p className="text-xs text-zinc-500">
-                  RA: {aluno?.ra || "---"}
-                </p>
-              </div>
-            </div>
-            <Link
-              href="/aluno/dashboard/perfil"
-              className="text-zinc-500 hover:text-white transition-colors shrink-0"
-            >
-              <Settings className="w-4 h-4" />
-            </Link>
-          </div>
-        </div>
-
-        <nav className="flex flex-col gap-0.5 px-2 py-4 flex-1">
-          {navItems.map(({ icon: Icon, label, href, active }) => (
-            <a
-              key={label}
-              href={href}
-              className={`flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm transition-colors ${
-                active
-                  ? "bg-zinc-800 text-white font-medium"
-                  : "text-zinc-400 hover:bg-zinc-900 hover:text-white"
-              }`}
-            >
-              <Icon className="w-4 h-4 shrink-0" />
-              {label}
-            </a>
-          ))}
-        </nav>
-
-        <div className="px-2 py-4 border-t border-zinc-800">
-          <a
-            href="/"
-            onClick={() => limparSessaoAluno()}
-            className="flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm text-zinc-500 hover:bg-zinc-900 hover:text-white transition-colors"
-          >
-            <LogOut className="w-4 h-4 shrink-0" />
-            Sair
-          </a>
-        </div>
-      </aside>
-
-      <main className="flex-1 overflow-y-auto">
-        <div className="max-w-6xl mx-auto px-6 sm:px-10 py-10">
+    <>
+      <div className="max-w-6xl mx-auto px-4 sm:px-6 lg:px-10 py-6 sm:py-10">
           <div className="mb-8">
             <h1 className="text-2xl font-semibold tracking-tight">
               Central de Atendimento
             </h1>
             <p className="text-sm text-zinc-400 mt-1">
-              Precisa de ajuda? Fale com o suporte institucional ou diretamente com
-              seus professores.
+              Escolha para quem é a mensagem: Secretaria Acadêmica ou Professor da
+              Disciplina.
             </p>
           </div>
 
@@ -702,8 +673,11 @@ export default function AlunoContatoPage() {
                 <div className="w-8 h-8 rounded-lg bg-zinc-800 border border-zinc-700/50 flex items-center justify-center shrink-0">
                   <Headphones className="w-4 h-4 text-zinc-300" />
                 </div>
-                <h2 className="text-sm font-semibold">Suporte / Secretaria</h2>
+                <h2 className="text-sm font-semibold">Secretaria Acadêmica</h2>
               </div>
+              <p className="text-[11px] text-zinc-500 uppercase tracking-widest mb-1">
+                Para quem: Secretaria / Financeiro / TI
+              </p>
               <p className="text-sm text-zinc-400 mb-6">
                 Para dúvidas financeiras, documentos, matrículas ou problemas
                 técnicos.
@@ -764,8 +738,11 @@ export default function AlunoContatoPage() {
                 <div className="w-8 h-8 rounded-lg bg-zinc-800 border border-zinc-700/50 flex items-center justify-center shrink-0">
                   <User className="w-4 h-4 text-zinc-300" />
                 </div>
-                <h2 className="text-sm font-semibold">Falar com Professor</h2>
+                <h2 className="text-sm font-semibold">Professor da Disciplina</h2>
               </div>
+              <p className="text-[11px] text-zinc-500 uppercase tracking-widest mb-1">
+                Para quem: Professor vinculado à sua turma
+              </p>
               <p className="text-sm text-zinc-400 mb-6">
                 Para dúvidas sobre matérias, notas, faltas ou trabalhos.
               </p>
@@ -945,8 +922,7 @@ export default function AlunoContatoPage() {
               </ul>
             )}
           </section>
-        </div>
-      </main>
+      </div>
 
       <ModalFeedback
         aberto={modalFeedback.aberto}
@@ -955,6 +931,6 @@ export default function AlunoContatoPage() {
         titulo={modalFeedback.titulo}
         mensagem={modalFeedback.mensagem}
       />
-    </div>
+    </>
   );
 }

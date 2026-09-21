@@ -185,7 +185,7 @@ export default function AdmDashboard() {
       </div>
 
       {/* ── Cards de Métricas ─────────────────────────────────────────── */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 mb-8">
+      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4 mb-8">
         {metricas.map((m) => {
           const Icon = m.icon;
           return (
@@ -236,7 +236,7 @@ export default function AdmDashboard() {
           )}
         </div>
 
-        <div className="overflow-x-auto">
+        <div className="w-full overflow-x-auto">
           <table className="w-full text-left min-w-[640px]">
             <thead>
               <tr className="border-b border-zinc-800">

@@ -1,39 +1,11 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import Link from "next/link";
-import {
-  LayoutDashboard,
-  BookOpen,
-  UserCheck,
-  Sparkles,
-  MessageSquare,
-  Map as MapIcon,
-  CalendarDays,
-  LogOut,
-  GraduationCap,
-  Search,
-  Send,
-  Clock,
-} from "lucide-react";
+import { Search, Send, Clock } from "lucide-react";
 import { supabase } from "@/lib/supabase";
-import { ProfessorSettingsControl } from "@/components/professor/config-modal";
-import { ProfessorAvatar } from "@/components/professor/professor-avatar";
 import { ModalFeedback } from "@/components/ModalFeedback";
-import {
-  limparSessaoProfessor,
-  useProfessorSession,
-} from "@/lib/professor-session";
-
-const navItems = [
-  { icon: LayoutDashboard, label: "Visão Geral", href: "/professor/dashboard", active: false },
-  { icon: BookOpen, label: "Turmas e Notas", href: "/professor/dashboard/notas", active: false },
-  { icon: UserCheck, label: "Chamada Rápida", href: "/professor/dashboard/chamada", active: false },
-  { icon: CalendarDays, label: "Agenda Semestral", href: "/professor/dashboard/agenda", active: false },
-  { icon: MapIcon, label: "Mapa de Salas", href: "/professor/dashboard/mapa", active: false },
-  { icon: Sparkles, label: "Insights IA", href: "/professor/dashboard/insights", active: false },
-  { icon: MessageSquare, label: "Mensagens", href: "/professor/dashboard/mensagens", active: true },
-];
+import { ehChamadoDoProfessor } from "@/lib/chamados";
+import { useProfessorSession } from "@/lib/professor-session";
 
 type StatusChamado = "aberto" | "respondido";
 
@@ -151,7 +123,7 @@ export default function ProfessorMensagensPage() {
 
   async function carregarMensagens(manterSelecionadoId?: string | null) {
     const professor = professorLogado;
-    if (!professor?.nome) {
+    if (!professor?.id) {
       setMensagens([]);
       setMensagemSelecionada(null);
       return;
@@ -159,13 +131,37 @@ export default function ProfessorMensagensPage() {
 
     setCarregando(true);
     try {
-      // Sessão já vem do localStorage via useProfessorSession (uniclass_prof_session)
-      const { data, error } = await supabase
+      // Preferência: tickets com professor_id do docente logado
+      let { data, error } = await supabase
         .from("chamados")
         .select("*")
-        .eq("destinatario_tipo", "Professor")
-        .ilike("destinatario_nome", `%${professor.nome}%`)
+        .eq("professor_id", professor.id)
         .order("data_abertura", { ascending: false });
+
+      // Compat: coluna professor_id ainda não existe → legado por tipo + nome
+      if (error && /professor_id/i.test(error.message)) {
+        const legado = await supabase
+          .from("chamados")
+          .select("*")
+          .in("destinatario_tipo", ["professor", "Professor"])
+          .order("data_abertura", { ascending: false });
+        data = legado.data;
+        error = legado.error;
+      } else if (!error) {
+        // Também inclui legado sem FK (mesmo tipo professor + nome)
+        const legado = await supabase
+          .from("chamados")
+          .select("*")
+          .is("professor_id", null)
+          .in("destinatario_tipo", ["professor", "Professor"])
+          .order("data_abertura", { ascending: false });
+
+        if (!legado.error && legado.data?.length) {
+          const ids = new Set((data ?? []).map((r) => String(r.id)));
+          const extras = legado.data.filter((r) => !ids.has(String(r.id)));
+          data = [...(data ?? []), ...extras];
+        }
+      }
 
       if (error) {
         console.error("Erro ao buscar chamados do professor:", error.message);
@@ -174,9 +170,17 @@ export default function ProfessorMensagensPage() {
         return;
       }
 
-      const lista = ((data ?? []) as Record<string, unknown>[]).map(
-        mapearChamado
-      );
+      const lista = ((data ?? []) as Record<string, unknown>[])
+        .filter((row) =>
+          ehChamadoDoProfessor(row, professor.id, professor.nome)
+        )
+        .map(mapearChamado)
+        .sort(
+          (a, b) =>
+            new Date(b.data_abertura).getTime() -
+            new Date(a.data_abertura).getTime()
+        );
+
       setMensagens(lista);
 
       if (lista.length === 0) {
@@ -257,93 +261,15 @@ export default function ProfessorMensagensPage() {
 
   if (carregandoSessao || !professorLogado) {
     return (
-      <div className="flex h-screen items-center justify-center bg-black text-zinc-400 text-sm">
+      <div className="p-8 text-center text-zinc-400 text-sm">
         Carregando sessão...
       </div>
     );
   }
 
-
   return (
-    <div className="flex h-screen bg-black text-white overflow-hidden">
-      <aside className="hidden md:flex flex-col w-64 shrink-0 bg-zinc-950 border-r border-zinc-800">
-        <div className="flex items-center gap-2.5 px-5 py-5 border-b border-zinc-800">
-          <div className="w-8 h-8 bg-gradient-to-br from-zinc-800 to-zinc-950 border border-zinc-700/50 shadow-[0_0_15px_rgba(255,255,255,0.05)] flex items-center justify-center rounded-lg shrink-0">
-            <GraduationCap className="w-5 h-5 text-white" />
-          </div>
-          <span className="text-sm tracking-tight">
-            <span className="text-white font-bold">UniClass</span>
-            <span className="text-zinc-400 font-light">Tech</span>
-          </span>
-        </div>
-
-        <div className="px-4 py-5 border-b border-zinc-800">
-          <div className="flex items-center justify-between gap-3">
-            <div className="flex items-center gap-3 min-w-0">
-              <ProfessorAvatar
-                nome={professorLogado.nome || professorLogado.nomeCompletoTitulo}
-                fotoUrl={professorLogado.foto_url}
-                className="w-10 h-10 text-sm"
-              />
-              <div className="min-w-0">
-                <p className="text-sm font-medium truncate">
-                  {professorLogado.nomeCompletoTitulo}
-                </p>
-                <p className="text-xs text-zinc-500 truncate">
-                  {professorLogado.area_atuacao}
-                </p>
-              </div>
-            </div>
-            <ProfessorSettingsControl />
-          </div>
-        </div>
-
-        <nav className="flex flex-col gap-0.5 px-2 py-4 flex-1">
-          {navItems.map(({ icon: Icon, label, href, active }) =>
-            href.startsWith("/professor/dashboard") ? (
-              <Link
-                key={label}
-                href={href}
-                className={`flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm transition-colors ${
-                  active
-                    ? "bg-zinc-800 text-white font-medium"
-                    : "text-zinc-400 hover:bg-zinc-900 hover:text-white"
-                }`}
-              >
-                <Icon className="w-4 h-4 shrink-0" />
-                {label}
-              </Link>
-            ) : (
-              <a
-                key={label}
-                href={href}
-                className={`flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm transition-colors ${
-                  active
-                    ? "bg-zinc-800 text-white font-medium"
-                    : "text-zinc-400 hover:bg-zinc-900 hover:text-white"
-                }`}
-              >
-                <Icon className="w-4 h-4 shrink-0" />
-                {label}
-              </a>
-            )
-          )}
-        </nav>
-
-        <div className="px-2 py-4 border-t border-zinc-800">
-          <a
-            href="/"
-            onClick={limparSessaoProfessor}
-            className="flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm text-zinc-500 hover:bg-zinc-900 hover:text-white transition-colors"
-          >
-            <LogOut className="w-4 h-4 shrink-0" />
-            Sair
-          </a>
-        </div>
-      </aside>
-
-      <main className="flex-1 min-w-0 overflow-hidden bg-black flex flex-col">
-        <div className="flex-1 min-h-0 flex flex-col p-8 max-w-6xl mx-auto w-full">
+    <>
+      <div className="flex flex-col min-h-0 px-4 py-6 sm:p-8 max-w-6xl mx-auto w-full">
           <div className="mb-6 shrink-0">
             <h1 className="text-2xl font-semibold tracking-tight text-white">
               Caixa de Entrada
@@ -501,8 +427,7 @@ export default function ProfessorMensagensPage() {
               )}
             </div>
           </div>
-        </div>
-      </main>
+      </div>
 
       <ModalFeedback
         aberto={modalFeedback.aberto}
@@ -511,6 +436,6 @@ export default function ProfessorMensagensPage() {
         titulo={modalFeedback.titulo}
         mensagem={modalFeedback.mensagem}
       />
-    </div>
+    </>
   );
 }

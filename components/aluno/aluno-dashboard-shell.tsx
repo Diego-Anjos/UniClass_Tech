@@ -1,94 +1,94 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import Link from "next/link";
-import { usePathname, useRouter } from "next/navigation";
+import { usePathname } from "next/navigation";
 import {
   LayoutDashboard,
-  Users,
-  GraduationCap,
+  ClipboardList,
+  CalendarCheck,
+  CalendarDays,
   BookOpen,
-  MessageSquareText,
-  Settings,
+  Map as MapIcon,
   LogOut,
-  Shield,
-  Building2,
+  Camera,
+  GraduationCap,
+  MessageSquare,
+  Settings,
   Menu,
   X,
-  Map as MapIcon,
 } from "lucide-react";
-import { lerSessaoAdmin, encerrarSessaoAdmin } from "@/lib/admin-session";
+import { AlunoAvatar } from "@/components/aluno/aluno-avatar";
+import {
+  limparSessaoAluno,
+  useAlunoSession,
+} from "@/lib/aluno-session";
 
 const navItems = [
-  { icon: LayoutDashboard, label: "Visão Geral", href: "/adm/dashboard" },
-  { icon: Users, label: "Gestão de Alunos", href: "/adm/dashboard/alunos" },
+  { icon: LayoutDashboard, label: "Visão Geral", href: "/aluno/dashboard" },
   {
-    icon: GraduationCap,
-    label: "Gestão de Professores",
-    href: "/adm/dashboard/professores",
-  },
-  { icon: BookOpen, label: "Turmas e Matrículas", href: "/adm/dashboard/turmas" },
-  { icon: MapIcon, label: "Mapa de Salas", href: "/adm/dashboard/mapa" },
-  {
-    icon: MessageSquareText,
-    label: "Chamados & Suporte",
-    href: "/adm/dashboard/chamados",
+    icon: ClipboardList,
+    label: "Boletim e Notas",
+    href: "/aluno/dashboard/notas",
   },
   {
-    icon: Settings,
-    label: "Configurações do Sistema",
-    href: "/adm/dashboard/configuracoes",
+    icon: CalendarDays,
+    label: "Meu Calendário",
+    href: "/aluno/dashboard/calendario",
   },
+  {
+    icon: CalendarCheck,
+    label: "Frequência",
+    href: "/aluno/dashboard/frequencia",
+  },
+  {
+    icon: BookOpen,
+    label: "Grade e Matérias",
+    href: "/aluno/dashboard/grade",
+  },
+  {
+    icon: MapIcon,
+    label: "Mapa de Salas e Labs",
+    href: "/aluno/dashboard/mapa",
+  },
+  { icon: MessageSquare, label: "Contato", href: "/aluno/dashboard/contato" },
 ];
 
 function isActivePath(pathname: string, href: string) {
-  if (href === "/adm/dashboard") {
+  if (href === "/aluno/dashboard") {
     return pathname === href;
   }
   return pathname === href || pathname.startsWith(`${href}/`);
 }
 
-export function AdmDashboardShell({ children }: { children: React.ReactNode }) {
+export function AlunoDashboardShell({
+  children,
+}: {
+  children: React.ReactNode;
+}) {
   const pathname = usePathname();
-  const router = useRouter();
+  const { alunoLogado, carregandoSessao } = useAlunoSession();
   const [sidebarAbertaMobile, setSidebarAbertaMobile] = useState(false);
-  const [verificandoSessao, setVerificandoSessao] = useState(true);
-  const [sessaoValida, setSessaoValida] = useState(false);
-
-  useEffect(() => {
-    const sessao = lerSessaoAdmin();
-
-    if (!sessao) {
-      encerrarSessaoAdmin();
-      setVerificandoSessao(false);
-      setSessaoValida(false);
-      router.replace("/adm/login");
-      return;
-    }
-
-    setSessaoValida(true);
-    setVerificandoSessao(false);
-  }, [router]);
 
   function fecharSidebarMobile() {
     setSidebarAbertaMobile(false);
   }
 
-  if (verificandoSessao || !sessaoValida) {
+  if (carregandoSessao) {
     return (
-      <div className="min-h-screen w-full bg-[#07090e] text-zinc-400 flex items-center justify-center text-sm">
-        Verificando sessão...
+      <div className="min-h-screen w-full bg-black text-zinc-400 flex items-center justify-center text-sm">
+        Carregando sessão...
       </div>
     );
   }
 
   return (
-    <div className="min-h-screen w-full bg-[#07090e] text-white flex flex-col md:flex-row overflow-x-hidden">
+    <div className="min-h-screen w-full bg-black text-white flex flex-col md:flex-row overflow-x-hidden">
       {/* Header mobile */}
-      <header className="md:hidden flex items-center justify-between p-4 bg-[#0c0e14] border-b border-gray-800 sticky top-0 z-40 shrink-0">
+      <header className="md:hidden flex items-center justify-between p-4 bg-zinc-950 border-b border-zinc-800 sticky top-0 z-40 shrink-0">
         <div className="flex items-center gap-2.5 min-w-0">
           <div className="w-8 h-8 bg-gradient-to-br from-zinc-800 to-zinc-950 border border-zinc-700/50 shadow-[0_0_15px_rgba(255,255,255,0.05)] flex items-center justify-center rounded-lg shrink-0">
-            <Shield className="w-5 h-5 text-white" />
+            <GraduationCap className="w-5 h-5 text-white" />
           </div>
           <span className="text-sm tracking-tight truncate">
             <span className="text-white font-bold">UniClass</span>
@@ -121,7 +121,7 @@ export function AdmDashboardShell({ children }: { children: React.ReactNode }) {
 
       {/* Sidebar */}
       <aside
-        className={`fixed inset-y-0 left-0 z-50 w-72 shrink-0 min-h-screen border-r border-gray-800/80 bg-[#0c0e14] flex flex-col transition-transform duration-300 ease-in-out md:static md:flex md:w-64 ${
+        className={`fixed inset-y-0 left-0 z-50 w-72 shrink-0 min-h-screen border-r border-zinc-800 bg-zinc-950 flex flex-col transition-transform duration-300 ease-in-out md:static md:flex md:w-64 ${
           sidebarAbertaMobile
             ? "translate-x-0"
             : "-translate-x-full md:translate-x-0"
@@ -129,7 +129,7 @@ export function AdmDashboardShell({ children }: { children: React.ReactNode }) {
       >
         <div className="flex items-center gap-2.5 px-5 py-5 border-b border-zinc-800">
           <div className="w-8 h-8 bg-gradient-to-br from-zinc-800 to-zinc-950 border border-zinc-700/50 shadow-[0_0_15px_rgba(255,255,255,0.05)] flex items-center justify-center rounded-lg shrink-0">
-            <Shield className="w-5 h-5 text-white" />
+            <GraduationCap className="w-5 h-5 text-white" />
           </div>
           <span className="text-sm tracking-tight">
             <span className="text-white font-bold">UniClass</span>
@@ -138,14 +138,35 @@ export function AdmDashboardShell({ children }: { children: React.ReactNode }) {
         </div>
 
         <div className="px-4 py-5 border-b border-zinc-800">
-          <div className="flex items-center gap-3 min-w-0">
-            <div className="w-10 h-10 rounded-full bg-zinc-800 flex items-center justify-center shrink-0">
-              <Building2 className="w-5 h-5 text-zinc-300" />
+          <div className="flex items-center justify-between gap-3">
+            <div className="flex items-center gap-3 min-w-0">
+              <div className="relative shrink-0">
+                <AlunoAvatar
+                  nome={alunoLogado?.nome || "Estudante"}
+                  fotoUrl={alunoLogado?.foto_url}
+                  className="w-10 h-10 text-base"
+                  fallback="—"
+                />
+                <div className="absolute -bottom-0.5 -right-0.5 w-4 h-4 bg-zinc-700 border border-zinc-900 rounded-full flex items-center justify-center">
+                  <Camera className="w-2.5 h-2.5 text-zinc-300" />
+                </div>
+              </div>
+              <div className="min-w-0">
+                <p className="text-sm font-medium truncate">
+                  {alunoLogado?.nome || "Estudante"}
+                </p>
+                <p className="text-xs text-zinc-500">
+                  RA: {alunoLogado?.ra || "—"}
+                </p>
+              </div>
             </div>
-            <div className="min-w-0">
-              <p className="text-sm font-medium truncate">Secretaria Acadêmica</p>
-              <p className="text-xs text-zinc-500">Acesso Root</p>
-            </div>
+            <Link
+              href="/aluno/dashboard/perfil"
+              onClick={fecharSidebarMobile}
+              className="text-zinc-500 hover:text-white transition-colors shrink-0"
+            >
+              <Settings className="w-4 h-4" />
+            </Link>
           </div>
         </div>
 
@@ -174,7 +195,7 @@ export function AdmDashboardShell({ children }: { children: React.ReactNode }) {
           <Link
             href="/"
             onClick={() => {
-              encerrarSessaoAdmin();
+              limparSessaoAluno();
               fecharSidebarMobile();
             }}
             className="flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm text-zinc-500 hover:bg-zinc-900 hover:text-white transition-colors"
@@ -185,8 +206,7 @@ export function AdmDashboardShell({ children }: { children: React.ReactNode }) {
         </div>
       </aside>
 
-      {/* Conteúdo */}
-      <main className="flex-1 min-w-0 w-full px-4 sm:px-6 py-6 sm:py-8 overflow-y-auto overflow-x-hidden">
+      <main className="flex-1 min-w-0 w-full overflow-y-auto overflow-x-hidden bg-black">
         {children}
       </main>
     </div>

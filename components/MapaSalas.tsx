@@ -175,6 +175,130 @@ function ehTurmaDoProfessor(
   return false;
 }
 
+function turmaCasaComCodigo(t: TurmaMapa, codigo: string): boolean {
+  const alvo = normalizar(codigo);
+  if (!alvo) return false;
+  return (
+    normalizar(t.codigo) === alvo ||
+    normalizar(t.id) === alvo ||
+    normalizar(t.curso) === alvo
+  );
+}
+
+/** Resolve turmas do aluno: tabela `notas` → fallback `alunos.turma`. */
+async function buscarTurmasMatriculadasDoAluno(
+  ra: string,
+  todasTurmas: TurmaMapa[]
+): Promise<TurmaMapa[]> {
+  let turmasAluno: TurmaMapa[] = [];
+
+  const { data: notasJoin, error: joinError } = await supabase
+    .from("notas")
+    .select(`turmas(${SELECT_MAPA_FALLBACK})`)
+    .eq("ra_aluno", ra);
+
+  if (joinError) {
+    console.warn(
+      "Mapa aluno: embed turmas falhou, tentando fallback:",
+      joinError.message
+    );
+    const { data: notasSimples, error: notasSimplesError } = await supabase
+      .from("notas")
+      .select("turma")
+      .eq("ra_aluno", ra);
+
+    if (notasSimplesError) {
+      console.warn(
+        "Mapa aluno: select notas simples falhou:",
+        notasSimplesError.message
+      );
+    } else {
+      const ids = [
+        ...new Set(
+          (notasSimples ?? [])
+            .map((n) => String(n.turma ?? "").trim())
+            .filter(Boolean)
+        ),
+      ];
+      if (ids.length > 0) {
+        turmasAluno = todasTurmas.filter((t) =>
+          ids.some((id) => turmaCasaComCodigo(t, id))
+        );
+      }
+    }
+  } else {
+    turmasAluno = (notasJoin ?? [])
+      .map((n) => normalizarTurma((n as { turmas?: unknown }).turmas))
+      .filter((t): t is TurmaMapa => t !== null);
+  }
+
+  // Fallback real do sistema: matrícula em `alunos.turma` (código da turma)
+  if (turmasAluno.length === 0) {
+    const { data: fichas, error: fichaError } = await supabase
+      .from("alunos")
+      .select("turma, curso")
+      .eq("ra", ra);
+
+    if (fichaError) {
+      console.error(
+        "Mapa aluno: fallback alunos.turma falhou:",
+        fichaError.message
+      );
+      return [];
+    }
+
+    const codigos = [
+      ...new Set(
+        (fichas ?? [])
+          .map((f) => String(f.turma ?? "").trim())
+          .filter(Boolean)
+      ),
+    ];
+
+    if (codigos.length === 0) return [];
+
+    turmasAluno = todasTurmas.filter((t) =>
+      codigos.some((c) => turmaCasaComCodigo(t, c))
+    );
+
+    // Se ainda não achou no cache, busca direto por codigo
+    if (turmasAluno.length === 0) {
+      let { data: porCodigo, error: codigoError } = await supabase
+        .from("turmas")
+        .select(SELECT_MAPA_FALLBACK)
+        .in("codigo", codigos);
+
+      if (codigoError) {
+        const retry = await supabase
+          .from("turmas")
+          .select(SELECT_MAPA_PRIMARY)
+          .in("codigo", codigos);
+        porCodigo = retry.data;
+        codigoError = retry.error;
+      }
+
+      if (codigoError) {
+        console.error(
+          "Mapa aluno: busca turmas por codigo falhou:",
+          codigoError.message
+        );
+      } else {
+        turmasAluno = (porCodigo ?? [])
+          .map((t) => normalizarTurma(t))
+          .filter((t): t is TurmaMapa => t !== null);
+      }
+    }
+  }
+
+  // Dedup por id/codigo
+  const mapa = new Map<string, TurmaMapa>();
+  for (const t of turmasAluno) {
+    const chave = String(t.id || t.codigo || t.curso || Math.random());
+    if (!mapa.has(chave)) mapa.set(chave, t);
+  }
+  return Array.from(mapa.values());
+}
+
 export function MapaSalas({ usuarioLogado, role }: Props) {
   const [andarSelecionado, setAndarSelecionado] =
     useState<AndarLabel>("Térreo");
@@ -201,19 +325,18 @@ export function MapaSalas({ usuarioLogado, role }: Props) {
             normalizar(d.sala_nome) === normalizar(salaRenderizada.codigo))
       );
 
-      const professor = ocupacao?.nome || undefined;
-      const disciplina = ocupacao?.disciplina || undefined;
-      const isOcupada = !!ocupacao;
-      const diasAbrev = abreviarDias(ocupacao?.dias_aula);
-      const diasLabel = diasAbrev || undefined;
-
       let isProximaAula = false;
+      let aulaDoAluno: TurmaMapa | undefined;
       if (role === "aluno") {
-        isProximaAula =
-          !!destaque &&
-          normalizar(destaque.andar) === normalizar(nomeDoAndarAtual) &&
-          (normalizar(destaque.sala) === normalizar(salaRenderizada.codigo) ||
-            normalizar(destaque.sala) === normalizar(salaRenderizada.nome));
+        aulaDoAluno = minhasAulasHoje.find((t) => {
+          const salaOk =
+            normalizar(t.sala) === normalizar(salaRenderizada.codigo) ||
+            normalizar(t.sala) === normalizar(salaRenderizada.nome);
+          if (!salaOk || !t.sala?.trim()) return false;
+          if (!t.andar?.trim()) return true;
+          return normalizar(t.andar) === normalizar(nomeDoAndarAtual);
+        });
+        isProximaAula = !!aulaDoAluno;
       } else if (role === "professor") {
         const ocupacaoTurma = alocacoes.find(
           (t) =>
@@ -226,8 +349,22 @@ export function MapaSalas({ usuarioLogado, role }: Props) {
               usuarioLogado?.nome != null ? String(usuarioLogado.nome) : null
             )
         );
-        isProximaAula = isOcupada && !!ocupacaoTurma;
+        isProximaAula = !!ocupacao && !!ocupacaoTurma;
       }
+
+      const professor =
+        ocupacao?.nome ||
+        aulaDoAluno?.professor?.trim() ||
+        undefined;
+      const disciplina =
+        ocupacao?.disciplina ||
+        aulaDoAluno?.curso?.trim() ||
+        undefined;
+      const isOcupada = !!ocupacao || isProximaAula;
+      const diasAbrev = abreviarDias(
+        ocupacao?.dias_aula ?? aulaDoAluno?.dias_aula
+      );
+      const diasLabel = diasAbrev || undefined;
 
       return {
         ...salaRenderizada,
@@ -242,6 +379,7 @@ export function MapaSalas({ usuarioLogado, role }: Props) {
     andarSelecionado,
     dadosSupabase,
     alocacoes,
+    minhasAulasHoje,
     destaque,
     role,
     usuarioLogado?.id,
@@ -275,15 +413,17 @@ export function MapaSalas({ usuarioLogado, role }: Props) {
             )
           : minhasAulasHoje;
 
-    const fonte = fonteBruta.filter(
-      (t) => !!t.sala?.trim() && !!t.andar?.trim()
-    );
+    // Aluno: aceita turma com sala (andar pode ser inferido depois)
+    const fonte = fonteBruta.filter((t) => {
+      if (role === "aluno") return !!t.sala?.trim();
+      return !!t.sala?.trim() && !!t.andar?.trim();
+    });
 
     if (fonte.length === 0) return [];
 
     const itens: ItinerarioItem[] = fonte.map((t) => {
       const sala = t.sala || "Sala a definir";
-      const andar = t.andar || "Andar a definir";
+      const andar = t.andar?.trim() || "Andar a definir";
       const disciplina = t.curso?.trim() || "Disciplina";
       const docente = t.professor?.trim();
       return {
@@ -407,82 +547,19 @@ export function MapaSalas({ usuarioLogado, role }: Props) {
           const ra = String(usuarioLogado.ra);
           const cursoAluno = String(usuarioLogado.curso ?? "");
 
-          let turmasAluno: TurmaMapa[] = [];
-          const { data: notasJoin, error: joinError } = await supabase
-            .from("notas")
-            .select(`turmas(${SELECT_MAPA_FALLBACK})`)
-            .eq("ra_aluno", ra);
-
-          if (joinError) {
-            console.warn(
-              "Mapa aluno: embed turmas falhou, usando fallback por id:",
-              joinError.message
-            );
-            const { data: notasSimples, error: notasSimplesError } =
-              await supabase
-                .from("notas")
-                .select("turma")
-                .eq("ra_aluno", ra);
-
-            if (notasSimplesError) {
-              console.error(
-                "Erro ao buscar turmas do aluno (fallback):",
-                notasSimplesError.message
-              );
-            }
-
-            const ids = [
-              ...new Set(
-                (notasSimples ?? [])
-                  .map((n) => String(n.turma ?? ""))
-                  .filter(Boolean)
-              ),
-            ];
-
-            if (ids.length > 0) {
-              let { data: turmasPorId, error: turmasPorIdError } =
-                await supabase
-                  .from("turmas")
-                  .select(SELECT_MAPA_FALLBACK)
-                  .in("id", ids);
-
-              if (turmasPorIdError) {
-                const retry = await supabase
-                  .from("turmas")
-                  .select(SELECT_MAPA_PRIMARY)
-                  .in("id", ids);
-                turmasPorId = retry.data;
-                turmasPorIdError = retry.error;
-              }
-
-              if (turmasPorIdError) {
-                console.error(
-                  "Erro ao buscar turmas por id:",
-                  turmasPorIdError.message
-                );
-              }
-
-              turmasAluno = (turmasPorId ?? [])
-                .map((t) => normalizarTurma(t))
-                .filter((t): t is TurmaMapa => t !== null);
-            }
-          } else {
-            turmasAluno = (notasJoin ?? [])
-              .map((n) =>
-                normalizarTurma((n as { turmas?: unknown }).turmas)
-              )
-              .filter((t): t is TurmaMapa => t !== null);
-          }
+          const turmasAluno = await buscarTurmasMatriculadasDoAluno(ra, todas);
 
           minhas = turmasAluno.filter((t) => ocorreHoje(t, hoje));
           if (!cancelado) setMinhasAulasHoje(minhas);
 
+          // Preferência: turma de hoje com sala alocada e relacionada ao curso
           destaqueLocal =
             minhas.find(
               (t) =>
-                !!t.sala &&
+                !!t.sala?.trim() &&
                 (cursoRelacionado(t.curso, cursoAluno) || !!t.curso)
             ) ??
+            minhas.find((t) => !!t.sala?.trim()) ??
             minhas[0] ??
             null;
         } else if (role === "professor" && usuarioLogado?.id) {
@@ -503,13 +580,33 @@ export function MapaSalas({ usuarioLogado, role }: Props) {
 
         setDestaque(destaqueLocal);
 
-        if (destaqueLocal?.andar && isAndarValido(destaqueLocal.andar)) {
-          setAndarSelecionado(destaqueLocal.andar);
-          const ambientes = catalogo[destaqueLocal.andar];
+        // Resolve andar: valor da turma ou busca no catálogo pela sala
+        let andarInicial: AndarLabel | null =
+          destaqueLocal?.andar && isAndarValido(destaqueLocal.andar)
+            ? destaqueLocal.andar
+            : null;
+
+        if (!andarInicial && destaqueLocal?.sala?.trim()) {
+          for (const andar of ANDARES) {
+            const match = catalogo[andar].find(
+              (a) =>
+                normalizar(a.codigo) === normalizar(destaqueLocal.sala) ||
+                normalizar(a.nome) === normalizar(destaqueLocal.sala)
+            );
+            if (match) {
+              andarInicial = andar;
+              break;
+            }
+          }
+        }
+
+        if (andarInicial) {
+          setAndarSelecionado(andarInicial);
+          const ambientes = catalogo[andarInicial];
           const match = ambientes.find(
             (a) =>
-              normalizar(a.codigo) === normalizar(destaqueLocal.sala) ||
-              normalizar(a.nome) === normalizar(destaqueLocal.sala)
+              normalizar(a.codigo) === normalizar(destaqueLocal?.sala) ||
+              normalizar(a.nome) === normalizar(destaqueLocal?.sala)
           );
           setAmbienteSelecionadoId(match?.id ?? ambientes[0]?.id ?? "");
         } else {
@@ -571,6 +668,7 @@ export function MapaSalas({ usuarioLogado, role }: Props) {
         : ambiente.professor
           ? `Prof. ${ambiente.professor}`
           : "";
+    const labelSuaAula = role === "aluno" ? "Sua Aula" : "Sua aula";
     const statusText =
       role === "adm" && isOcupada && ambiente.diasLabel
         ? ambiente.diasLabel
@@ -587,16 +685,16 @@ export function MapaSalas({ usuarioLogado, role }: Props) {
         onClick={() => setAmbienteSelecionadoId(ambiente.id)}
         className={`relative text-left rounded-lg border p-4 flex flex-col gap-1.5 min-h-[110px] transition-all cursor-pointer overflow-hidden ${
           isProxima
-            ? "bg-blue-950/30 border-blue-800 shadow-[0_0_24px_rgba(59,130,246,0.18)] hover:border-blue-700"
+            ? "bg-blue-500/10 border-blue-500 shadow-[0_0_24px_rgba(59,130,246,0.22)] hover:border-blue-400"
             : selecionado
               ? "border-zinc-600 bg-zinc-900"
               : isOcupada
-                ? "border-zinc-700 bg-zinc-800/80 hover:border-zinc-600"
-                : "border-emerald-500/40 bg-zinc-900 hover:border-emerald-400/70"
+                ? "border-red-500/50 bg-red-500/10 hover:border-red-400/70"
+                : "border-emerald-500/40 bg-emerald-500/10 hover:border-emerald-400/70"
         }`}
       >
         {isProxima && (
-          <div className="absolute inset-0 bg-gradient-to-br from-blue-900/20 to-transparent pointer-events-none" />
+          <div className="absolute inset-0 bg-gradient-to-br from-blue-500/15 to-transparent pointer-events-none" />
         )}
         <div className="relative flex items-start justify-between gap-2">
           <div className="min-w-0">
@@ -604,34 +702,42 @@ export function MapaSalas({ usuarioLogado, role }: Props) {
               <p
                 className={`text-xs font-semibold uppercase tracking-wider ${
                   isProxima
-                    ? "text-blue-300"
+                    ? "text-blue-400"
                     : isOcupada
-                      ? "text-zinc-400"
+                      ? "text-red-400"
                       : "text-emerald-400"
                 }`}
               >
                 {ambiente.codigo}
               </p>
               {isProxima && (
-                <span className="flex items-center gap-1 text-[10px] font-semibold px-1.5 py-0.5 rounded-full bg-blue-900 text-blue-300 border border-blue-700">
-                  <span className="w-1.5 h-1.5 rounded-full bg-blue-400 animate-pulse inline-block" />
-                  {role === "professor" ? "Sua aula" : "Próxima aula"}
+                <span className="flex items-center gap-1 text-[10px] font-semibold px-1.5 py-0.5 rounded-full bg-blue-500 text-white">
+                  <span className="w-1.5 h-1.5 rounded-full bg-white/90 animate-pulse inline-block" />
+                  {labelSuaAula}
                 </span>
               )}
             </div>
             <p
               className={`text-sm font-medium truncate ${
-                isProxima ? "text-blue-50" : "text-white"
+                isProxima
+                  ? "text-blue-100"
+                  : isOcupada
+                    ? "text-red-50"
+                    : "text-white"
               }`}
             >
-              {isOcupada
+              {isOcupada || isProxima
                 ? ambiente.disciplina || ambiente.nome
                 : ambiente.nome}
             </p>
-            {isOcupada && professorTag ? (
+            {(isOcupada || isProxima) && professorTag ? (
               <p
                 className={`text-xs mt-0.5 truncate ${
-                  isProxima ? "text-blue-200" : "text-zinc-400"
+                  isProxima
+                    ? "text-blue-300"
+                    : isOcupada
+                      ? "text-red-300/80"
+                      : "text-zinc-400"
                 }`}
               >
                 {professorTag}
@@ -647,7 +753,11 @@ export function MapaSalas({ usuarioLogado, role }: Props) {
           </div>
           <Icon
             className={`w-4 h-4 shrink-0 mt-0.5 ${
-              isProxima ? "text-blue-400" : "text-zinc-600"
+              isProxima
+                ? "text-blue-400"
+                : isOcupada
+                  ? "text-red-400/70"
+                  : "text-emerald-500/70"
             }`}
           />
         </div>
@@ -655,8 +765,8 @@ export function MapaSalas({ usuarioLogado, role }: Props) {
           <span
             className={`relative self-start mt-auto text-[10px] font-semibold px-1.5 py-0.5 rounded-full ${
               isOcupada
-                ? "bg-transparent text-zinc-400 border border-zinc-700"
-                : "bg-emerald-950 text-emerald-400 border border-emerald-900"
+                ? "bg-red-500 text-white"
+                : "bg-emerald-500 text-white"
             }`}
           >
             {statusText}
@@ -679,7 +789,7 @@ export function MapaSalas({ usuarioLogado, role }: Props) {
         : "Localize suas aulas e laboratórios disponíveis para estudo.";
 
   return (
-    <div className="max-w-7xl mx-auto px-6 sm:px-10 py-10">
+    <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-10 py-6 sm:py-10">
       <div className="mb-6">
         <h1 className="text-2xl font-semibold tracking-tight">
           Mapa de Salas e Laboratórios
@@ -743,7 +853,7 @@ export function MapaSalas({ usuarioLogado, role }: Props) {
           </div>
 
           <div className="p-6">
-            <div className="grid grid-cols-2 gap-3">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
               {alaNorte.map(renderAmbienteCard)}
             </div>
 
@@ -751,7 +861,7 @@ export function MapaSalas({ usuarioLogado, role }: Props) {
               Corredor Principal
             </div>
 
-            <div className="grid grid-cols-2 gap-3">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
               {alaSul.map(renderAmbienteCard)}
             </div>
           </div>
@@ -799,16 +909,16 @@ export function MapaSalas({ usuarioLogado, role }: Props) {
                 <span
                   className={`inline-block mt-2 text-[10px] font-semibold px-2 py-0.5 rounded-full ${
                     ambienteAtivoEhProxima
-                      ? "bg-blue-950 text-blue-400 border border-blue-900"
+                      ? "bg-blue-500 text-white"
                       : ambienteAtivoOcupado
-                        ? "bg-transparent text-zinc-400 border border-zinc-700"
-                        : "bg-emerald-950 text-emerald-400 border border-emerald-900"
+                        ? "bg-red-500 text-white"
+                        : "bg-emerald-500 text-white"
                   }`}
                 >
                   {ambienteAtivoEhProxima
-                    ? role === "professor"
-                      ? "Sua aula"
-                      : "Próxima aula"
+                    ? role === "aluno"
+                      ? "Sua Aula"
+                      : "Sua aula"
                     : ambienteAtivoOcupado
                       ? role === "adm" && ambienteAtivo.diasLabel
                         ? ambienteAtivo.diasLabel
@@ -880,20 +990,28 @@ export function MapaSalas({ usuarioLogado, role }: Props) {
                     : "Nenhuma aula com sala alocada para hoje."}
                 </p>
               ) : (
-                itinerario.map((item, i) => (
+                itinerario.map((item, i) => {
+                  const ehSuaAula = role === "aluno" && item.tipo === "aula";
+                  return (
                   <div key={`${item.label}-${i}`} className="flex gap-3">
                     <div className="flex flex-col items-center">
                       <div
                         className={`w-6 h-6 rounded-full flex items-center justify-center shrink-0 border ${
                           item.tipo === "intervalo"
                             ? "bg-zinc-900 border-zinc-700"
-                            : "bg-zinc-800 border-zinc-600"
+                            : ehSuaAula
+                              ? "bg-blue-500/20 border-blue-500"
+                              : "bg-zinc-800 border-zinc-600"
                         }`}
                       >
                         {item.tipo === "intervalo" ? (
                           <Coffee className="w-3 h-3 text-zinc-500" />
                         ) : (
-                          <Clock className="w-3 h-3 text-zinc-400" />
+                          <Clock
+                            className={`w-3 h-3 ${
+                              ehSuaAula ? "text-blue-400" : "text-zinc-400"
+                            }`}
+                          />
                         )}
                       </div>
                       {i < itinerario.length - 1 && (
@@ -902,24 +1020,42 @@ export function MapaSalas({ usuarioLogado, role }: Props) {
                     </div>
 
                     <div className="pb-4 min-w-0">
-                      <p className="text-xs text-zinc-500 mb-0.5">{item.hora}</p>
+                      <p
+                        className={`text-xs mb-0.5 ${
+                          ehSuaAula ? "text-blue-400" : "text-zinc-500"
+                        }`}
+                      >
+                        {item.hora}
+                        {ehSuaAula && (
+                          <span className="ml-2 inline-flex items-center rounded-full bg-blue-500 px-1.5 py-0.5 text-[10px] font-semibold text-white">
+                            Sua Aula
+                          </span>
+                        )}
+                      </p>
                       <p
                         className={`text-sm font-medium ${
                           item.tipo === "intervalo"
                             ? "text-zinc-500"
-                            : "text-white"
+                            : ehSuaAula
+                              ? "text-blue-100"
+                              : "text-white"
                         }`}
                       >
                         {item.label}
                       </p>
                       {item.local && (
-                        <p className="text-xs text-zinc-500 mt-0.5">
+                        <p
+                          className={`text-xs mt-0.5 ${
+                            ehSuaAula ? "text-blue-300" : "text-zinc-500"
+                          }`}
+                        >
                           {item.local}
                         </p>
                       )}
                     </div>
                   </div>
-                ))
+                  );
+                })
               )}
             </div>
           </div>

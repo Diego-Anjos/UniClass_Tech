@@ -10,6 +10,7 @@ import {
 } from "lucide-react";
 import { supabase } from "@/lib/supabase";
 import { ModalFeedback } from "@/components/ModalFeedback";
+import { ehChamadoAdmin } from "@/lib/chamados";
 
 type StatusChamado = "aberto" | "respondido";
 type FiltroStatus = "todos" | "aberto" | "respondido";
@@ -113,7 +114,10 @@ export default function AdmChamadosPage() {
         return;
       }
 
-      const lista = ((data ?? []) as Record<string, unknown>[]).map(mapearChamado);
+      // Secretaria: apenas tickets administrativos (exclui mensagens a professores)
+      const lista = ((data ?? []) as Record<string, unknown>[])
+        .filter((row) => ehChamadoAdmin(row))
+        .map(mapearChamado);
       setChamados(lista);
 
       if (lista.length === 0) {

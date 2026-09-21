@@ -44,11 +44,21 @@ function formatarDataBR(isoString: string): string {
   );
 }
 
+const UUID_REGEX =
+  /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/gi;
+
+/** Exibe ação legível; fallback para logs antigos vazios e UUIDs truncados. */
+function formatarAcaoRealizada(acao: string | null | undefined): string {
+  const texto = acao?.trim();
+  if (!texto) return "Ação de sistema (Legado)";
+  return texto.replace(UUID_REGEX, (uuid) => `${uuid.slice(0, 8)}…`);
+}
+
 type LogAuditoria = {
   id: string | number;
   created_at: string;
   usuario: string;
-  acao_realizada: string;
+  acao_realizada: string | null;
   ip: string;
 };
 
@@ -479,7 +489,7 @@ export default function ConfiguracoesSistemaPage() {
                     )}
                   </div>
 
-                  <div className="overflow-x-auto">
+                  <div className="w-full overflow-x-auto">
                     <table className="w-full text-left min-w-[720px]">
                       <thead>
                         <tr className="border-b border-zinc-800">
@@ -531,7 +541,7 @@ export default function ConfiguracoesSistemaPage() {
                                 {log.usuario}
                               </td>
                               <td className="px-4 py-4 text-sm text-zinc-400 max-w-[360px]">
-                                {log.acao_realizada}
+                                {formatarAcaoRealizada(log.acao_realizada)}
                               </td>
                               <td className="px-6 py-4 text-sm text-zinc-500 font-mono">
                                 {log.ip ?? "—"}
