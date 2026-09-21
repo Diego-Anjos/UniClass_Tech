@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState, type ChangeEvent } from "react";
+import { createPortal } from "react-dom";
 import { useRouter } from "next/navigation";
 import {
   Settings,
@@ -110,6 +111,7 @@ export function ProfessorSettingsControl() {
   const inputFotoRef = useRef<HTMLInputElement>(null);
 
   const [salvando, setSalvando] = useState(false);
+  const [portalPronto, setPortalPronto] = useState(false);
   const [modalFeedback, setModalFeedback] = useState<{
     aberto: boolean;
     tipo: "sucesso" | "erro" | "atencao";
@@ -121,6 +123,10 @@ export function ProfessorSettingsControl() {
     titulo: "",
     mensagem: "",
   });
+
+  useEffect(() => {
+    setPortalPronto(true);
+  }, []);
 
   function aplicarPreferencias(prefs: PreferenciasProfessor) {
     setTomIA(prefs.tom_ia);
@@ -536,26 +542,20 @@ export function ProfessorSettingsControl() {
 
   const iniciais = iniciaisDoProfessor(nome || professorSessao?.nome || "P");
 
-  return (
-    <>
-      <button
-        type="button"
-        onClick={() => setIsConfigOpen(true)}
-        aria-label="Abrir configurações"
-        className="text-zinc-500 hover:text-white transition-colors shrink-0 cursor-pointer"
-      >
-        <Settings className="w-4 h-4" />
-      </button>
-
-      {isConfigOpen && (
-        <div className="fixed inset-0 bg-black/75 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+  const modalConfiguracoes =
+    isConfigOpen && portalPronto
+      ? createPortal(
           <div
-            role="dialog"
-            aria-modal="true"
-            aria-labelledby="config-titulo"
-            className="bg-[#0f1117] border border-gray-800 rounded-2xl w-full max-w-2xl overflow-hidden shadow-2xl flex flex-col max-h-[90vh]"
-            onClick={(e) => e.stopPropagation()}
+            className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4"
+            onClick={fecharModal}
           >
+            <div
+              role="dialog"
+              aria-modal="true"
+              aria-labelledby="config-titulo"
+              className="w-full max-w-lg md:max-w-xl bg-[#111827] border border-gray-800 rounded-xl p-0 shadow-2xl overflow-hidden flex flex-col max-h-[90vh]"
+              onClick={(e) => e.stopPropagation()}
+            >
             <div className="flex items-start justify-between gap-4 px-6 pt-6 pb-4 border-b border-gray-800 shrink-0">
               <div>
                 <h2
@@ -614,22 +614,22 @@ export function ProfessorSettingsControl() {
                         <p className="text-xs text-zinc-500 mt-0.5 mb-3">
                           Define o estilo das recomendações do assistente.
                         </p>
-                        <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+                        <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 w-full">
                           {TOM_OPCOES.map((opcao) => (
                             <button
                               key={opcao.value}
                               type="button"
                               onClick={() => setTomIA(opcao.value)}
-                              className={`text-left rounded-xl border px-3.5 py-3 transition-colors cursor-pointer ${
+                              className={`text-left rounded-xl border px-3.5 py-3 transition-colors cursor-pointer min-w-0 ${
                                 tomIA === opcao.value
                                   ? "border-emerald-400/70 bg-emerald-950/40 ring-1 ring-emerald-400/30"
                                   : "border-gray-800 bg-black/30 hover:border-gray-700"
                               }`}
                             >
-                              <p className="text-sm font-medium text-white">
+                              <p className="text-xs font-medium text-white break-words">
                                 {opcao.label}
                               </p>
-                              <p className="text-xs text-zinc-500 mt-1 leading-snug">
+                              <p className="text-xs text-zinc-500 mt-1 leading-snug break-words">
                                 {opcao.desc}
                               </p>
                             </button>
@@ -961,7 +961,7 @@ export function ProfessorSettingsControl() {
               )}
             </div>
 
-            <div className="flex flex-wrap items-center justify-between gap-3 px-6 py-4 border-t border-gray-800 shrink-0 bg-[#0f1117]">
+            <div className="flex flex-wrap items-center justify-between gap-3 px-6 py-4 border-t border-gray-800 shrink-0 bg-[#111827]">
               <button
                 type="button"
                 onClick={handleLogout}
@@ -997,9 +997,24 @@ export function ProfessorSettingsControl() {
                 </button>
               </div>
             </div>
-          </div>
-        </div>
-      )}
+            </div>
+          </div>,
+          document.body
+        )
+      : null;
+
+  return (
+    <>
+      <button
+        type="button"
+        onClick={() => setIsConfigOpen(true)}
+        aria-label="Abrir configurações"
+        className="text-zinc-500 hover:text-white transition-colors shrink-0 cursor-pointer"
+      >
+        <Settings className="w-4 h-4" />
+      </button>
+
+      {modalConfiguracoes}
 
       <ModalFeedback
         aberto={modalFeedback.aberto}
