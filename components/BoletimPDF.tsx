@@ -7,6 +7,7 @@ export {
   BoletimPDF,
   type BoletimAluno,
   type BoletimNota,
+  type BoletimComposicaoItem,
   type BoletimDocumentProps,
 } from "@/components/pdf/BoletimPDF";
 

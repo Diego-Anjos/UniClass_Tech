@@ -497,13 +497,22 @@ export default function AlunoNotasPage() {
                     curso: aluno.curso,
                     turma: aluno.turma,
                   }}
-                  notas={dadosNotas.map((n) => ({
-                    disciplina: n.disciplina,
-                    n1: Number(n.n1.toFixed(1)),
-                    n2: n.n2 != null ? Number(n.n2.toFixed(1)) : "—",
-                    n3: n.n3 != null ? Number(n.n3.toFixed(1)) : "—",
-                    faltas: n.faltas,
-                  }))}
+                  notas={dadosNotas.map((n) => {
+                    const media = mediaParcial(n.n1, n.n2, n.n3);
+                    const composicao = composicaoN1De(n).map((c) => ({
+                      label: c.label,
+                      peso: c.peso,
+                      nota: Number.isFinite(c.nota) ? c.nota : null,
+                    }));
+                    return {
+                      disciplina: n.disciplina,
+                      n1: n.n1 > 0 ? Number(n.n1.toFixed(1)) : null,
+                      n2: n.n2 != null ? Number(n.n2.toFixed(1)) : null,
+                      media: media > 0 ? Number(media.toFixed(1)) : null,
+                      faltas: n.faltas,
+                      composicao,
+                    };
+                  })}
                   className="w-auto"
                 />
               )}

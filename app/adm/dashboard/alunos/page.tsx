@@ -864,7 +864,7 @@ export default function GestaoAlunosPage() {
           chamadaRes.error ? [] : (chamadaRes.data ?? [])
         ) as Record<string, unknown>[];
 
-        // PDF do boletim: dados reais da tabela `notas`
+        // PDF do boletim: dados reais da tabela `notas` (sem N3)
         setBoletimNotas(
           notasRows.map((row) => {
             const turmasRel = row.turmas as Record<string, unknown> | null;
@@ -876,11 +876,22 @@ export default function GestaoAlunosPage() {
                   row.turma ??
                   "Disciplina"
               ).trim() || "Disciplina";
+            const n1 = Number.isFinite(Number(row.n1)) ? Number(row.n1) : null;
+            const n2 = Number.isFinite(Number(row.n2)) ? Number(row.n2) : null;
+            const mediaFinal = Number.isFinite(Number(row.media_final))
+              ? Number(row.media_final)
+              : null;
+            const vals = [n1, n2].filter((v): v is number => v != null);
+            const media =
+              mediaFinal ??
+              (vals.length > 0
+                ? vals.reduce((a, b) => a + b, 0) / vals.length
+                : null);
             return {
               disciplina,
-              n1: Number.isFinite(Number(row.n1)) ? Number(row.n1) : "—",
-              n2: Number.isFinite(Number(row.n2)) ? Number(row.n2) : "—",
-              n3: Number.isFinite(Number(row.n3)) ? Number(row.n3) : "—",
+              n1,
+              n2,
+              media,
               faltas: Number.isFinite(Number(row.faltas))
                 ? Number(row.faltas)
                 : 0,
