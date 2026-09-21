@@ -60,6 +60,8 @@ type Turma = {
   percentual: number;
   sala: string;
   andar: string;
+  professor_id: string | null;
+  professor: string;
 };
 
 type FormDataTurma = {
@@ -68,6 +70,13 @@ type FormDataTurma = {
   turno: Turno;
   semestre: string;
   capacidade: string;
+  professor_id: string;
+};
+
+type ProfessorOption = {
+  id: string;
+  nome: string;
+  titulacao: string;
 };
 
 const SEMESTRES = Array.from({ length: 10 }, (_, i) => `${i + 1}º Semestre`);
@@ -78,6 +87,7 @@ const formInicial: FormDataTurma = {
   turno: "Manhã",
   semestre: "1º Semestre",
   capacidade: "",
+  professor_id: "",
 };
 
 const CURSOS_DISPONIVEIS = [
@@ -160,6 +170,8 @@ function mapTurma(row: Record<string, unknown>): Turma {
     percentual,
     sala: String(row.sala ?? ""),
     andar: String(row.andar ?? ""),
+    professor_id: row.professor_id ? String(row.professor_id) : null,
+    professor: String(row.professor ?? ""),
   };
 }
 
@@ -172,6 +184,9 @@ export default function TurmasMatriculasPage() {
   const [formData, setFormData] = useState<FormDataTurma>(formInicial);
   const [andarSelecionado, setAndarSelecionado] = useState("");
   const [salaSelecionada, setSalaSelecionada] = useState("");
+  const [professoresOptions, setProfessoresOptions] = useState<
+    ProfessorOption[]
+  >([]);
   const salasDisponiveis = useMemo(
     () => salasDoAndar(andarSelecionado),
     [andarSelecionado]
@@ -234,7 +249,13 @@ export default function TurmasMatriculasPage() {
     const ocupadas = new Set<string>();
     for (const raw of turmasData || []) {
       const t = normalizarTurma(raw);
-      if (!t?.professor?.trim() || !t.sala?.trim()) continue;
+      const temProfessor =
+        Boolean(t?.professor?.trim()) ||
+        Boolean(
+          (raw as Record<string, unknown>).professor_id != null &&
+            String((raw as Record<string, unknown>).professor_id).trim()
+        );
+      if (!temProfessor || !t?.sala?.trim()) continue;
       if (!ocorreHoje(t, hoje)) continue;
       ocupadas.add(chaveAlocacao(t.andar, t.sala));
     }
@@ -245,6 +266,38 @@ export default function TurmasMatriculasPage() {
 
   useEffect(() => {
     void fetchTurmas();
+  }, []);
+
+  useEffect(() => {
+    let cancelado = false;
+
+    async function fetchProfessoresOptions() {
+      const { data, error } = await supabase
+        .from("professores")
+        .select("id, nome, titulacao")
+        .order("nome", { ascending: true });
+
+      if (cancelado) return;
+
+      if (error) {
+        console.error("Erro ao buscar professores:", error.message);
+        setProfessoresOptions([]);
+        return;
+      }
+
+      setProfessoresOptions(
+        (data ?? []).map((p) => ({
+          id: String(p.id ?? ""),
+          nome: String(p.nome ?? "—"),
+          titulacao: String(p.titulacao ?? ""),
+        }))
+      );
+    }
+
+    void fetchProfessoresOptions();
+    return () => {
+      cancelado = true;
+    };
   }, []);
 
   const turmasFiltradas = useMemo(() => {
@@ -312,7 +365,28 @@ export default function TurmasMatriculasPage() {
       setAlunosDaTurma(alunos);
 
       let professores: ProfessorTurma[] = [];
-      if (curso) {
+      if (turma.professor_id) {
+        const { data, error } = await supabase
+          .from("professores")
+          .select("*")
+          .eq("id", turma.professor_id)
+          .maybeSingle();
+
+        if (error) {
+          console.error("Erro ao buscar professores da turma:", error.message);
+        } else if (data) {
+          professores = [
+            {
+              id: String(data.id ?? ""),
+              nome: String(data.nome ?? "—"),
+              titulacao: String(data.titulacao ?? "—"),
+              status: String(data.status ?? "Ativo"),
+              area_atuacao: String(data.area_atuacao ?? curso),
+            },
+          ];
+        }
+      } else if (curso) {
+        // Fallback legado: docentes da área (turmas sem professor_id)
         const { data, error } = await supabase
           .from("professores")
           .select("*")
@@ -485,6 +559,7 @@ export default function TurmasMatriculasPage() {
           ? turma.semestre
           : "1º Semestre",
       capacidade: String(turma.capacidade),
+      professor_id: turma.professor_id ?? "",
     });
     setAndarSelecionado(turma.andar || "");
     setSalaSelecionada(turma.sala || "");
@@ -527,8 +602,15 @@ export default function TurmasMatriculasPage() {
     const curso = formData.curso.trim();
     const semestre = formData.semestre.trim() || "1º Semestre";
     const capacidade = Number(formData.capacidade);
+    const professorId = formData.professor_id.trim();
 
-    if (!codigo || !curso || !formData.capacidade || Number.isNaN(capacidade)) {
+    if (
+      !codigo ||
+      !curso ||
+      !formData.capacidade ||
+      Number.isNaN(capacidade) ||
+      !professorId
+    ) {
       setFormError("Preencha todos os campos obrigatórios.");
       return;
     }
@@ -546,6 +628,9 @@ export default function TurmasMatriculasPage() {
       return;
     }
 
+    const docente = professoresOptions.find((p) => p.id === professorId);
+    const nomeProfessor = docente?.nome?.trim() || null;
+
     setIsSubmitting(true);
     const payloadBase = {
       codigo,
@@ -555,6 +640,9 @@ export default function TurmasMatriculasPage() {
       capacidade,
       andar: andarSelecionado || null,
       sala: salaSelecionada || null,
+      professor_id: professorId,
+      // Denormalizado para mapa/conflitos legados; vínculo real é professor_id
+      professor: nomeProfessor,
     };
     // Não enviar campos só de UI (ex.: alunos_matriculados) — não existem na tabela
     const { error } = editingId
@@ -1172,6 +1260,40 @@ export default function TurmasMatriculasPage() {
                     {CURSOS_DISPONIVEIS.map((curso) => (
                       <option key={curso} value={curso}>
                         {curso}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
+                <div>
+                  <label className={labelClass} htmlFor="turma-professor">
+                    Professor responsável
+                  </label>
+                  <select
+                    id="turma-professor"
+                    required
+                    value={formData.professor_id}
+                    onChange={(e) =>
+                      atualizarCampo("professor_id", e.target.value)
+                    }
+                    className={inputClass}
+                  >
+                    <option value="" disabled>
+                      Selecione o professor
+                    </option>
+                    {formData.professor_id &&
+                      !professoresOptions.some(
+                        (p) => p.id === formData.professor_id
+                      ) && (
+                        <option value={formData.professor_id}>
+                          Professor vinculado (cadastro antigo)
+                        </option>
+                      )}
+                    {professoresOptions.map((prof) => (
+                      <option key={prof.id} value={prof.id}>
+                        {prof.titulacao
+                          ? `${prof.nome} — ${prof.titulacao}`
+                          : prof.nome}
                       </option>
                     ))}
                   </select>

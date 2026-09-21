@@ -21,7 +21,6 @@ import { ProfessorAvatar } from "@/components/professor/professor-avatar";
 import { supabase } from "@/lib/supabase";
 import {
   limparSessaoProfessor,
-  parseTurmasProfessor,
   useProfessorSession,
 } from "@/lib/professor-session";
 
@@ -49,6 +48,7 @@ type TurmaOption = {
   codigo: string;
   curso: string;
   turno?: string;
+  professor_id?: string | null;
 };
 
 type EventoAgenda = {
@@ -109,7 +109,7 @@ export default function AgendaSemestralPage() {
 
   const disciplinaProfessor = professorLogado?.disciplina?.trim() || "";
 
-  // Turmas atribuídas ao professor (códigos ou vínculo por nome)
+  // Turmas vinculadas pelo FK professor_id
   useEffect(() => {
     if (!professorLogado?.id) {
       setTurmas([]);
@@ -118,38 +118,16 @@ export default function AgendaSemestralPage() {
     }
 
     let cancelado = false;
+    const professorId = professorLogado.id;
 
     async function fetchTurmas() {
       setCarregandoTurmas(true);
-      const codigos = parseTurmasProfessor(professorLogado!.turmas);
-      const vinculoProfessor = professorLogado!.nomeCompletoTitulo?.trim() ?? "";
-      const selectCols = "id, codigo, curso, turno";
+      const selectCols = "id, codigo, curso, turno, professor_id";
 
-      let data: Record<string, unknown>[] | null = null;
-      let error: { message: string } | null = null;
-
-      if (codigos.length > 0) {
-        const res = await supabase
-          .from("turmas")
-          .select(selectCols)
-          .in("codigo", codigos);
-        data = (res.data as Record<string, unknown>[] | null) ?? null;
-        error = res.error;
-      } else if (vinculoProfessor) {
-        const res = await supabase
-          .from("turmas")
-          .select(selectCols)
-          .eq("professor", vinculoProfessor);
-        data = (res.data as Record<string, unknown>[] | null) ?? null;
-        error = res.error;
-      } else {
-        if (!cancelado) {
-          setTurmas([]);
-          setTurmaSelecionada("");
-          setCarregandoTurmas(false);
-        }
-        return;
-      }
+      const { data, error } = await supabase
+        .from("turmas")
+        .select(selectCols)
+        .eq("professor_id", professorId);
 
       if (cancelado) return;
 
@@ -167,6 +145,9 @@ export default function AgendaSemestralPage() {
           codigo: String(turma.codigo ?? ""),
           curso: String(turma.curso ?? ""),
           turno: turma.turno ? String(turma.turno) : undefined,
+          professor_id: turma.professor_id
+            ? String(turma.professor_id)
+            : null,
         })
       );
 
@@ -189,7 +170,7 @@ export default function AgendaSemestralPage() {
     return () => {
       cancelado = true;
     };
-  }, [professorLogado?.id, professorLogado?.turmas, professorLogado?.nomeCompletoTitulo]);
+  }, [professorLogado?.id]);
 
   // Recarrega eventos ao trocar a turma
   useEffect(() => {

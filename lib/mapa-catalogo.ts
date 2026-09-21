@@ -33,6 +33,7 @@ export type TurmaMapa = {
   id?: string | null;
   curso?: string | null;
   professor?: string | null;
+  professor_id?: string | null;
   sala?: string | null;
   andar?: string | null;
   dias_aula?: string[] | string | null;
@@ -301,6 +302,7 @@ export function normalizarTurma(raw: unknown): TurmaMapa | null {
     id: t.id != null ? String(t.id) : null,
     curso,
     professor,
+    professor_id: t.professor_id != null ? String(t.professor_id) : null,
     sala,
     andar: t.andar != null ? String(t.andar) : null,
     dias_aula: (t.dias_aula as string[] | string | null) ?? null,

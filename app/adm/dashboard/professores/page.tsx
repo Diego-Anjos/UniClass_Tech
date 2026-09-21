@@ -260,6 +260,8 @@ function mapProfessor(row: Record<string, unknown>): Professor {
   const emailExibicao = emailInstitucional || "E-mail não vinculado";
   const turno = String(row.turno_aula ?? "Noite");
   const areaAtuacao = String(row.area_atuacao ?? "").trim();
+  // Aliases legados (ex.: pis_pasep) — prioriza a coluna canônica `pis`
+  const pisRaw = row.pis ?? row.pis_pasep ?? "";
 
   return {
     id: String(row.id ?? ""),
@@ -277,7 +279,7 @@ function mapProfessor(row: Record<string, unknown>): Professor {
     email: emailExibicao,
     iniciais: iniciaisDe(nome) || "—",
     diarioFechado: Boolean(row.diario_fechado ?? false),
-    pis: String(row.pis ?? "").trim() || "Não informado",
+    pis: String(pisRaw).trim() || "Não informado",
     lattes_url: String(row.lattes_url ?? "").trim() || "Não informado",
     email_pessoal: String(row.email_pessoal ?? "").trim() || "Não informado",
     email_institucional: emailInstitucional,
@@ -287,6 +289,21 @@ function mapProfessor(row: Record<string, unknown>): Professor {
       : "Noite",
     dias_aula: normalizarDiasAula(row.dias_aula),
   };
+}
+
+/** Remove placeholders de exibição ao popular o formulário de edição. */
+function campoEditavel(valor: string | null | undefined): string {
+  const v = String(valor ?? "").trim();
+  if (
+    !v ||
+    v === "—" ||
+    v === "Não informado" ||
+    v === "Não informada" ||
+    v === "E-mail não vinculado"
+  ) {
+    return "";
+  }
+  return v;
 }
 
 export default function GestaoProfessoresPage() {
@@ -342,9 +359,7 @@ export default function GestaoProfessoresPage() {
     setIsLoading(true);
     const { data, error } = await supabase
       .from("professores")
-      .select(
-        "id, nome, matricula, titulacao, area_atuacao, disciplina, carga_horaria_semanal, email_institucional, foto_url, status, turno_aula, dias_aula"
-      )
+      .select("*")
       .order("created_at", { ascending: false });
 
     if (error) {
@@ -418,56 +433,78 @@ export default function GestaoProfessoresPage() {
     let cancelado = false;
 
     async function carregarTurmasEInsight() {
-      const area =
-        professor.area_atuacao && professor.area_atuacao !== "—"
-          ? professor.area_atuacao
-          : "";
-      const codigosSalvos = parseTurmasSalvas(area);
-
       let turmas: TurmaAlocada[] = [];
 
-      if (codigosSalvos.length > 0) {
-        const { data, error } = await supabase
-          .from("turmas")
-          .select("*")
-          .in("codigo", codigosSalvos);
+      const { data: porFk, error: erroFk } = await supabase
+        .from("turmas")
+        .select("*")
+        .eq("professor_id", professor.id);
 
-        if (error) {
-          console.error("Erro ao buscar turmas do professor:", error.message);
-        } else if (data && data.length > 0) {
-          turmas = data.map((t) => ({
-            id: String(t.id ?? ""),
-            codigo: String(t.codigo ?? "—"),
-            curso: String(t.curso ?? "—"),
-            turno: String(t.turno ?? "—"),
-            diario_fechado: Boolean(t.diario_fechado ?? false),
-          }));
-        } else {
-          // Fallback legado: area_atuacao com nome de curso único
-          const { data: porCurso, error: erroCurso } = await supabase
+      if (erroFk) {
+        console.error("Erro ao buscar turmas do professor:", erroFk.message);
+      } else if (porFk && porFk.length > 0) {
+        turmas = porFk.map((t) => ({
+          id: String(t.id ?? ""),
+          codigo: String(t.codigo ?? "—"),
+          curso: String(t.curso ?? "—"),
+          turno: String(t.turno ?? "—"),
+          diario_fechado: Boolean(t.diario_fechado ?? false),
+        }));
+      } else {
+        // Fallback legado: códigos em area_atuacao
+        const area =
+          professor.area_atuacao && professor.area_atuacao !== "—"
+            ? professor.area_atuacao
+            : "";
+        const codigosSalvos = parseTurmasSalvas(area);
+
+        if (codigosSalvos.length > 0) {
+          const { data, error } = await supabase
             .from("turmas")
             .select("*")
-            .ilike("curso", `%${area}%`);
+            .in("codigo", codigosSalvos);
 
-          if (erroCurso) {
-            console.error(
-              "Erro ao buscar turmas do professor:",
-              erroCurso.message
-            );
-          } else {
-            turmas = (porCurso ?? []).map((t) => ({
+          if (error) {
+            console.error("Erro ao buscar turmas do professor:", error.message);
+          } else if (data && data.length > 0) {
+            turmas = data.map((t) => ({
               id: String(t.id ?? ""),
               codigo: String(t.codigo ?? "—"),
               curso: String(t.curso ?? "—"),
               turno: String(t.turno ?? "—"),
               diario_fechado: Boolean(t.diario_fechado ?? false),
             }));
+          } else if (area && !area.includes(",")) {
+            const { data: porCurso, error: erroCurso } = await supabase
+              .from("turmas")
+              .select("*")
+              .ilike("curso", `%${area}%`);
+
+            if (erroCurso) {
+              console.error(
+                "Erro ao buscar turmas do professor:",
+                erroCurso.message
+              );
+            } else {
+              turmas = (porCurso ?? []).map((t) => ({
+                id: String(t.id ?? ""),
+                codigo: String(t.codigo ?? "—"),
+                curso: String(t.curso ?? "—"),
+                turno: String(t.turno ?? "—"),
+                diario_fechado: Boolean(t.diario_fechado ?? false),
+              }));
+            }
           }
         }
       }
 
       if (cancelado) return;
       setTurmasDoProfessor(turmas);
+
+      const areaInsight =
+        professor.area_atuacao && professor.area_atuacao !== "—"
+          ? professor.area_atuacao
+          : "Não definida";
 
       setIsLoadingAi(true);
       setAiInsight(null);
@@ -478,7 +515,7 @@ export default function GestaoProfessoresPage() {
           body: JSON.stringify({
             nome: professor.nome,
             titulacao: professor.titulacao,
-            area_atuacao: area || "Não definida",
+            area_atuacao: areaInsight,
             carga_horaria: professor.carga_horaria,
             turmasCount: turmas.length,
           }),
@@ -813,22 +850,24 @@ export default function GestaoProfessoresPage() {
 
   function handleEdit(prof: Professor) {
     const turmasSalvas = parseTurmasSalvas(
-      prof.area_atuacao === "—" ? "" : prof.area_atuacao
+      campoEditavel(prof.area_atuacao) === "" ? "" : prof.area_atuacao
     );
     setFormData({
-      matricula: prof.matricula === "—" ? "" : prof.matricula,
+      matricula: campoEditavel(prof.matricula),
       nome: prof.nome,
       titulacao: prof.titulacao,
       turmas: normalizarTurmasParaCodigos(turmasSalvas, turmasDisponiveis),
-      disciplina: prof.disciplina || "",
-      cargaHoraria: String(prof.carga_horaria || ""),
-      cpf: prof.cpf,
-      pis: prof.pis,
-      lattes_url: prof.lattes_url,
-      email_pessoal: prof.email_pessoal,
+      disciplina: campoEditavel(prof.disciplina),
+      cargaHoraria:
+        prof.carga_horaria > 0 ? String(prof.carga_horaria) : "",
+      cpf: campoEditavel(prof.cpf),
+      pis: campoEditavel(prof.pis),
+      lattes_url: campoEditavel(prof.lattes_url),
+      email_pessoal: campoEditavel(prof.email_pessoal),
       email_institucional:
-        prof.email_institucional || gerarEmailInstitucional(prof.nome),
-      telefone: prof.telefone,
+        campoEditavel(prof.email_institucional) ||
+        gerarEmailInstitucional(prof.nome),
+      telefone: campoEditavel(prof.telefone),
     });
     setTurnoAula(prof.turno_aula || "Noite");
     setDiasAula(prof.dias_aula ?? []);
@@ -841,6 +880,41 @@ export default function GestaoProfessoresPage() {
 
     void (async () => {
       await fetchTurmasDisponiveis();
+
+      // Garante dados frescos de documentação/contato (não depende só da lista em memória)
+      const { data: profFresh, error: profFreshError } = await supabase
+        .from("professores")
+        .select("*")
+        .eq("id", prof.id)
+        .maybeSingle();
+
+      if (profFreshError) {
+        console.error(
+          "Erro ao recarregar professor no edit:",
+          profFreshError.message
+        );
+      } else if (profFresh) {
+        const mapeado = mapProfessor(profFresh as Record<string, unknown>);
+        setFormData((prev) => ({
+          ...prev,
+          matricula: campoEditavel(mapeado.matricula) || prev.matricula,
+          cpf: campoEditavel(mapeado.cpf),
+          pis: campoEditavel(mapeado.pis),
+          lattes_url: campoEditavel(mapeado.lattes_url),
+          email_pessoal: campoEditavel(mapeado.email_pessoal),
+          email_institucional:
+            campoEditavel(mapeado.email_institucional) ||
+            prev.email_institucional,
+          telefone: campoEditavel(mapeado.telefone),
+          disciplina: campoEditavel(mapeado.disciplina) || prev.disciplina,
+          cargaHoraria:
+            mapeado.carga_horaria > 0
+              ? String(mapeado.carga_horaria)
+              : prev.cargaHoraria,
+        }));
+        setTurnoAula(mapeado.turno_aula || "Noite");
+        setDiasAula(mapeado.dias_aula ?? []);
+      }
 
       const { data: lista, error: listaError } = await supabase
         .from("turmas")
@@ -931,21 +1005,45 @@ export default function GestaoProfessoresPage() {
       status: "Ativo" as const,
     };
 
-    const { error } = editingId
-      ? await supabase.from("professores").update(payload).eq("id", editingId)
-      : await supabase.from("professores").insert(payload);
+    let professorIdPersistido = editingId;
 
-    if (error) {
-      setIsSubmitting(false);
-      console.error("Erro ao cadastrar professor:", error.message);
-      setFormError(error.message);
-      return;
+    if (editingId) {
+      const { error } = await supabase
+        .from("professores")
+        .update(payload)
+        .eq("id", editingId);
+
+      if (error) {
+        setIsSubmitting(false);
+        console.error("Erro ao cadastrar professor:", error.message);
+        setFormError(error.message);
+        return;
+      }
+    } else {
+      const { data: criado, error } = await supabase
+        .from("professores")
+        .insert(payload)
+        .select("id")
+        .single();
+
+      if (error) {
+        setIsSubmitting(false);
+        console.error("Erro ao cadastrar professor:", error.message);
+        setFormError(error.message);
+        return;
+      }
+      professorIdPersistido = criado?.id ? String(criado.id) : null;
     }
 
-    // Alocação física: persiste sala/andar/turno/dias e professor nas turmas selecionadas
-    if (turmas.length > 0 && (andarSelecionado || salaSelecionada || diasAula.length > 0)) {
+    // Alocação física: persiste sala/andar/turno/dias e FK do professor nas turmas
+    if (
+      turmas.length > 0 &&
+      professorIdPersistido &&
+      (andarSelecionado || salaSelecionada || diasAula.length > 0)
+    ) {
       const alocacao: Record<string, unknown> = {
         professor: nome,
+        professor_id: professorIdPersistido,
         turno: turnoAula,
         dias_aula: diasAula,
         andar: andarSelecionado || null,

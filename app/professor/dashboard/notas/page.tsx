@@ -37,7 +37,6 @@ import {
   limparSessaoProfessor,
   lerSessaoProfessor,
   normalizarPesosAvaliacao,
-  parseTurmasProfessor,
   PESOS_AVALIACAO_PADRAO,
   useProfessorSession,
   type PesosAvaliacao,
@@ -61,6 +60,7 @@ type TurmaOption = {
   curso: string;
   turno?: string;
   diario_fechado?: boolean;
+  professor_id?: string | null;
 };
 
 type AlunoTurma = {
@@ -223,7 +223,7 @@ export default function DiarioDeClassePage() {
   const diarioPublicado = Boolean(turmaAtual?.diario_fechado);
   const notasBloqueadas = travarEdicaoNotas && diarioPublicado;
 
-  // Mesma lógica estrutural de chamada/page.tsx: turmas atribuídas ao professor
+  // Turmas vinculadas pelo FK professor_id (não quebra se o nome do docente mudar)
   useEffect(() => {
     if (!professorLogado?.id) {
       setTurmas([]);
@@ -232,58 +232,60 @@ export default function DiarioDeClassePage() {
     }
 
     let cancelado = false;
+    const professorId = professorLogado.id;
 
     async function fetchTurmas() {
       setCarregandoTurmas(true);
-      const codigos = parseTurmasProfessor(professorLogado!.turmas);
-      const vinculoProfessor = professorLogado!.nomeCompletoTitulo?.trim() ?? "";
-      const selectCols = "id, codigo, curso, turno, diario_fechado";
+      const selectComDiario =
+        "id, codigo, curso, turno, diario_fechado, professor_id";
+      const selectSemDiario = "id, codigo, curso, turno, professor_id";
 
-      let data: Record<string, unknown>[] | null = null;
-      let error: { message: string } | null = null;
-
-      if (codigos.length > 0) {
-        const res = await supabase
+      async function consultarTurmas(selectCols: string) {
+        return supabase
           .from("turmas")
           .select(selectCols)
-          .in("codigo", codigos);
-        data = (res.data as Record<string, unknown>[] | null) ?? null;
-        error = res.error;
-      } else if (vinculoProfessor) {
-        const res = await supabase
-          .from("turmas")
-          .select(selectCols)
-          .eq("professor", vinculoProfessor);
-        data = (res.data as Record<string, unknown>[] | null) ?? null;
-        error = res.error;
-      } else {
-        if (!cancelado) {
-          setTurmas([]);
-          setTurmaSelecionada("");
-          setCarregandoTurmas(false);
-        }
-        return;
+          .eq("professor_id", professorId);
+      }
+
+      let res = await consultarTurmas(selectComDiario);
+
+      // Bases legadas sem a coluna diario_fechado: tenta de novo sem o campo
+      if (
+        res.error &&
+        /diario_fechado|column .* does not exist|schema cache/i.test(
+          res.error.message
+        )
+      ) {
+        console.warn(
+          "Coluna diario_fechado indisponível; usando fallback:",
+          res.error.message
+        );
+        res = await consultarTurmas(selectSemDiario);
       }
 
       if (cancelado) return;
 
-      if (error) {
-        console.error("Erro ao buscar turmas:", error.message);
+      if (res.error) {
+        console.error("Erro ao buscar turmas:", res.error.message);
         setTurmas([]);
         setTurmaSelecionada("");
         setCarregandoTurmas(false);
         return;
       }
 
-      const lista = ((data ?? []) as Record<string, unknown>[]).map(
-        (turma) => ({
-          id: String(turma.id),
-          codigo: String(turma.codigo ?? ""),
-          curso: String(turma.curso ?? ""),
-          turno: turma.turno ? String(turma.turno) : undefined,
-          diario_fechado: Boolean(turma.diario_fechado ?? false),
-        })
-      );
+      const data = (res.data as Record<string, unknown>[] | null) ?? [];
+
+      const lista = data.map((turma) => ({
+        id: String(turma.id),
+        codigo: String(turma.codigo ?? ""),
+        curso: String(turma.curso ?? ""),
+        turno: turma.turno ? String(turma.turno) : undefined,
+        // null/undefined (ou coluna ausente no fallback) → diário aberto
+        diario_fechado: Boolean(turma.diario_fechado ?? false),
+        professor_id: turma.professor_id
+          ? String(turma.professor_id)
+          : null,
+      }));
 
       setTurmas(lista);
 
@@ -303,7 +305,7 @@ export default function DiarioDeClassePage() {
     return () => {
       cancelado = true;
     };
-  }, [professorLogado?.id, professorLogado?.turmas, professorLogado?.nomeCompletoTitulo]);
+  }, [professorLogado?.id]);
 
   useEffect(() => {
     if (!professorLogado?.id) return;

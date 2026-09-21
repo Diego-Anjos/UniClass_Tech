@@ -32,7 +32,6 @@ import { Button } from "@/components/ui/button";
 import { PaginationFooter } from "@/components/ui/pagination-footer";
 import {
   limparSessaoProfessor,
-  parseTurmasProfessor,
   useProfessorSession,
 } from "@/lib/professor-session";
 
@@ -51,6 +50,7 @@ type TurmaOption = {
   codigo: string;
   curso: string;
   turno?: string;
+  professor_id?: string | null;
 };
 
 type AlunoChamada = {
@@ -511,36 +511,15 @@ export default function ProfessorChamadaPage() {
     if (!professorLogado?.id) return;
 
     let cancelado = false;
+    const professorId = professorLogado.id;
 
     async function fetchTurmas() {
-      const codigos = parseTurmasProfessor(professorLogado!.turmas);
-      const vinculoProfessor = professorLogado!.nomeCompletoTitulo?.trim() ?? "";
-      const selectCols = "id, codigo, curso, turno";
+      const selectCols = "id, codigo, curso, turno, professor_id";
 
-      let data: TurmaOption[] | null = null;
-      let error: { message: string } | null = null;
-
-      if (codigos.length > 0) {
-        const res = await supabase
-          .from("turmas")
-          .select(selectCols)
-          .in("codigo", codigos);
-        data = (res.data as TurmaOption[] | null) ?? null;
-        error = res.error;
-      } else if (vinculoProfessor) {
-        const res = await supabase
-          .from("turmas")
-          .select(selectCols)
-          .eq("professor", vinculoProfessor);
-        data = (res.data as TurmaOption[] | null) ?? null;
-        error = res.error;
-      } else {
-        if (!cancelado) {
-          setTurmas([]);
-          setTurmaSelecionada("");
-        }
-        return;
-      }
+      const { data, error } = await supabase
+        .from("turmas")
+        .select(selectCols)
+        .eq("professor_id", professorId);
 
       if (cancelado) return;
 
@@ -551,12 +530,17 @@ export default function ProfessorChamadaPage() {
         return;
       }
 
-      const lista = ((data ?? []) as TurmaOption[]).map((turma) => ({
-        id: String(turma.id),
-        codigo: String(turma.codigo ?? ""),
-        curso: String(turma.curso ?? ""),
-        turno: turma.turno ? String(turma.turno) : undefined,
-      }));
+      const lista = ((data ?? []) as Record<string, unknown>[]).map(
+        (turma) => ({
+          id: String(turma.id),
+          codigo: String(turma.codigo ?? ""),
+          curso: String(turma.curso ?? ""),
+          turno: turma.turno ? String(turma.turno) : undefined,
+          professor_id: turma.professor_id
+            ? String(turma.professor_id)
+            : null,
+        })
+      );
 
       setTurmas(lista);
 
@@ -575,7 +559,7 @@ export default function ProfessorChamadaPage() {
     return () => {
       cancelado = true;
     };
-  }, [professorLogado?.id, professorLogado?.turmas, professorLogado?.nomeCompletoTitulo]);
+  }, [professorLogado?.id]);
 
   useEffect(() => {
     let cancelado = false;
