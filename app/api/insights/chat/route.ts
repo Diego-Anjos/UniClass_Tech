@@ -51,25 +51,44 @@ Percentual de faltas: ${alunoObj.taxaFaltas ?? "ainda sem histórico suficiente"
 Taxa de presença: ${alunoObj.taxaPresenca ?? "ainda sem histórico suficiente"}`
       : "";
 
+    const nomeProfessor = String(professor ?? "Professor").trim();
+    const alunoObjNome =
+      alunoObj && typeof alunoObj.nome === "string"
+        ? String(alunoObj.nome).trim()
+        : undefined;
+    const alunoTurma =
+      alunoObj && typeof alunoObj.turma === "string"
+        ? String(alunoObj.turma).trim()
+        : undefined;
+    const alunoCurso =
+      alunoObj && typeof alunoObj.curso === "string"
+        ? String(alunoObj.curso).trim()
+        : undefined;
+
     const prompt = buildPrompt(
-      `Você é um coordenador de curso experiente e humano, auxiliando o(a) ${professor} no acompanhamento do estudante.
-Seu objetivo é responder dúvidas sobre desempenho, frequência e perfil do aluno selecionado.
-Aja de forma natural, consultiva e empática, como um colega pedagógico conversando no chat — nunca como um sistema técnico.
+      `Tarefa: chat pedagógico auxiliando ${nomeProfessor} no acompanhamento do estudante.
 ${blocoPreferenciasIa(prefs)}
 REGRAS ANTI-ALUCINAÇÃO:
 1. Use APENAS os dados fornecidos no contexto e na situação acadêmica.
 2. Nunca invente notas (N1, N2, N3), médias, faltas ou percentuais.
-3. Se faltar informação (ex.: N2/N3 ainda não lançadas), contextualize de forma natural — diga que ainda estamos no decorrer do semestre ou aguardando avaliações, sem mencionar "sistema", "banco" ou "dado ausente".
+3. Se faltar informação (ex.: N2/N3 ainda não lançadas), contextualize o momento do semestre — sem mencionar "sistema", "banco" ou "dado ausente".
 4. Não cite eventos, provas ou conversas que não estejam no histórico/contexto.
-5. Oriente sempre para o desenvolvimento e a melhoria contínua do estudante.
+5. Cite nomes e números reais; vá direto à resposta útil.
 
-Contexto atual do aluno selecionado no painel do professor:
+Contexto atual do aluno selecionado:
 ${contextoAluno || "(sem contexto textual)"}
 ${fatosAluno}
 
-Responda sempre em português do Brasil de forma clara, humana e sem formatações excessivas.
-Retorne no formato: { "reply": "sua resposta aqui" }`,
-      `Histórico da conversa:\n${historico || "(sem mensagens anteriores)"}`
+Retorne: { "reply": "sua resposta aqui" }`,
+      `Histórico da conversa:\n${historico || "(sem mensagens anteriores)"}`,
+      {
+        publico: "professor",
+        professorNome: nomeProfessor,
+        alunoNome: alunoObjNome,
+        turmaNome: alunoTurma,
+        curso: alunoCurso,
+        dadosEspecificos: fatosAluno || undefined,
+      }
     );
 
     const data = await generateJsonWithFallback(genAI, prompt);

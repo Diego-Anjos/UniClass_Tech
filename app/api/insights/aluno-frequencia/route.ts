@@ -16,16 +16,38 @@ export async function POST(req: NextRequest) {
   if (denied) return denied;
 
   try {
-    const { alunoNome, presencaGlobal, disciplinasEmRisco } = await req.json();
+    const {
+      alunoNome,
+      presencaGlobal,
+      disciplinasEmRisco,
+      totalAulas,
+      curso,
+    } = await req.json();
+    const nome = String(alunoNome ?? "Estudante").trim();
+    const presenca = Number(presencaGlobal);
+    const risco = Array.isArray(disciplinasEmRisco)
+      ? disciplinasEmRisco.join(", ")
+      : "nenhuma no momento";
+    const aulas =
+      Number.isFinite(Number(totalAulas)) && Number(totalAulas) > 0
+        ? Math.round(Number(totalAulas))
+        : null;
 
     const prompt = buildPrompt(
-      `Você é um orientador acadêmico empático e humano. Escreva exatamente uma ou duas frases curtas. Fale diretamente com o aluno de forma natural, amigável e encorajadora, com foco na melhoria contínua da frequência. Nunca use linguagem engessada, jargão técnico ou pareça um script automático. Vá direto ao ponto.
-Retorne no formato: { "insight": "sua orientação aqui" }`,
-      `Estudante: ${alunoNome}. Presença global: ${presencaGlobal}%. Disciplinas em situação de atenção/risco: ${
-        Array.isArray(disciplinasEmRisco) && disciplinasEmRisco.length > 0
-          ? disciplinasEmRisco.join(", ")
-          : "nenhuma no momento"
-      }. Dê uma orientação direta e acolhedora para manutenção de frequência.`
+      `Tarefa: orientação de frequência para o estudante.
+Uma ou duas frases curtas, falando diretamente com o aluno. Cite nome, % e disciplinas reais. Sem tom de script automático.
+Retorne: { "insight": "sua orientação aqui" }`,
+      `Estudante: ${nome}. Presença global: ${
+        Number.isFinite(presenca) ? `${presenca}%` : "ainda sem histórico consolidado"
+      }${aulas ? ` (base em ${aulas} aulas)` : ""}. Disciplinas em atenção/risco: ${risco}.`,
+      {
+        publico: "aluno",
+        alunoNome: nome,
+        curso: String(curso ?? "").trim() || undefined,
+        dadosEspecificos: `Presença global: ${presenca}%.${
+          aulas ? ` Total de aulas consideradas: ${aulas}.` : ""
+        } Disciplinas em risco: ${risco}.`,
+      }
     );
 
     const data = await generateJsonWithFallback(genAI, prompt);

@@ -113,7 +113,12 @@ export default function ProfessorDashboardPage() {
   async function fetchAiInsight(
     qtdTurmas: number,
     nomeContexto: string,
-    professorId?: string
+    professorId?: string,
+    extras?: {
+      disciplina?: string;
+      turno?: string;
+      turmasResumo?: { codigo: string; curso: string; turno?: string }[];
+    }
   ) {
     setIsLoadingAi(true);
     try {
@@ -124,8 +129,12 @@ export default function ProfessorDashboardPage() {
         },
         body: JSON.stringify({
           context: nomeContexto || "Professor",
+          professorNome: nomeContexto || "Professor",
           turmasAtivas: qtdTurmas,
           professorId,
+          disciplina: extras?.disciplina,
+          turno: extras?.turno,
+          turmasResumo: extras?.turmasResumo ?? [],
         }),
       });
 
@@ -157,11 +166,11 @@ export default function ProfessorDashboardPage() {
         professorLogado!.nomeCompletoTitulo || professorLogado!.nome;
       const professorId = professorLogado!.id;
       let totalParaIa = 0;
+      let prof: ProfessorDb | null = null;
+      let turmas: TurmaResumo[] = [];
 
       try {
         // Fonte de verdade: turmas com FK professor_id
-        let prof: ProfessorDb | null = null;
-
         if (professorId) {
           const { data: profRaw, error: profError } = await supabase
             .from("professores")
@@ -179,8 +188,6 @@ export default function ProfessorDashboardPage() {
         }
 
         if (cancelado) return;
-
-        let turmas: TurmaResumo[] = [];
 
         const { data: turmasData, error: turmasError } = await supabase
           .from("turmas")
@@ -333,7 +340,23 @@ export default function ProfessorDashboardPage() {
 
       // IA totalmente independente (fire-and-forget)
       if (!cancelado) {
-        void fetchAiInsight(totalParaIa, nomeContexto, professorId);
+        const disciplinaIa =
+          (typeof prof?.disciplina === "string" && prof.disciplina) ||
+          professorLogado!.disciplina ||
+          undefined;
+        const turnoIa =
+          (typeof prof?.turno_aula === "string" && prof.turno_aula) ||
+          professorLogado!.turno_aula ||
+          undefined;
+        void fetchAiInsight(totalParaIa, nomeContexto, professorId, {
+          disciplina: disciplinaIa,
+          turno: turnoIa,
+          turmasResumo: turmas.map((t) => ({
+            codigo: t.codigo,
+            curso: t.curso,
+            turno: t.turno,
+          })),
+        });
       }
     }
 

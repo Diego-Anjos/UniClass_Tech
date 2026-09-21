@@ -260,6 +260,7 @@ export default function AlunoGradePage() {
         body: JSON.stringify({
           cursoNome: cursoNome || "Tecnologia da Informação",
           disciplinasAtuais: nomes,
+          alunoNome: alunoLogado?.nome,
         }),
       });
 

@@ -22,6 +22,32 @@ function toNonNegInt(value: unknown, fallback = 0): number {
   return Math.round(n);
 }
 
+type AlunoDestaque = {
+  nome: string;
+  percFaltas: number;
+  totalAulas: number;
+};
+
+function parseAlunosDestaque(raw: unknown): AlunoDestaque[] {
+  if (!Array.isArray(raw)) return [];
+  return raw
+    .map((item) => {
+      if (!item || typeof item !== "object") return null;
+      const row = item as Record<string, unknown>;
+      const nome = String(row.nome ?? "").trim();
+      const percFaltas = Number(row.percFaltas ?? row.percentualFaltas);
+      const totalAulas = Number(row.totalAulas ?? 0);
+      if (!nome || !Number.isFinite(percFaltas)) return null;
+      return {
+        nome,
+        percFaltas: Math.round(percFaltas),
+        totalAulas: Number.isFinite(totalAulas) ? Math.max(0, Math.round(totalAulas)) : 0,
+      };
+    })
+    .filter((a): a is AlunoDestaque => a !== null)
+    .slice(0, 6);
+}
+
 export async function POST(req: NextRequest) {
   const denied = requireRole(req, ["professor", "admin"]);
   if (denied) return denied;
@@ -31,9 +57,15 @@ export async function POST(req: NextRequest) {
     const prefs = await buscarPreferenciasProfessor(body.professorId);
 
     const turma = String(body.turma ?? "Turma não informada").trim();
+    const professorNome = String(
+      body.professorNome ?? body.professor ?? ""
+    ).trim();
+    const disciplina = String(body.disciplina ?? body.curso ?? "").trim();
+    const turno = String(body.turno ?? "").trim();
     let total = toNonNegInt(body.total);
     let presentes = toNonNegInt(body.presentes);
     let faltas = toNonNegInt(body.faltas);
+    const alunosDestaque = parseAlunosDestaque(body.alunosDestaque);
 
     // Normaliza inconsistências do cliente: presentes + faltas deve bater com total
     if (total <= 0 && presentes + faltas > 0) {
@@ -53,7 +85,6 @@ export async function POST(req: NextRequest) {
     const taxaFalta = total > 0 ? Math.round((faltas / total) * 100) : 0;
     const limiarEvasao = prefs.regua_evasao;
 
-    // Classificação determinística — usa a régua de evasão do docente
     const tipoAlerta =
       faltas === 0 && total > 0
         ? "ENGAJAMENTO ALTO"
@@ -63,18 +94,39 @@ export async function POST(req: NextRequest) {
             ? "ENGAJAMENTO ALTO"
             : "ALERTA DE FREQUÊNCIA";
 
+    const destaqueTexto =
+      alunosDestaque.length > 0
+        ? alunosDestaque
+            .map((a) =>
+              a.totalAulas > 0
+                ? `${a.nome} está com ${a.percFaltas}% de faltas em ${a.totalAulas} aula(s) registradas`
+                : `${a.nome} está com ${a.percFaltas}% de faltas`
+            )
+            .join("; ")
+        : "Nenhum aluno acima de 15% de faltas neste recorte.";
+
     const prompt = buildPrompt(
-      `Você é um coordenador pedagógico acolhedor da UniClassTech.
-Gere UM insight curto e humano (máximo 2 frases) sobre a chamada de HOJE, com foco no cuidado e no engajamento dos estudantes.
+      `Tarefa: insight do Diário de Chamada de HOJE.
 ${blocoPreferenciasIa(prefs)}
 
 REGRAS OBRIGATÓRIAS:
-- Use EXATAMENTE os números fornecidos abaixo. NÃO invente, arredonde de outra forma nem alucine totais, presenças, faltas ou porcentagens.
-- Se faltas > 0, NÃO diga que houve 100% de presença ou presença total.
-- Mencione na mensagem: total de alunos, presentes e faltas (os valores literais recebidos).
+- Use EXATAMENTE os números fornecidos. NÃO invente totais, presenças, faltas ou porcentagens.
+- Se faltas > 0, NÃO diga que houve 100% de presença.
+- Mencione total de alunos, presentes e faltas (valores literais).
+- Se houver alunos em destaque, cite pelo menos um nome e o % real.
 - tipoAlerta deve ser exatamente: "${tipoAlerta}"
+- Máximo 2 frases, humanas e acionáveis.
 - Retorne APENAS JSON: { "tipoAlerta": "${tipoAlerta}", "mensagem": "texto aqui" }`,
-      `A turma "${turma}" tem ${total} alunos. Hoje tivemos ${presentes} presenças e ${faltas} faltas (taxa de presença ${taxaPresenca}%, taxa de ausência ${taxaFalta}%). Limiar de alerta de evasão do docente: ${limiarEvasao}%. Com base nisso, gere um alerta curto e empático sobre o engajamento de hoje.`
+      `Chamada de hoje na turma "${turma}": ${total} alunos, ${presentes} presentes, ${faltas} faltas (presença ${taxaPresenca}%, ausência ${taxaFalta}%). Limiar de evasão do docente: ${limiarEvasao}%. Alunos em atenção: ${destaqueTexto}.`,
+      {
+        publico: "professor",
+        professorNome: professorNome || undefined,
+        disciplina: disciplina || undefined,
+        turno: turno || undefined,
+        turmaNome: turma,
+        tamanhoTurma: total,
+        dadosEspecificos: `Presentes: ${presentes}. Faltas: ${faltas}. ${destaqueTexto}`,
+      }
     );
 
     const data = await generateJsonWithFallback(genAI, prompt);

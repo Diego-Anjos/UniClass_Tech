@@ -75,6 +75,37 @@ type AiInsightChamada = {
   mensagem: string;
 };
 
+/** Mesmos limiares da coluna "Frequência Atual" na tabela de chamada. */
+function getCorFrequencia(porcentagem: number): string {
+  if (porcentagem >= 25) return "#ef4444"; // text-red-500
+  if (porcentagem >= 15) return "#eab308"; // text-yellow-500
+  return "#22c55e"; // text-green-500
+}
+
+function getMensagemFrequencia(porcentagem: number): {
+  html: string;
+  texto: string;
+} {
+  if (porcentagem >= 25) {
+    return {
+      html: "⚠️ <strong>Atenção:</strong> Você atingiu ou ultrapassou o limite de faltas permitido. O risco de reprovação por ausência é alto. Procure a secretaria ou seu professor imediatamente.",
+      texto:
+        "Atenção: Você atingiu ou ultrapassou o limite de faltas permitido. O risco de reprovação por ausência é alto.",
+    };
+  }
+  if (porcentagem >= 15) {
+    return {
+      html: "⚠️ <strong>Aviso:</strong> Sua frequência está se aproximando do limite de faltas. Evite novas ausências para não correr risco de reprovação.",
+      texto:
+        "Aviso: Sua frequência está se aproximando do limite de faltas. Evite novas ausências.",
+    };
+  }
+  return {
+    html: "✅ Sua frequência está dentro do limite aceitável. Continue participando das aulas!",
+    texto: "Sua frequência está dentro do limite aceitável.",
+  };
+}
+
 function formatarDataBR(iso: string) {
   const [yyyy, mm, dd] = iso.split("-");
   if (!yyyy || !mm || !dd) return iso;
@@ -364,11 +395,8 @@ export default function ProfessorChamadaPage() {
     const nomeSeguro = escaparHtml(aluno.nome || "aluno(a)");
     const turmaSegura = escaparHtml(nomeTurma);
     const dataEnvio = new Date().toLocaleDateString("pt-BR");
-    const corFrequencia = porcentagemFaltas >= 25 ? "#ef4444" : "#4ade80";
-    const mensagemFrequencia =
-      porcentagemFaltas >= 25
-        ? "⚠️ <strong>Atenção:</strong> Você atingiu ou ultrapassou o limite de faltas permitido. O risco de reprovação por ausência é alto. Procure a secretaria ou seu professor imediatamente."
-        : "✅ Sua frequência está dentro do limite aceitável. Continue participando das aulas!";
+    const corFrequencia = getCorFrequencia(porcentagemFaltas);
+    const mensagemFrequencia = getMensagemFrequencia(porcentagemFaltas);
 
     const html = `
 <div style="background-color: #000000; padding: 40px 20px; font-family: sans-serif; color: #ffffff;">
@@ -378,10 +406,10 @@ export default function ProfessorChamadaPage() {
     <p style="font-size: 15px; color: #cccccc;">Turma: <strong>${turmaSegura}</strong></p>
     
     <div style="background-color: #1e1e1e; padding: 20px; border-radius: 6px; margin-top: 20px;">
-      <p style="margin: 5px 0; color: #ccc;">Frequência Atual (Faltas): <strong style="color: ${corFrequencia};">${porcentagemFaltas}%</strong></p>
+      <p style="margin: 5px 0; color: #ccc;">Frequência Atual (Faltas): <span style="color: ${corFrequencia}; font-weight: bold;">${porcentagemFaltas}%</span></p>
       <hr style="border: 0; border-top: 1px solid #333; margin: 15px 0;" />
       <p style="margin: 5px 0; color: #ccc; font-size: 14px; line-height: 1.5;">
-        ${mensagemFrequencia}
+        ${mensagemFrequencia.html}
       </p>
     </div>
     
@@ -403,9 +431,7 @@ export default function ProfessorChamadaPage() {
           `Olá, ${aluno.nome}!\n\n` +
           `Turma: ${nomeTurma}\n` +
           `Frequência Atual (Faltas): ${porcentagemFaltas}%\n` +
-          (porcentagemFaltas >= 25
-            ? "Atenção: Você atingiu ou ultrapassou o limite de faltas permitido."
-            : "Sua frequência está dentro do limite aceitável."),
+          mensagemFrequencia.texto,
       }),
     }).then(async (res) => {
       const payload = (await res.json().catch(() => ({}))) as {
@@ -701,6 +727,13 @@ export default function ProfessorChamadaPage() {
     totalAlunos: number;
     presentes: number;
     faltas: number;
+    disciplina?: string;
+    turno?: string;
+    alunosDestaque?: {
+      nome: string;
+      percFaltas: number;
+      totalAulas: number;
+    }[];
   }) {
     const response = await fetch("/api/insights/chamada", {
       method: "POST",
@@ -711,6 +744,11 @@ export default function ProfessorChamadaPage() {
         faltas: dados.faltas,
         total: dados.totalAlunos,
         professorId: professorLogado?.id,
+        professorNome:
+          professorLogado?.nomeCompletoTitulo || professorLogado?.nome,
+        disciplina: dados.disciplina || professorLogado?.disciplina,
+        turno: dados.turno || professorLogado?.turno_aula,
+        alunosDestaque: dados.alunosDestaque ?? [],
       }),
     });
 
@@ -737,12 +775,30 @@ export default function ProfessorChamadaPage() {
 
     const turma = turmas.find((t) => t.id === turmaSelecionada);
     const nomeTurma = turma ? labelTurma(turma) : turmaSelecionada;
+    const totalAulasHistorico = new Set(
+      historicoTurma.map((c) => c.data_aula).filter(Boolean)
+    ).size;
+    const alunosDestaque = alunosTurma
+      .map((aluno) => {
+        const percFaltas = calcularFrequencia(aluno.ra);
+        return {
+          nome: aluno.nome,
+          percFaltas,
+          totalAulas: totalAulasHistorico,
+        };
+      })
+      .filter((a) => a.percFaltas >= 15)
+      .sort((a, b) => b.percFaltas - a.percFaltas)
+      .slice(0, 5);
 
     const payload = {
       turma: nomeTurma,
       totalAlunos,
       presentes,
       faltas,
+      disciplina: turma?.curso || professorLogado?.disciplina,
+      turno: turma?.turno || professorLogado?.turno_aula,
+      alunosDestaque,
     };
 
     const timeoutId = window.setTimeout(async () => {
@@ -1114,8 +1170,7 @@ export default function ProfessorChamadaPage() {
                   ) : (
                     alunosExibidos.map((aluno) => {
                       const percFaltas = calcularFrequencia(aluno.ra);
-                      const alertaCritico = percFaltas > 25;
-                      const alertaMedio = percFaltas > 15 && percFaltas <= 25;
+                      const alertaCritico = percFaltas >= 25;
                       const status = chamadaStatus[aluno.ra] ?? "presente";
                       const estaPresente = status === "presente";
                       return (
@@ -1143,12 +1198,12 @@ export default function ProfessorChamadaPage() {
                           </td>
                           <td className="px-4 py-4">
                             <span
-                              className={`text-sm ${
-                                alertaCritico
-                                  ? "text-red-500 font-medium"
-                                  : alertaMedio
-                                    ? "text-yellow-500 font-medium"
-                                    : "text-gray-400"
+                              className={`text-sm font-medium ${
+                                percFaltas >= 25
+                                  ? "text-red-500"
+                                  : percFaltas >= 15
+                                    ? "text-yellow-500"
+                                    : "text-green-500"
                               }`}
                             >
                               {percFaltas}% de faltas

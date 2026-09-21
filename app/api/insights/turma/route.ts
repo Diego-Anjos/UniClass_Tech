@@ -36,19 +36,28 @@ export async function POST(req: NextRequest) {
 
     // Payload do painel do professor (métricas filtradas)
     if (metricasGlobais || filtros) {
+      const metricasJson = JSON.stringify(metricasGlobais);
+      const tamanho =
+        metricasGlobais &&
+        typeof metricasGlobais === "object" &&
+        Number.isFinite(Number((metricasGlobais as { totalAlunos?: unknown }).totalAlunos))
+          ? Number((metricasGlobais as { totalAlunos?: unknown }).totalAlunos)
+          : undefined;
+
       const prompt = buildPrompt(
-        `Você é um coordenador de curso experiente e humano, ajudando o(a) ${professor} a acompanhar a turma.
-Com base nas métricas da turma (médias de notas e frequência) filtradas por ${filtros?.ano} e ${filtros?.semestre}, faça uma breve análise pedagógica (máximo de 3 frases).
-Aponte tendências com empatia e dê uma recomendação prática focada no desenvolvimento dos estudantes.
+        `Tarefa: análise de turma para o(a) ${professor}.
+Filtro: ${filtros?.ano ?? "—"} / ${filtros?.semestre ?? "—"}.
+Máximo 3 frases: tendência + recomendação prática.
 ${blocoPreferenciasIa(prefs)}
-REGRAS OBRIGATÓRIAS:
-1. RESPONDA ESTRITAMENTE EM PORTUGUÊS DO BRASIL.
-2. NUNCA utilize palavras em inglês.
-3. Mantenha o tom definido nas preferências do docente, sem perder o acolhimento pedagógico.
-4. Use APENAS os números em "Métricas atuais". NÃO invente médias, frequências, totais de alunos ou séries mensais.
-5. Se o histórico ainda for inicial ou incompleto, contextualize naturalmente (ex.: "ainda no começo do semestre...") — não diga que o dado é "insuficiente" ou "indisponível".
-Retorne no formato: { "analise": "seu texto aqui", "insight": "mesmo texto aqui" }`,
-        `Métricas atuais (não invente fora disso): ${JSON.stringify(metricasGlobais)}`
+REGRAS: português do Brasil; sem inglês; use APENAS os números em "Métricas atuais"; não invente séries.
+Retorne: { "analise": "seu texto aqui", "insight": "mesmo texto aqui" }`,
+        `Métricas atuais (não invente fora disso): ${metricasJson}`,
+        {
+          publico: "professor",
+          professorNome: String(professor ?? "").trim() || undefined,
+          tamanhoTurma: tamanho,
+          dadosEspecificos: metricasJson,
+        }
       );
 
       const data = await generateJsonWithFallback(genAI, prompt);
@@ -60,17 +69,30 @@ Retorne no formato: { "analise": "seu texto aqui", "insight": "mesmo texto aqui"
     }
 
     // Payload do painel admin (gestão da turma)
-    const prompt = buildPrompt(
-      `Você é um coordenador de curso experiente e humano da UniClassTech.
-Analise a turma e retorne um parágrafo curto (máximo 3 frases) em português do Brasil sobre ocupação, engajamento e recomendações de acompanhamento pedagógico. Sem markdown. Foque no desenvolvimento dos estudantes.
-${blocoPreferenciasIa(prefs)}
-Retorne no formato: { "analise": "seu texto aqui", "insight": "mesmo texto aqui" }`,
-      `Turma: ${codigo}
+    const detalheTurma = `Turma: ${codigo}
 Curso: ${curso}
 Turno: ${turno}
 Semestre: ${semestre}
 Matriculados: ${matriculados}
-Capacidade: ${capacidade}`
+Capacidade: ${capacidade}`;
+
+    const prompt = buildPrompt(
+      `Tarefa: análise administrativa da turma.
+Parágrafo curto (máx. 3 frases) sobre ocupação, engajamento e acompanhamento. Sem markdown.
+${blocoPreferenciasIa(prefs)}
+Retorne: { "analise": "seu texto aqui", "insight": "mesmo texto aqui" }`,
+      detalheTurma,
+      {
+        publico: "admin",
+        turmaNome: String(codigo ?? "").trim() || undefined,
+        curso: String(curso ?? "").trim() || undefined,
+        turno: String(turno ?? "").trim() || undefined,
+        disciplina: String(curso ?? "").trim() || undefined,
+        tamanhoTurma: Number.isFinite(Number(matriculados))
+          ? Number(matriculados)
+          : undefined,
+        dadosEspecificos: detalheTurma,
+      }
     );
 
     const data = await generateJsonWithFallback(genAI, prompt);

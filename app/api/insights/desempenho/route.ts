@@ -11,17 +11,55 @@ const genAI = createGenAI();
 const FALLBACK_INSIGHT =
   "Não foi possível gerar a análise da IA no momento. Tente novamente mais tarde.";
 
+function formatarNotasParaPrompt(notas: unknown, alunoNome?: string): string {
+  if (!Array.isArray(notas) || notas.length === 0) {
+    return alunoNome
+      ? `${alunoNome} ainda não possui lançamentos consolidados neste boletim.`
+      : "Ainda sem lançamentos consolidados neste boletim.";
+  }
+
+  return notas
+    .map((item, idx) => {
+      if (!item || typeof item !== "object") return null;
+      const n = item as Record<string, unknown>;
+      const disciplina = String(n.disciplina ?? `Disciplina ${idx + 1}`);
+      const professor = String(n.professor ?? "—");
+      const n1 = n.n1 ?? "ainda não lançada";
+      const n2 = n.n2 ?? "ainda não lançada";
+      const n3 = n.n3 ?? "ainda não lançada";
+      const faltas = n.faltas ?? 0;
+      return `- ${disciplina} (prof. ${professor}): N1=${n1}, N2=${n2}, N3=${n3}, faltas registradas=${faltas}`;
+    })
+    .filter(Boolean)
+    .join("\n");
+}
+
 export async function POST(req: Request) {
   const denied = requireRole(req, ["aluno", "professor", "admin"]);
   if (denied) return denied;
 
   try {
-    const { notas } = await req.json();
+    const { notas, alunoNome, curso, semestre } = await req.json();
+    const nome = String(alunoNome ?? "").trim();
+    const detalhe = formatarNotasParaPrompt(notas, nome);
 
     const prompt = buildPrompt(
-      `Você é um mentor acadêmico acolhedor da UniClassTech. Analise as notas (N1, N2) e a frequência do estudante. Crie um parágrafo curto, empático e motivacional (máximo 3 frases), falando diretamente com o aluno. Se houver notas abaixo de 6 ou faltas altas, oriente com cuidado e foco em melhoria. Se estiver indo bem, celebre o esforço. Se N2 ou outras notas ainda não tiverem sido lançadas, contextualize naturalmente o momento do semestre. Não use formatação markdown.
-Retorne no formato: { "insight": "seu parágrafo aqui" }`,
-      JSON.stringify(notas)
+      `Tarefa: feedback de desempenho no boletim do estudante.
+Fale diretamente com o aluno em no máximo 3 frases. Cite disciplinas e números reais quando existirem.
+Se houver nota abaixo de 6 ou faltas altas, oriente com cuidado. Se estiver bem, reconheça o esforço sem exagero.
+Retorne: { "insight": "seu parágrafo aqui" }`,
+      `Situação do boletim:\n${detalhe}`,
+      {
+        publico: "aluno",
+        alunoNome: nome || undefined,
+        curso: String(curso ?? "").trim() || undefined,
+        dadosEspecificos: [
+          semestre ? `Semestre: ${semestre}` : null,
+          detalhe,
+        ]
+          .filter(Boolean)
+          .join("\n"),
+      }
     );
 
     const data = await generateJsonWithFallback(genAI, prompt);

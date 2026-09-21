@@ -331,7 +331,12 @@ export default function AlunoNotasPage() {
         const response = await fetch("/api/insights/desempenho", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ notas: dadosNotas }),
+          body: JSON.stringify({
+            notas: dadosNotas,
+            alunoNome: aluno?.nome || alunoLogado?.nome,
+            curso: aluno?.curso || alunoLogado?.curso,
+            semestre: semestreSelecionado || alunoLogado?.semestreAtual,
+          }),
         });
         const data = await response.json();
         if (!response.ok) {

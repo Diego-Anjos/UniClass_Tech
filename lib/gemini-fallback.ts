@@ -16,20 +16,92 @@ export const modelosFallback = [
 /** Alias explícito da lista de redundância (mesmo array). */
 export const fallbackModels = modelosFallback;
 
+/** Criatividade analítica sem perder precisão (Insights / Mapa / Diário). */
+export const GEMINI_TEMPERATURE = 0.7;
+
 export const JSON_ONLY_INSTRUCTION =
   "RETORNE APENAS UM JSON VÁLIDO E MAIS NADA, SEM MARCADORES MARKDOWN.";
 
 /**
- * Tom de voz pedagógico — injetado em TODOS os prompts via buildPrompt.
- * Garante comunicação humana, empática e sem jargão técnico no front-end.
+ * System prompt global — injetado via `systemInstruction` em toda chamada Gemini.
+ * Persona: Coordenador Pedagógico Sênior da UniClassTech.
  */
-export const PEDAGOGICAL_VOICE_RULES = `REGRAS DE TOM DE VOZ (OBRIGATÓRIAS EM TODO TEXTO GERADO PARA O USUÁRIO):
-- Tom de voz: Acolhedor, empático, motivacional e pedagógico. Aja como um coordenador de curso experiente e humano.
-- Proibição estrita: NUNCA use jargões técnicos de programação ou banco de dados nos textos exibidos (ex.: "banco de dados", "null", "array", "indisponível no sistema", "dado não encontrado", "registro ausente").
-- Tratamento de dados ausentes: Se faltarem notas (N2, N3) ou faltas, aja naturalmente. Diga algo como "Como ainda estamos no início do semestre e aguardamos as próximas avaliações..." ou "Ainda não temos registros suficientes de frequência para uma análise completa..." — NUNCA diga que os dados "não existem", "estão faltando no sistema" ou "são indisponíveis".
-- Foco no aluno: A mensagem deve ser orientada ao desenvolvimento e melhoria contínua do estudante (ou da turma, quando o público for docente).
-- Linguagem: Português do Brasil, natural e conversacional. Evite tom robótico, relatórios frios ou frases engessadas.
-- A estrutura JSON de resposta permanece obrigatória; as regras acima aplicam-se apenas aos campos de texto (mensagem, insight, reply, analise, dica, etc.).`;
+export const COORDENADOR_PEDAGOGICO_SYSTEM = `Atue como um Coordenador Pedagógico Sênior da UniClassTech conversando com o professor (ou com o estudante, quando o público indicado for aluno).
+
+DIRETRIZES DE COMPORTAMENTO (OBRIGATÓRIAS):
+- NUNCA use saudações robóticas como "Olá", "Olá, professor", "Bom dia", "Aqui está sua análise", "Como modelo de linguagem", "Com certeza!", "Claro!" ou "Espero que isso ajude".
+- Vá direto ao ponto. Tom encorajador, analítico e realista — sem floreios vazios nem relatório frio.
+- Baseie-se EXCLUSIVAMENTE nos dados fornecidos no contexto e no prompt do usuário, citando nomes e números reais para criar proximidade.
+- NUNCA invente notas, faltas, percentuais, turmas, salas, eventos ou conversas que não estejam no material recebido.
+- Proibição estrita de jargão técnico de programação/banco nos textos exibidos (ex.: "banco de dados", "null", "array", "indisponível no sistema", "dado não encontrado", "registro ausente").
+- Se faltarem notas (N2, N3) ou histórico de faltas, contextualize o momento do semestre de forma natural (ex.: "ainda no início do semestre…") — NUNCA diga que os dados "não existem" ou "estão faltando no sistema".
+- Foco pedagógico: retenção, engajamento e desenvolvimento contínuo do estudante (ou da turma, quando o público for docente).
+- Linguagem: português do Brasil, natural e conversacional. Evite tom de chatbot genérico e frases engessadas.
+- A estrutura JSON de resposta permanece obrigatória; estas regras aplicam-se aos campos de texto (mensagem, insight, reply, analise, dica, etc.).`;
+
+/** @deprecated Use COORDENADOR_PEDAGOGICO_SYSTEM — mantido para compatibilidade. */
+export const PEDAGOGICAL_VOICE_RULES = COORDENADOR_PEDAGOGICO_SYSTEM;
+
+/** Contexto oculto enviado em toda análise (professor, turma, disciplina, números). */
+export type ContextoPedagogico = {
+  publico?: "professor" | "aluno" | "admin";
+  professorNome?: string | null;
+  disciplina?: string | null;
+  turno?: string | null;
+  tamanhoTurma?: number | null;
+  turmaNome?: string | null;
+  alunoNome?: string | null;
+  curso?: string | null;
+  /** Bloco livre com fatos específicos (ex.: "Bocchi: 25% de faltas em 12 aulas"). */
+  dadosEspecificos?: string | null;
+};
+
+/** Monta o bloco de contexto pedagógico para o prompt do usuário. */
+export function blocoContextoPedagogico(ctx: ContextoPedagogico): string {
+  const linhas: string[] = [
+    "CONTEXTO PEDAGÓGICO (cite nomes e números reais; não invente fora disso):",
+  ];
+
+  if (ctx.publico) {
+    const mapa = {
+      professor: "docente (coordenador falando com o professor)",
+      aluno: "estudante (coordenador falando com o aluno)",
+      admin: "gestão acadêmica",
+    } as const;
+    linhas.push(`- Público da mensagem: ${mapa[ctx.publico]}`);
+  }
+  if (ctx.professorNome?.trim()) {
+    linhas.push(`- Professor(a): ${ctx.professorNome.trim()}`);
+  }
+  if (ctx.disciplina?.trim()) {
+    linhas.push(`- Disciplina/área: ${ctx.disciplina.trim()}`);
+  }
+  if (ctx.turmaNome?.trim()) {
+    linhas.push(`- Turma: ${ctx.turmaNome.trim()}`);
+  }
+  if (ctx.turno?.trim()) {
+    linhas.push(`- Turno: ${ctx.turno.trim()}`);
+  }
+  if (
+    ctx.tamanhoTurma != null &&
+    Number.isFinite(Number(ctx.tamanhoTurma))
+  ) {
+    linhas.push(
+      `- Tamanho da turma: ${Math.round(Number(ctx.tamanhoTurma))} aluno(s)`
+    );
+  }
+  if (ctx.alunoNome?.trim()) {
+    linhas.push(`- Estudante em foco: ${ctx.alunoNome.trim()}`);
+  }
+  if (ctx.curso?.trim()) {
+    linhas.push(`- Curso: ${ctx.curso.trim()}`);
+  }
+  if (ctx.dadosEspecificos?.trim()) {
+    linhas.push(`- Dados específicos da análise:\n${ctx.dadosEspecificos.trim()}`);
+  }
+
+  return linhas.length > 1 ? linhas.join("\n") : "";
+}
 
 const QUOTA_MESSAGE =
   "O assistente atingiu o limite de uso gratuito temporário do Google. Por favor, tente novamente em alguns minutos.";
@@ -144,6 +216,7 @@ export function parseJsonFromText(text: string): unknown {
 
 /**
  * Loop de fallback Gemini: tenta cada modelo até obter JSON parseável.
+ * Injeta systemInstruction global (Coordenador Pedagógico) e temperature 0.7.
  * Em 429 (RPD por modelo), AVANÇA para o próximo da esteira — não aborta.
  * Em 503/alta demanda, também tenta o próximo modelo.
  * Em falha total, retorna JSON seguro (nunca propaga exceção para a UI).
@@ -158,7 +231,13 @@ export async function generateJsonWithFallback(
   for (const modeloNome of modelosFallback) {
     try {
       console.log(`Tentando o modelo: ${modeloNome}`);
-      const model = genAI.getGenerativeModel({ model: modeloNome });
+      const model = genAI.getGenerativeModel({
+        model: modeloNome,
+        systemInstruction: COORDENADOR_PEDAGOGICO_SYSTEM,
+        generationConfig: {
+          temperature: GEMINI_TEMPERATURE,
+        },
+      });
       const result = await model.generateContent(prompt);
       const text = result.response.text();
       const parsed = parseJsonFromText(text);
@@ -207,12 +286,17 @@ export async function generateJsonWithFallback(
   );
 }
 
-export function buildPrompt(system: string, user: string): string {
-  return `${system}
-
-${PEDAGOGICAL_VOICE_RULES}
-
-${JSON_ONLY_INSTRUCTION}
-
-${user}`;
+/**
+ * Monta o prompt da tarefa + contexto pedagógico + instrução JSON.
+ * As diretrizes de voz ficam no systemInstruction do modelo (COORDENADOR_PEDAGOGICO_SYSTEM).
+ */
+export function buildPrompt(
+  system: string,
+  user: string,
+  contexto?: ContextoPedagogico
+): string {
+  const blocoCtx = contexto ? blocoContextoPedagogico(contexto) : "";
+  return [system, blocoCtx, JSON_ONLY_INSTRUCTION, user]
+    .filter((parte) => parte && String(parte).trim())
+    .join("\n\n");
 }

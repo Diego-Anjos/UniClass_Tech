@@ -16,12 +16,54 @@ export async function POST(req: NextRequest) {
   if (denied) return denied;
 
   try {
-    const { andar, salaProxima } = await req.json();
+    const {
+      andar,
+      salaProxima,
+      nomeUsuario,
+      role,
+      curso,
+      disciplina,
+      turno,
+      professorNome,
+    } = await req.json();
+
+    const papel = String(role ?? "aluno").toLowerCase();
+    const publico =
+      papel === "professor" || papel === "adm" || papel === "admin"
+        ? papel === "professor"
+          ? "professor"
+          : "admin"
+        : "aluno";
+
+    const nome =
+      String(nomeUsuario ?? "").trim() ||
+      (publico === "professor" ? "Professor(a)" : "Estudante");
+    const sala = String(salaProxima ?? "nenhuma definida").trim();
+    const andarLabel = String(andar ?? "andar não informado").trim();
+
+    const tarefa =
+      publico === "professor"
+        ? `Oriente o(a) professor(a) ${nome} em uma única frase prática sobre deslocamento, uso de laboratório livre ou logística entre aulas — citando o ambiente "${sala}" no ${andarLabel} quando fizer sentido.`
+        : publico === "admin"
+          ? `Oriente a gestão em uma única frase prática sobre ocupação e realocação no ${andarLabel}, mencionando "${sala}" se útil.`
+          : `Oriente o(a) estudante ${nome} em uma única frase prática sobre como aproveitar um laboratório livre para estudar antes/depois da aula em "${sala}" (${andarLabel}).`;
 
     const prompt = buildPrompt(
-      `Você é um orientador de campus acolhedor. Dê uma dica curta e amigável em uma única frase sobre como o aluno pode aproveitar os laboratórios livres para estudar. Fale de forma natural, humana e garanta que a frase tenha começo, meio e fim.
-Retorne no formato: { "dica": "sua frase aqui", "insight": "mesma frase aqui" }`,
-      `O estudante está visualizando o ${andar}. Sua próxima aula é no ambiente '${salaProxima}'. Sugira como aproveitar um laboratório livre para estudar antes ou depois da aula.`
+      `Tarefa: dica contextual do Mapa de Salas.
+Uma frase só, completa (começo, meio e fim), sem markdown.
+Retorne: { "dica": "sua frase aqui", "insight": "mesma frase aqui" }`,
+      tarefa,
+      {
+        publico,
+        professorNome:
+          String(professorNome ?? (publico === "professor" ? nome : "")).trim() ||
+          undefined,
+        alunoNome: publico === "aluno" ? nome : undefined,
+        disciplina: String(disciplina ?? "").trim() || undefined,
+        curso: String(curso ?? "").trim() || undefined,
+        turno: String(turno ?? "").trim() || undefined,
+        dadosEspecificos: `Andar visualizado: ${andarLabel}. Próximo ambiente/sala: ${sala}. Papel: ${publico}.`,
+      }
     );
 
     const data = await generateJsonWithFallback(genAI, prompt);

@@ -26,7 +26,7 @@ export async function registrarLogAuditoria({
 }: RegistrarLogAuditoriaParams): Promise<void> {
   const { error } = await supabase.from("logs_auditoria").insert({
     usuario,
-    acao,
+    acao_realizada: acao,
     tipo_acao,
     ip,
   });

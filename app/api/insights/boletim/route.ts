@@ -16,12 +16,22 @@ export async function POST(req: NextRequest) {
   if (denied) return denied;
 
   try {
-    const { alunoNome, totalDisciplinas, disciplinasPendentes } = await req.json();
+    const { alunoNome, totalDisciplinas, disciplinasPendentes, curso } =
+      await req.json();
+    const nome = String(alunoNome ?? "Estudante").trim();
+    const total = Number(totalDisciplinas) || 0;
 
     const prompt = buildPrompt(
-      `Você é um mentor acadêmico acolhedor da UniClassTech. Com base na situação das disciplinas do aluno, forneça uma recomendação clara, encorajadora e humana em exatamente DUAS frases curtas, orientando onde ele deve focar seus estudos para evoluir. Sem formatação markdown.
-Retorne no formato: { "insight": "suas duas frases aqui" }`,
-      `O estudante ${alunoNome} está cursando ${totalDisciplinas} disciplinas. Disciplinas que demandam atenção ou estão em andamento: ${disciplinasPendentes}. Dê uma orientação prática sobre metas de estudo para fechar o semestre com aprovação.`
+      `Tarefa: orientação de boletim.
+Exatamente DUAS frases curtas, citando o estudante e as disciplinas reais. Sem markdown.
+Retorne: { "insight": "suas duas frases aqui" }`,
+      `O estudante ${nome} está cursando ${total} disciplinas. Disciplinas que demandam atenção: ${disciplinasPendentes}. Oriente metas de estudo para fechar o semestre.`,
+      {
+        publico: "aluno",
+        alunoNome: nome,
+        curso: String(curso ?? "").trim() || undefined,
+        dadosEspecificos: `${total} disciplina(s). Pendentes/atenção: ${disciplinasPendentes}.`,
+      }
     );
 
     const data = await generateJsonWithFallback(genAI, prompt);

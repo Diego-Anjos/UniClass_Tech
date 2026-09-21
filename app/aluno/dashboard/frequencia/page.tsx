@@ -147,6 +147,7 @@ export default function AlunoFrequenciaPage() {
           disciplinasEmRisco: emRisco.map(
             (d) => `${d.disciplina} - Prof. ${d.professor}`
           ),
+          curso: alunoLogado?.curso,
         }),
       });
 

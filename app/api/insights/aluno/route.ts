@@ -100,27 +100,7 @@ export async function POST(req: NextRequest) {
       metricaValor = n1Num.toFixed(1);
     }
 
-    const prompt = buildPrompt(
-      `Você é um coordenador de curso experiente e humano da UniClassTech, conversando com o docente sobre o estudante.
-${blocoPreferenciasIa(prefs)}
-REGRAS OBRIGATÓRIAS (ANTI-ALUCINAÇÃO):
-1. Use APENAS os números e fatos listados em "Situação acadêmica do estudante" abaixo.
-2. NUNCA invente notas (N1/N2/N3), médias, percentuais de faltas/presença ou totais de aulas.
-3. Se uma nota ou frequência ainda não tiver sido lançada, contextualize de forma natural (ex.: início do semestre, avaliações ainda por vir) — NÃO diga que o dado "não existe" ou está "indisponível".
-4. metricaLabel deve ser exatamente "${metricaLabel}" e metricaValor exatamente "${metricaValor}".
-5. Baseie tipoAlerta/riscoLabel apenas nos dados fornecidos (ex.: média baixa ou % faltas alto).
-6. A "mensagem" deve soar humana, acolhedora e focada no desenvolvimento do aluno (até 2 frases).
-
-Retorne JSON neste formato:
-{
-  "tipoAlerta": "ALERTA PREDITIVO" | "DESEMPENHO NOTÁVEL" | "RISCO DE EVASÃO",
-  "corAlerta": "amber" | "emerald" | "rose",
-  "mensagem": "Texto empático de até 2 frases, citando apenas métricas reais e orientando melhoria contínua.",
-  "riscoLabel": "Baixo" | "Moderado" | "Crítico" | "Nenhum" | "Indisponível",
-  "metricaLabel": "${metricaLabel}",
-  "metricaValor": "${metricaValor}"
-}`,
-      `Situação acadêmica do estudante (fonte única de verdade):
+    const situacao = `Situação acadêmica do estudante (fonte única de verdade):
 Aluno: ${nome ?? "—"}
 Curso: ${curso ?? "—"}
 Semestre: ${semestre ?? "—"}
@@ -133,7 +113,35 @@ Percentual de faltas: ${fmtPct(pctFaltas)}
 Taxa de presença: ${fmtPct(pctPresenca)}
 Faltas (registros): ${faltasNum ?? "ainda sem histórico suficiente neste semestre"}
 Presentes (registros): ${presentesNum ?? "ainda sem histórico suficiente neste semestre"}
-Total de aulas registradas: ${totalAulasNum ?? "ainda sem histórico suficiente neste semestre"}`
+Total de aulas registradas: ${totalAulasNum ?? "ainda sem histórico suficiente neste semestre"}`;
+
+    const prompt = buildPrompt(
+      `Tarefa: prontuário pedagógico do estudante para o docente.
+${blocoPreferenciasIa(prefs)}
+REGRAS OBRIGATÓRIAS (ANTI-ALUCINAÇÃO):
+1. Use APENAS os números e fatos listados em "Situação acadêmica".
+2. NUNCA invente notas, médias, percentuais ou totais de aulas.
+3. Se algo ainda não foi lançado, contextualize o momento do semestre — sem dizer que o dado "não existe".
+4. metricaLabel deve ser exatamente "${metricaLabel}" e metricaValor exatamente "${metricaValor}".
+5. Cite o nome do aluno e números reais na mensagem (até 2 frases).
+
+Retorne JSON:
+{
+  "tipoAlerta": "ALERTA PREDITIVO" | "DESEMPENHO NOTÁVEL" | "RISCO DE EVASÃO",
+  "corAlerta": "amber" | "emerald" | "rose",
+  "mensagem": "Texto analítico de até 2 frases.",
+  "riscoLabel": "Baixo" | "Moderado" | "Crítico" | "Nenhum" | "Indisponível",
+  "metricaLabel": "${metricaLabel}",
+  "metricaValor": "${metricaValor}"
+}`,
+      situacao,
+      {
+        publico: "professor",
+        professorNome: String(professor || "").trim() || undefined,
+        alunoNome: String(nome ?? "").trim() || undefined,
+        curso: String(curso ?? "").trim() || undefined,
+        dadosEspecificos: situacao,
+      }
     );
 
     const data = await generateJsonWithFallback(genAI, prompt);

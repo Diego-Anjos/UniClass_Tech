@@ -18,20 +18,62 @@ export async function POST(req: NextRequest) {
   if (denied) return denied;
 
   try {
-    const { context, turmasAtivas, professorId } = await req.json();
+    const {
+      context,
+      turmasAtivas,
+      professorId,
+      professorNome,
+      disciplina,
+      turno,
+      turmasResumo,
+    } = await req.json();
+
     const totalTurmas = Number(turmasAtivas) || 0;
+    const nomeDocente =
+      String(professorNome ?? context ?? "Professor").trim() || "Professor";
     const prefs = await buscarPreferenciasProfessor(professorId);
+
+    const resumoTurmas = Array.isArray(turmasResumo)
+      ? turmasResumo
+          .slice(0, 8)
+          .map((t: unknown) => {
+            if (!t || typeof t !== "object") return null;
+            const row = t as Record<string, unknown>;
+            const curso = String(row.curso ?? row.disciplina ?? "").trim();
+            const codigo = String(row.codigo ?? "").trim();
+            const turnoTurma = String(row.turno ?? "").trim();
+            if (!curso && !codigo) return null;
+            return [curso || "Turma", codigo && `Turma ${codigo}`, turnoTurma]
+              .filter(Boolean)
+              .join(" · ");
+          })
+          .filter(Boolean)
+          .join("; ")
+      : "";
 
     const instrucaoTurmas =
       totalTurmas > 0
-        ? `O professor tem ${totalTurmas} turma(s) ativa(s). NÃO diga que ele está sem turmas, sem disciplinas ou ocioso. Gere uma mensagem curta de bom dia, encorajando-o para as aulas, com uma dica prática de gestão de turma.`
-        : `O professor ainda não possui turmas ativas cadastradas. Gere uma mensagem curta e acolhedora de bom dia, incentivando-o a se preparar para quando as turmas forem vinculadas.`;
+        ? `O(a) professor(a) ${nomeDocente} tem ${totalTurmas} turma(s) ativa(s)${
+            resumoTurmas ? `: ${resumoTurmas}` : ""
+          }. NÃO diga que está sem turmas ou ocioso. Entregue exatamente DUAS frases: uma observação analítica sobre o momento da gestão de turma e uma dica prática acionável.`
+        : `O(a) professor(a) ${nomeDocente} ainda não possui turmas ativas cadastradas. Entregue exatamente DUAS frases acolhedoras e práticas sobre preparação pedagógica — sem soar como boas-vindas genéricas.`;
 
     const prompt = buildPrompt(
-      `Você é um coordenador pedagógico acolhedor da UniClassTech. Você oferece dicas úteis, curtas e humanas para professores — como um colega experiente, nunca como um sistema. Sem formatação markdown.
+      `Tarefa: insight de abertura do painel docente da UniClassTech.
 ${blocoPreferenciasIa(prefs)}
-Retorne no formato: { "insight": "suas duas frases aqui" }`,
-      `Gere em exatas DUAS frases curtas para o ${context}. ${instrucaoTurmas}`
+Sem markdown. Sem saudações. Retorne: { "insight": "duas frases aqui" }`,
+      instrucaoTurmas,
+      {
+        publico: "professor",
+        professorNome: nomeDocente,
+        disciplina:
+          String(disciplina ?? "").trim() ||
+          undefined,
+        turno: String(turno ?? "").trim() || undefined,
+        dadosEspecificos: `Turmas ativas: ${totalTurmas}.${
+          resumoTurmas ? ` Detalhe: ${resumoTurmas}.` : ""
+        }`,
+      }
     );
 
     const data = await generateJsonWithFallback(genAI, prompt);

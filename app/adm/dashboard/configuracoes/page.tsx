@@ -48,7 +48,7 @@ type LogAuditoria = {
   id: string | number;
   created_at: string;
   usuario: string;
-  acao: string;
+  acao_realizada: string;
   ip: string;
 };
 
@@ -531,7 +531,7 @@ export default function ConfiguracoesSistemaPage() {
                                 {log.usuario}
                               </td>
                               <td className="px-4 py-4 text-sm text-zinc-400 max-w-[360px]">
-                                {log.acao}
+                                {log.acao_realizada}
                               </td>
                               <td className="px-6 py-4 text-sm text-zinc-500 font-mono">
                                 {log.ip ?? "—"}

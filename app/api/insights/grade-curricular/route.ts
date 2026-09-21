@@ -16,19 +16,29 @@ export async function POST(req: NextRequest) {
   if (denied) return denied;
 
   try {
-    const { cursoNome, disciplinasAtuais } = await req.json();
+    const { cursoNome, disciplinasAtuais, alunoNome } = await req.json();
     const listaDisciplinas = Array.isArray(disciplinasAtuais)
       ? disciplinasAtuais
       : [];
+    const listaTexto =
+      listaDisciplinas.length > 0
+        ? listaDisciplinas.join(", ")
+        : "ainda no início do percurso, sem disciplinas listadas neste momento";
 
     const prompt = buildPrompt(
-      `Você é um conselheiro pedagógico e de carreira acolhedor da UniClassTech. Com base no curso do estudante e suas disciplinas atuais, forneça uma recomendação prática e motivacional de até duas frases sobre competências complementares ou caminhos de desenvolvimento. Não use formatação markdown.
-Retorne no formato: { "insight": "sua recomendação aqui" }`,
-      `Curso: ${cursoNome}. Disciplinas atuais cursadas: ${
-        listaDisciplinas.length > 0
-          ? listaDisciplinas.join(", ")
-          : "ainda no início do percurso, sem disciplinas listadas neste momento"
-      }. Indique uma dica de estudo ou preparação para os próximos semestres.`
+      `Tarefa: orientação de grade curricular / carreira.
+Até duas frases práticas, citando o curso e disciplinas reais quando houver. Sem markdown.
+Retorne: { "insight": "sua recomendação aqui" }`,
+      `Curso: ${cursoNome}. Disciplinas atuais: ${listaTexto}. Indique uma dica de estudo ou preparação para os próximos semestres.`,
+      {
+        publico: "aluno",
+        alunoNome: String(alunoNome ?? "").trim() || undefined,
+        curso: String(cursoNome ?? "").trim() || undefined,
+        disciplina: listaDisciplinas[0]
+          ? String(listaDisciplinas[0])
+          : undefined,
+        dadosEspecificos: `Disciplinas: ${listaTexto}`,
+      }
     );
 
     const data = await generateJsonWithFallback(genAI, prompt);

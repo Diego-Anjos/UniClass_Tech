@@ -272,12 +272,23 @@ export function MapaSalas({ usuarioLogado, role }: Props) {
   async function fetchAiMapa(andar: string, sala: string) {
     setIsLoadingAi(true);
     try {
+      const proxima = itinerario.find((i) => i.tipo === "aula");
       const response = await fetch("/api/insights/mapa-salas", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           andar,
           salaProxima: sala || "nenhuma definida",
+          nomeUsuario: usuarioLogado?.nome,
+          role,
+          curso: usuarioLogado?.curso,
+          disciplina: proxima?.label,
+          turno:
+            role === "professor"
+              ? String(usuarioLogado?.turno_aula ?? "")
+              : undefined,
+          professorNome:
+            role === "professor" ? usuarioLogado?.nome : undefined,
         }),
       });
 

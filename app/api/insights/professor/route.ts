@@ -33,26 +33,35 @@ export async function POST(req: NextRequest) {
       carga_horaria,
       turmasCount,
       professorId,
+      turno,
     } = await req.json();
     const prefs = await buscarPreferenciasProfessor(professorId);
+    const detalhe = `Docente: ${titulacao} ${nome}
+Área: ${area_atuacao}
+Carga Horária: ${carga_horaria}
+Turmas Atribuídas: ${turmasCount}`;
 
     const prompt = buildPrompt(
-      `Você é um coordenador de curso experiente e humano da UniClassTech.
+      `Tarefa: diagnóstico de carga/engajamento docente para a diretoria.
 ${blocoPreferenciasIa(prefs)}
-Analise os dados do docente e retorne um objeto JSON com o seguinte formato:
+Retorne JSON:
 {
   "tipoAlerta": "ALERTA DE RETENÇÃO" ou "DESEMPENHO POSITIVO" ou "EQUILÍBRIO DE CARGA",
   "corAlerta": "amber" ou "emerald" ou "blue",
-  "mensagem": "Texto curto e empático de até 2 frases explicando o diagnóstico acadêmico para a diretoria, com foco no desenvolvimento dos estudantes.",
+  "mensagem": "Até 2 frases analíticas, citando o nome do docente e números reais.",
   "metricaValor": "-12%" ou "+18%" ou "100%",
   "metricaLabel": "QUEDA" ou "ENGAGEMENT" ou "ADERÊNCIA",
   "turmaDestaque": "Sigla da turma ou área",
-  "detalheComparativo": "Texto explicativo de 1 linha sobre a métrica, em linguagem natural."
+  "detalheComparativo": "Uma linha natural sobre a métrica."
 }`,
-      `Docente: ${titulacao} ${nome}
-Área: ${area_atuacao}
-Carga Horária: ${carga_horaria}
-Turmas Atribuídas: ${turmasCount}`
+      detalhe,
+      {
+        publico: "admin",
+        professorNome: String(nome ?? "").trim() || undefined,
+        disciplina: String(area_atuacao ?? "").trim() || undefined,
+        turno: String(turno ?? "").trim() || undefined,
+        dadosEspecificos: detalhe,
+      }
     );
 
     const data = await generateJsonWithFallback(genAI, prompt);
