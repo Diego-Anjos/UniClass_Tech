@@ -24,7 +24,7 @@ function toNonNegInt(value: unknown, fallback = 0): number {
 
 type AlunoDestaque = {
   nome: string;
-  percFaltas: number;
+  percPresenca: number;
   totalAulas: number;
 };
 
@@ -35,13 +35,23 @@ function parseAlunosDestaque(raw: unknown): AlunoDestaque[] {
       if (!item || typeof item !== "object") return null;
       const row = item as Record<string, unknown>;
       const nome = String(row.nome ?? "").trim();
-      const percFaltas = Number(row.percFaltas ?? row.percentualFaltas);
+      const percPresencaRaw = Number(
+        row.percPresenca ?? row.percentualPresenca
+      );
+      const percFaltasRaw = Number(row.percFaltas ?? row.percentualFaltas);
+      const percPresenca = Number.isFinite(percPresencaRaw)
+        ? Math.round(percPresencaRaw)
+        : Number.isFinite(percFaltasRaw)
+          ? Math.round(100 - percFaltasRaw)
+          : NaN;
       const totalAulas = Number(row.totalAulas ?? 0);
-      if (!nome || !Number.isFinite(percFaltas)) return null;
+      if (!nome || !Number.isFinite(percPresenca)) return null;
       return {
         nome,
-        percFaltas: Math.round(percFaltas),
-        totalAulas: Number.isFinite(totalAulas) ? Math.max(0, Math.round(totalAulas)) : 0,
+        percPresenca: Math.max(0, Math.min(100, percPresenca)),
+        totalAulas: Number.isFinite(totalAulas)
+          ? Math.max(0, Math.round(totalAulas))
+          : 0,
       };
     })
     .filter((a): a is AlunoDestaque => a !== null)
@@ -84,6 +94,7 @@ export async function POST(req: NextRequest) {
       total > 0 ? Math.round((presentes / total) * 100) : 0;
     const taxaFalta = total > 0 ? Math.round((faltas / total) * 100) : 0;
     const limiarEvasao = prefs.regua_evasao;
+    const limiarFrequenciaMinima = Math.max(50, Math.min(95, 100 - limiarEvasao));
 
     const tipoAlerta =
       faltas === 0 && total > 0
@@ -99,11 +110,11 @@ export async function POST(req: NextRequest) {
         ? alunosDestaque
             .map((a) =>
               a.totalAulas > 0
-                ? `${a.nome} está com ${a.percFaltas}% de faltas em ${a.totalAulas} aula(s) registradas`
-                : `${a.nome} está com ${a.percFaltas}% de faltas`
+                ? `${a.nome} está com ${a.percPresenca}% de presença em ${a.totalAulas} aula(s) registradas`
+                : `${a.nome} está com ${a.percPresenca}% de presença`
             )
             .join("; ")
-        : "Nenhum aluno acima de 15% de faltas neste recorte.";
+        : `Nenhum aluno abaixo do limiar de ${limiarFrequenciaMinima}% de presença neste recorte.`;
 
     const prompt = buildPrompt(
       `Tarefa: insight do Diário de Chamada de HOJE.
@@ -113,11 +124,12 @@ REGRAS OBRIGATÓRIAS:
 - Use EXATAMENTE os números fornecidos. NÃO invente totais, presenças, faltas ou porcentagens.
 - Se faltas > 0, NÃO diga que houve 100% de presença.
 - Mencione total de alunos, presentes e faltas (valores literais).
-- Se houver alunos em destaque, cite pelo menos um nome e o % real.
+- Frequência do aluno = taxa de PRESENÇA (100% menos faltas proporcionais). Limite mínimo aceitável: ${limiarFrequenciaMinima}% (régua de faltas do docente: ${limiarEvasao}%).
+- Se houver alunos em destaque, cite pelo menos um nome e o % de presença real.
 - tipoAlerta deve ser exatamente: "${tipoAlerta}"
 - Máximo 2 frases, humanas e acionáveis.
 - Retorne APENAS JSON: { "tipoAlerta": "${tipoAlerta}", "mensagem": "texto aqui" }`,
-      `Chamada de hoje na turma "${turma}": ${total} alunos, ${presentes} presentes, ${faltas} faltas (presença ${taxaPresenca}%, ausência ${taxaFalta}%). Limiar de evasão do docente: ${limiarEvasao}%. Alunos em atenção: ${destaqueTexto}.`,
+      `Chamada de hoje na turma "${turma}": ${total} alunos, ${presentes} presentes, ${faltas} faltas (presença ${taxaPresenca}%, ausência ${taxaFalta}%). Limiar mínimo de frequência do docente: ${limiarFrequenciaMinima}%. Alunos em atenção: ${destaqueTexto}.`,
       {
         publico: "professor",
         professorNome: professorNome || undefined,

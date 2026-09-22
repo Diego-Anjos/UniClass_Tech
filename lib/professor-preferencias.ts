@@ -72,8 +72,8 @@ export function blocoPreferenciasIa(
   return [
     `PREFERÊNCIAS DO DOCENTE (obrigatório respeitar):`,
     `- Responda utilizando um tom ${tom}.`,
-    `- Régua de alerta de evasão: sinalize risco de evasão quando a taxa de faltas for ≥ ${prefs.regua_evasao}%.`,
-    `- Abaixo desse limiar, trate ausências como acompanhamento preventivo, não como alerta crítico.`,
+    `- Régua de alerta de evasão: sinalize risco quando a taxa de faltas for ≥ ${prefs.regua_evasao}% (equivalente a frequência < ${100 - prefs.regua_evasao}% de presença).`,
+    `- Abaixo desse limiar de faltas (acima do mínimo de frequência), trate ausências como acompanhamento preventivo, não como alerta crítico.`,
   ].join("\n");
 }
 

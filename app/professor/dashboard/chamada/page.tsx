@@ -20,6 +20,20 @@ import { ModalFeedback } from "@/components/ModalFeedback";
 import { Button } from "@/components/ui/button";
 import { PaginationFooter } from "@/components/ui/pagination-footer";
 import { useProfessorSession } from "@/lib/professor-session";
+import {
+  EVENTO_PREFS_ATUALIZADAS,
+  PREFERENCIAS_PADRAO,
+  lerPreferenciasLocal,
+  normalizarPreferencias,
+} from "@/lib/professor-preferencias";
+import {
+  classeCorFrequencia,
+  corHexFrequencia,
+  frequenciaEstaRegular,
+  limiteFrequenciaMinima,
+  mensagemStatusFrequencia,
+  resumirFrequenciaDeHistorico,
+} from "@/lib/frequencia";
 
 type TurmaOption = {
   id: string;
@@ -50,37 +64,6 @@ type AiInsightChamada = {
   tipoAlerta: string;
   mensagem: string;
 };
-
-/** Mesmos limiares da coluna "Frequência Atual" na tabela de chamada. */
-function getCorFrequencia(porcentagem: number): string {
-  if (porcentagem >= 25) return "#ef4444"; // text-red-500
-  if (porcentagem >= 15) return "#eab308"; // text-yellow-500
-  return "#22c55e"; // text-green-500
-}
-
-function getMensagemFrequencia(porcentagem: number): {
-  html: string;
-  texto: string;
-} {
-  if (porcentagem >= 25) {
-    return {
-      html: "⚠️ <strong>Atenção:</strong> Você atingiu ou ultrapassou o limite de faltas permitido. O risco de reprovação por ausência é alto. Procure a secretaria ou seu professor imediatamente.",
-      texto:
-        "Atenção: Você atingiu ou ultrapassou o limite de faltas permitido. O risco de reprovação por ausência é alto.",
-    };
-  }
-  if (porcentagem >= 15) {
-    return {
-      html: "⚠️ <strong>Aviso:</strong> Sua frequência está se aproximando do limite de faltas. Evite novas ausências para não correr risco de reprovação.",
-      texto:
-        "Aviso: Sua frequência está se aproximando do limite de faltas. Evite novas ausências.",
-    };
-  }
-  return {
-    html: "✅ Sua frequência está dentro do limite aceitável. Continue participando das aulas!",
-    texto: "Sua frequência está dentro do limite aceitável.",
-  };
-}
 
 function formatarDataBR(iso: string) {
   const [yyyy, mm, dd] = iso.split("-");
@@ -198,6 +181,9 @@ export default function ProfessorChamadaPage() {
   const [aiInsight, setAiInsight] = useState<AiInsightChamada | null>(null);
   const [isLoadingAi, setIsLoadingAi] = useState(false);
   const [salvandoChamada, setSalvandoChamada] = useState(false);
+  const [reguaEvasao, setReguaEvasao] = useState(
+    PREFERENCIAS_PADRAO.regua_evasao
+  );
   const [modalFeedback, setModalFeedback] = useState<{
     aberto: boolean;
     tipo: "sucesso" | "erro" | "atencao";
@@ -209,6 +195,11 @@ export default function ProfessorChamadaPage() {
     titulo: "",
     mensagem: "",
   });
+
+  const limiarFrequencia = useMemo(
+    () => limiteFrequenciaMinima(reguaEvasao),
+    [reguaEvasao]
+  );
 
   const alunosFiltrados = useMemo(() => {
     const termo = termoBusca.trim().toLowerCase();
@@ -318,18 +309,66 @@ export default function ProfessorChamadaPage() {
     );
   }
 
-  function calcularFrequencia(ra: string): number {
-    const totalAulas = new Set(
-      historicoTurma.map((c) => c.data_aula).filter(Boolean)
-    ).size;
-    const faltasAluno = historicoTurma.filter(
-      (c) =>
-        c.aluno_ra === ra && c.status.toLowerCase() === "falta"
-    ).length;
-    return totalAulas > 0
-      ? Math.round((faltasAluno / totalAulas) * 100)
-      : 0;
+  function calcularResumoFrequencia(ra: string) {
+    return resumirFrequenciaDeHistorico(historicoTurma, ra);
   }
+
+  // Régua de evasão do docente (preferências do modal de configurações)
+  useEffect(() => {
+    if (!professorLogado?.id) {
+      setReguaEvasao(PREFERENCIAS_PADRAO.regua_evasao);
+      return;
+    }
+
+    const locais = lerPreferenciasLocal(professorLogado.id);
+    if (locais) {
+      setReguaEvasao(locais.regua_evasao);
+    }
+
+    let cancelado = false;
+
+    async function carregarRegua() {
+      const { data, error } = await supabase
+        .from("professores")
+        .select("preferencias")
+        .eq("id", professorLogado!.id)
+        .maybeSingle();
+
+      if (cancelado) return;
+
+      if (error) {
+        console.warn(
+          "Não foi possível carregar régua de evasão:",
+          error.message
+        );
+        return;
+      }
+
+      if (data?.preferencias != null) {
+        setReguaEvasao(
+          normalizarPreferencias(data.preferencias).regua_evasao
+        );
+      } else if (!locais) {
+        setReguaEvasao(PREFERENCIAS_PADRAO.regua_evasao);
+      }
+    }
+
+    void carregarRegua();
+
+    function onPrefsAtualizadas(ev: Event) {
+      const detail = (ev as CustomEvent).detail;
+      if (detail) {
+        setReguaEvasao(normalizarPreferencias(detail).regua_evasao);
+      }
+    }
+
+    window.addEventListener(EVENTO_PREFS_ATUALIZADAS, onPrefsAtualizadas);
+
+    return () => {
+      cancelado = true;
+      window.removeEventListener(EVENTO_PREFS_ATUALIZADAS, onPrefsAtualizadas);
+    };
+  }, [professorLogado?.id]);
 
   async function notificarFrequencia(aluno: AlunoChamada) {
     let destinatario = emailDoAluno(aluno);
@@ -367,12 +406,17 @@ export default function ProfessorChamadaPage() {
 
     const turma = turmas.find((t) => t.id === turmaSelecionada);
     const nomeTurma = turma ? labelTurma(turma) : "Turma não informada";
-    const porcentagemFaltas = calcularFrequencia(aluno.ra);
+    const resumo = calcularResumoFrequencia(aluno.ra);
+    const taxaPresenca = resumo.taxaPresenca;
     const nomeSeguro = escaparHtml(aluno.nome || "aluno(a)");
     const turmaSegura = escaparHtml(nomeTurma);
     const dataEnvio = new Date().toLocaleDateString("pt-BR");
-    const corFrequencia = getCorFrequencia(porcentagemFaltas);
-    const mensagemFrequencia = getMensagemFrequencia(porcentagemFaltas);
+    const corFrequencia = corHexFrequencia(taxaPresenca, reguaEvasao);
+    const mensagemFrequencia = mensagemStatusFrequencia(
+      taxaPresenca,
+      reguaEvasao
+    );
+    const detalheAulas = `(${resumo.faltas} falta${resumo.faltas === 1 ? "" : "s"} em ${resumo.totalAulas} aula${resumo.totalAulas === 1 ? "" : "s"})`;
 
     const html = `
 <div style="background-color: #000000; padding: 40px 20px; font-family: sans-serif; color: #ffffff;">
@@ -382,7 +426,8 @@ export default function ProfessorChamadaPage() {
     <p style="font-size: 15px; color: #cccccc;">Turma: <strong>${turmaSegura}</strong></p>
     
     <div style="background-color: #1e1e1e; padding: 20px; border-radius: 6px; margin-top: 20px;">
-      <p style="margin: 5px 0; color: #ccc;">Frequência Atual (Faltas): <span style="color: ${corFrequencia}; font-weight: bold;">${porcentagemFaltas}%</span></p>
+      <p style="margin: 5px 0; color: #ccc;">Frequência Atual: <span style="color: ${corFrequencia}; font-weight: bold;">${taxaPresenca}%</span></p>
+      <p style="margin: 8px 0 5px; color: #888; font-size: 13px;">${detalheAulas}</p>
       <hr style="border: 0; border-top: 1px solid #333; margin: 15px 0;" />
       <p style="margin: 5px 0; color: #ccc; font-size: 14px; line-height: 1.5;">
         ${mensagemFrequencia.html}
@@ -406,7 +451,7 @@ export default function ProfessorChamadaPage() {
         text:
           `Olá, ${aluno.nome}!\n\n` +
           `Turma: ${nomeTurma}\n` +
-          `Frequência Atual (Faltas): ${porcentagemFaltas}%\n` +
+          `Frequência Atual: ${taxaPresenca}% ${detalheAulas}\n` +
           mensagemFrequencia.texto,
       }),
     }).then(async (res) => {
@@ -713,6 +758,7 @@ export default function ProfessorChamadaPage() {
     alunosDestaque?: {
       nome: string;
       percFaltas: number;
+      percPresenca: number;
       totalAulas: number;
     }[];
   }) {
@@ -761,15 +807,16 @@ export default function ProfessorChamadaPage() {
     ).size;
     const alunosDestaque = alunosTurma
       .map((aluno) => {
-        const percFaltas = calcularFrequencia(aluno.ra);
+        const resumo = calcularResumoFrequencia(aluno.ra);
         return {
           nome: aluno.nome,
-          percFaltas,
-          totalAulas: totalAulasHistorico,
+          percPresenca: resumo.taxaPresenca,
+          percFaltas: Math.max(0, 100 - resumo.taxaPresenca),
+          totalAulas: resumo.totalAulas || totalAulasHistorico,
         };
       })
-      .filter((a) => a.percFaltas >= 15)
-      .sort((a, b) => b.percFaltas - a.percFaltas)
+      .filter((a) => a.percPresenca < limiarFrequencia)
+      .sort((a, b) => a.percPresenca - b.percPresenca)
       .slice(0, 5);
 
     const payload = {
@@ -803,7 +850,14 @@ export default function ProfessorChamadaPage() {
       window.clearTimeout(timeoutId);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [turmaSelecionada, totalAlunos, presentes, faltas]);
+  }, [
+    turmaSelecionada,
+    totalAlunos,
+    presentes,
+    faltas,
+    limiarFrequencia,
+    historicoTurma,
+  ]);
 
   if (carregandoSessao || !professorLogado) {
     return (
@@ -1063,8 +1117,12 @@ export default function ProfessorChamadaPage() {
                     </tr>
                   ) : (
                     alunosExibidos.map((aluno) => {
-                      const percFaltas = calcularFrequencia(aluno.ra);
-                      const alertaCritico = percFaltas >= 25;
+                      const resumo = calcularResumoFrequencia(aluno.ra);
+                      const taxaPresenca = resumo.taxaPresenca;
+                      const alertaCritico = !frequenciaEstaRegular(
+                        taxaPresenca,
+                        reguaEvasao
+                      );
                       const status = chamadaStatus[aluno.ra] ?? "presente";
                       const estaPresente = status === "presente";
                       return (
@@ -1081,7 +1139,7 @@ export default function ProfessorChamadaPage() {
                                 <p className="text-sm font-medium text-white truncate flex items-center gap-1.5">
                                   {aluno.nome}
                                   {alertaCritico && (
-                                    <AlertTriangle className="w-3.5 h-3.5 text-red-500 shrink-0" />
+                                    <AlertTriangle className="w-3.5 h-3.5 text-rose-400 shrink-0" />
                                   )}
                                 </p>
                                 <p className="text-xs text-zinc-500">
@@ -1092,15 +1150,12 @@ export default function ProfessorChamadaPage() {
                           </td>
                           <td className="px-4 py-4">
                             <span
-                              className={`text-sm font-medium ${
-                                percFaltas >= 25
-                                  ? "text-red-500"
-                                  : percFaltas >= 15
-                                    ? "text-yellow-500"
-                                    : "text-green-500"
-                              }`}
+                              className={`text-sm font-medium ${classeCorFrequencia(
+                                taxaPresenca,
+                                reguaEvasao
+                              )}`}
                             >
-                              {percFaltas}% de faltas
+                              {taxaPresenca}% de presença
                             </span>
                           </td>
                           <td className="px-6 py-4">
