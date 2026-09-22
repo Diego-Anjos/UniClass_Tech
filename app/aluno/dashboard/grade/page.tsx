@@ -6,7 +6,10 @@ import {
   Download,
   CheckCircle,
   Lock,
+  Loader2,
 } from "lucide-react";
+import { pdf } from "@react-pdf/renderer";
+import { toast } from "sonner";
 import { supabase } from "@/lib/supabase";
 import { ModalFeedback } from "@/components/ModalFeedback";
 import { useAlunoSession } from "@/lib/aluno-session";
@@ -14,6 +17,7 @@ import {
   nomeProfessorDoJoin,
   SELECT_TURMA_COM_PROFESSOR,
 } from "@/lib/professor-relacao";
+import { EmentaDocument } from "@/components/pdf/EmentaDocument";
 
 const CARGA_TOTAL_PADRAO = 2400;
 const CARGA_HORARIA_DISCIPLINA_PADRAO = 80;
@@ -133,6 +137,7 @@ export default function AlunoGradePage() {
   const [carregando, setCarregando] = useState(true);
   const [aiInsight, setAiInsight] = useState("");
   const [isLoadingAi, setIsLoadingAi] = useState(true);
+  const [isDownloading, setIsDownloading] = useState(false);
   const [modalFeedback, setModalFeedback] = useState<{
     aberto: boolean;
     tipo: "sucesso" | "erro" | "atencao";
@@ -514,14 +519,74 @@ export default function AlunoGradePage() {
     void carregarGrade();
   }, [alunoLogado, carregandoSessao]);
 
-  function handleBaixarEmenta() {
-    setModalFeedback({
-      aberto: true,
-      tipo: "sucesso",
-      titulo: "Ementa Curricular",
-      mensagem:
-        "O download da ementa completa do curso em PDF será iniciado em instantes.",
-    });
+  async function handleDownloadEmenta() {
+    if (isDownloading) return;
+
+    const nomeAluno = aluno?.nome || alunoLogado?.nome || "Aluno";
+    const curso = aluno?.curso || alunoLogado?.curso || "Curso";
+    const ra = aluno?.ra || alunoLogado?.ra || "";
+
+    if (disciplinas.length === 0) {
+      setModalFeedback({
+        aberto: true,
+        tipo: "atencao",
+        titulo: "Ementa indisponível",
+        mensagem:
+          "Não há disciplinas carregadas na grade para gerar a ementa em PDF.",
+      });
+      return;
+    }
+
+    setIsDownloading(true);
+
+    try {
+      const blob = await pdf(
+        <EmentaDocument
+          nomeAluno={nomeAluno}
+          curso={curso}
+          ra={ra || undefined}
+          disciplinas={disciplinas.map((d) => ({
+            nome: d.nome,
+            cargaHoraria: d.cargaHoraria,
+            semestre: d.semestre,
+            professor: d.professor,
+          }))}
+        />
+      ).toBlob();
+
+      const slugCurso = curso
+        .normalize("NFD")
+        .replace(/[\u0300-\u036f]/g, "")
+        .toLowerCase()
+        .replace(/[^a-z0-9]+/g, "-")
+        .replace(/^-+|-+$/g, "")
+        .slice(0, 60);
+
+      const fileName = `ementa-${slugCurso || "curso"}.pdf`;
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = fileName;
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      URL.revokeObjectURL(url);
+
+      toast.success("Ementa baixada com sucesso!");
+    } catch (err) {
+      console.error("Erro ao gerar ementa PDF:", err);
+      setModalFeedback({
+        aberto: true,
+        tipo: "erro",
+        titulo: "Falha ao gerar PDF",
+        mensagem:
+          err instanceof Error
+            ? err.message
+            : "Não foi possível gerar a ementa curricular. Tente novamente.",
+      });
+    } finally {
+      setIsDownloading(false);
+    }
   }
 
   function fecharFeedback() {
@@ -543,11 +608,16 @@ export default function AlunoGradePage() {
             </div>
             <button
               type="button"
-              onClick={handleBaixarEmenta}
-              className="flex items-center gap-2 border border-zinc-800 text-zinc-300 hover:bg-zinc-900 hover:text-white transition-colors text-sm rounded-lg px-4 py-2 cursor-pointer"
+              onClick={() => void handleDownloadEmenta()}
+              disabled={isDownloading || carregando}
+              className="flex items-center gap-2 border border-zinc-800 text-zinc-300 hover:bg-zinc-900 hover:text-white transition-colors text-sm rounded-lg px-4 py-2 cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
             >
-              <Download className="w-4 h-4" />
-              Baixar Ementa (PDF)
+              {isDownloading ? (
+                <Loader2 className="w-4 h-4 animate-spin" />
+              ) : (
+                <Download className="w-4 h-4" />
+              )}
+              {isDownloading ? "Gerando PDF..." : "Baixar Ementa (PDF)"}
             </button>
           </div>
 
