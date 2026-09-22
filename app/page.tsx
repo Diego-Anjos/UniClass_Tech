@@ -173,7 +173,7 @@ export default function LoginPage() {
                 className="w-full bg-transparent border border-zinc-800 rounded-md px-4 py-2.5 text-sm outline-none focus:border-zinc-500 transition-colors placeholder:text-zinc-600"
               />
             ) : (
-              <div className="flex">
+              <div className="flex w-full rounded-md shadow-sm">
                 <input
                   type="text"
                   required
@@ -181,9 +181,9 @@ export default function LoginPage() {
                   onChange={(e) => setUsuario(e.target.value)}
                   placeholder="ex: seu.nome"
                   autoComplete="username"
-                  className="flex-1 rounded-l-md rounded-r-none border-r-0 bg-transparent border border-zinc-800 px-4 py-2.5 text-sm outline-none focus:border-zinc-500 transition-colors placeholder:text-zinc-600"
+                  className="flex-1 min-w-0 rounded-l-md rounded-r-none border-r-0 bg-transparent border border-zinc-800 px-4 py-2.5 text-sm outline-none focus:border-zinc-500 transition-colors placeholder:text-zinc-600"
                 />
-                <span className="inline-flex items-center px-3 rounded-r-md border border-l-0 border-zinc-800 bg-zinc-900 text-zinc-500 text-sm">
+                <span className="flex items-center px-2 sm:px-3 text-xs sm:text-sm text-zinc-500 bg-zinc-900 border border-l-0 border-zinc-800 rounded-r-md whitespace-nowrap">
                   @uniclasstech.edu.br
                 </span>
               </div>
